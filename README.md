@@ -44,7 +44,7 @@ The local app routes are:
 - `/` for the start page
 - `/login` for Google sign-in
 - `/auth/callback` for the Supabase PKCE code exchange
-- `/dashboard` as the first protected page
+- `/workspace` as the first protected page
 
 ## New Project Setup Order
 

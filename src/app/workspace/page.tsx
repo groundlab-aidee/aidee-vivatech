@@ -2,14 +2,14 @@ import { redirect } from 'next/navigation'
 
 import { createClient } from '@/lib/supabase/server'
 
-export default async function DashboardPage() {
+export default async function WorkspacePage() {
   const supabase = await createClient()
   const {
     data: { user },
   } = await supabase.auth.getUser()
 
   if (!user) {
-    redirect('/login?next=/dashboard')
+    redirect('/login')
   }
 
   const displayName =
@@ -39,20 +39,9 @@ export default async function DashboardPage() {
 
         <div className="rounded-lg border border-zinc-200 bg-white p-6">
           <p className="text-sm leading-6 text-zinc-600">
-            Google 로그인과 보호 라우트가 연결됐습니다. 다음 단계에서 기존
-            프로젝트 생성 흐름과 새 wireframe 기반 dashboard를 이 화면에
-            조립합니다.
+            Google OAuth와 보호 라우트가 연결됐습니다. 이 화면을 새 workspace
+            UI로 확장하면 됩니다.
           </p>
-          <dl className="mt-5 grid gap-3 text-sm sm:grid-cols-2">
-            <div>
-              <dt className="text-zinc-500">Email</dt>
-              <dd className="font-medium">{user.email ?? '-'}</dd>
-            </div>
-            <div>
-              <dt className="text-zinc-500">User ID</dt>
-              <dd className="truncate font-mono text-xs">{user.id}</dd>
-            </div>
-          </dl>
         </div>
       </section>
     </main>
