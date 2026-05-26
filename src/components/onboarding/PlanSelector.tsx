@@ -141,7 +141,7 @@ export function PlanSelector({ selectPlanAction }: PlanSelectorProps) {
         <div
           role="group"
           aria-label="결제 주기"
-          className="flex h-9 w-64 rounded-full bg-yellow-300 p-0.5 shadow-[inset_1px_1px_6px_0.5px_rgba(0,0,0,0.10)]"
+          className="flex h-9 w-64 rounded-full bg-[#DDF444] p-0.5 shadow-[inset_1px_1px_6px_0.5px_rgba(0,0,0,0.10)]"
         >
           <BillingCycleButton
             active={billingCycle === 'monthly'}
@@ -211,7 +211,7 @@ function BillingCycleButton({
       className={`h-8 flex-1 rounded-full transition ${
         active
           ? 'bg-white shadow-[1px_1px_7px_1px_rgba(0,0,0,0.10),-1px_-1px_7px_1px_rgba(0,0,0,0.10)]'
-          : 'hover:bg-yellow-200'
+          : 'hover:bg-[#DDF444]/70'
       }`}
     >
       <span className="sr-only">{label}</span>
@@ -284,7 +284,7 @@ function PlanCard({
           disabled={disabled}
           className={`mt-3 h-6 w-full font-['Pretendard'] text-xs leading-4 transition disabled:cursor-not-allowed disabled:opacity-60 ${
             isFeatured
-              ? 'bg-yellow-300 font-medium text-black hover:bg-yellow-200'
+              ? 'bg-[#DDF444] font-medium text-black hover:bg-[#DDF444]/80'
               : 'bg-neutral-100 font-semibold text-neutral-500 hover:bg-neutral-200'
           }`}
         >
@@ -314,7 +314,7 @@ function CheckMark({ featured }: { featured: boolean }) {
     <span aria-hidden="true" className="flex size-3.5 shrink-0 items-center justify-center">
       <span
         className={`h-[5px] w-2 -translate-y-px -rotate-45 border-b border-l ${
-          featured ? 'border-yellow-300' : 'border-blue-600'
+          featured ? 'border-[#DDF444]' : 'border-blue-600'
         }`}
       />
     </span>
