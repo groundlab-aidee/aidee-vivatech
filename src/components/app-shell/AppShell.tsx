@@ -57,6 +57,7 @@ export function AppShell({ children, user }: AppShellProps) {
                   priority
                   unoptimized
                   className="h-10 w-28 object-contain"
+                  style={{ width: '112px', height: '40px' }}
                 />
               </div>
               <div className="hidden w-[clamp(240px,20vw,384px)] lg:block" />

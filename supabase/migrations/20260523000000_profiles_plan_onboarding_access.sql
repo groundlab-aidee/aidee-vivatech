@@ -2,27 +2,13 @@
 -- onboarding reads that row and updates the selected plan fields.
 grant select on table public.profiles to authenticated;
 grant insert on table public.profiles to authenticated;
-grant update (
-  email,
-  full_name,
-  avatar_url,
-  provider,
-  plan,
-  plan_selected_at
-) on table public.profiles to authenticated;
+grant update on table public.profiles to authenticated;
 
 -- Keep service-role diagnostics and server-side maintenance able to read the
 -- table when profiles was created with revoked default privileges.
 grant select on table public.profiles to service_role;
 grant insert on table public.profiles to service_role;
-grant update (
-  email,
-  full_name,
-  avatar_url,
-  provider,
-  plan,
-  plan_selected_at
-) on table public.profiles to service_role;
+grant update on table public.profiles to service_role;
 
 alter table public.profiles enable row level security;
 

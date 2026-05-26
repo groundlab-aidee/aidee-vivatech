@@ -126,6 +126,7 @@ export function PlanSelector({ selectPlanAction }: PlanSelectorProps) {
           height={64}
           priority
           className="h-16 w-auto"
+          style={{ width: 'auto' }}
         />
 
         <h1 className="mt-9 whitespace-pre-line font-['Pretendard'] text-3xl font-bold leading-10 text-zinc-800">

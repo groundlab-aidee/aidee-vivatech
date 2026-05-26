@@ -69,11 +69,23 @@ export default async function OnboardingPlanPage() {
 
     const { data: updatedProfile, error: updateError } = await actionSupabase
       .from('profiles')
-      .update({
-        plan,
-        plan_selected_at: new Date().toISOString(),
-      })
-      .eq('id', actionUser.id)
+      .upsert(
+        {
+          id: actionUser.id,
+          email: actionUser.email ?? null,
+          full_name:
+            actionUser.user_metadata.full_name ??
+            actionUser.user_metadata.name ??
+            null,
+          avatar_url: actionUser.user_metadata.avatar_url ?? null,
+          provider: actionUser.app_metadata.provider ?? 'google',
+          plan,
+          plan_selected_at: new Date().toISOString(),
+        },
+        {
+          onConflict: 'id',
+        }
+      )
       .select('id')
       .maybeSingle()
 

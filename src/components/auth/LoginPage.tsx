@@ -25,6 +25,7 @@ export function LoginPage({
                 height={60}
                 priority
                 className="h-[60px] w-auto"
+                style={{ width: 'auto' }}
               />
 
               <p className="text-center font-['Pretendard'] text-[14px] font-medium text-neutral-500">
