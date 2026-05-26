@@ -13,29 +13,6 @@ type AppShellProps = {
   }
 }
 
-function TokenIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      className="h-6 w-6 text-blue-600"
-      fill="none"
-      viewBox="0 0 24 24"
-    >
-      <path
-        d="M4 7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5v9a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5v-9Z"
-        stroke="currentColor"
-        strokeWidth="1.5"
-      />
-      <path
-        d="M8 9.5h8M8 14.5h5"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeWidth="1.5"
-      />
-    </svg>
-  )
-}
-
 export function AppShell({ children, user }: AppShellProps) {
   const initial = user.displayName.trim().charAt(0).toUpperCase() || 'A'
   const tokenCount = user.tokenCount ?? 28
@@ -82,7 +59,14 @@ export function AppShell({ children, user }: AppShellProps) {
                   </div>
 
                   <div className="flex items-center justify-center gap-2 rounded-xl px-2.5 py-2">
-                    <TokenIcon />
+                    <Image
+                      src="/assets/icons/account/token.svg"
+                      alt=""
+                      width={24}
+                      height={24}
+                      unoptimized
+                      className="h-6 w-6"
+                    />
                     <span className="text-[clamp(14px,0.938vw,18px)] font-semibold leading-6 text-blue-600">
                       {tokenCount}
                     </span>
