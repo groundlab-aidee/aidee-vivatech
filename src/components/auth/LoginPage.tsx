@@ -7,7 +7,7 @@ type LoginPageProps = {
 }
 
 export function LoginPage({
-  next = '/dashboard',
+  next = '/workspace',
   hasAuthError = false,
 }: LoginPageProps) {
   return (

@@ -29,7 +29,7 @@ const providerConfig = {
 
 export function SocialLoginButton({
   provider,
-  next = '/dashboard',
+  next = '/workspace',
   disabled = false,
 }: SocialLoginButtonProps) {
   const config = providerConfig[provider]
@@ -45,6 +45,9 @@ export function SocialLoginButton({
       provider: 'google',
       options: {
         redirectTo: `${siteUrl}/auth/callback?next=${encodeURIComponent(next)}`,
+        queryParams: {
+          prompt: 'select_account',
+        },
       },
     })
   }

@@ -9,8 +9,14 @@ export default async function Home() {
   } = await supabase.auth.getUser()
 
   if (user) {
-    redirect('/workspace')
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('plan')
+      .eq('id', user.id)
+      .maybeSingle()
+
+    redirect(profile?.plan ? '/workspace' : '/onboarding/plan')
   }
 
-  redirect('/login')
+  redirect('/login?next=/workspace')
 }
