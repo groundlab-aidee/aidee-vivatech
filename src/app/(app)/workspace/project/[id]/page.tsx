@@ -20,6 +20,21 @@ function getInitialStageFromMessages(messages: ChatMessageRecord[]) {
     ?.stageKey ?? DEFAULT_STAGE_KEY
 }
 
+const planLabels: Record<string, string> = {
+  basic: 'Basic',
+  business: 'Business',
+  free: 'Free',
+  pro: 'Pro',
+}
+
+function formatPlan(plan: string | null | undefined) {
+  if (!plan) {
+    return 'Free'
+  }
+
+  return planLabels[plan] ?? plan
+}
+
 export default async function WorkspaceProjectPage({
   params,
   searchParams,
@@ -49,6 +64,11 @@ export default async function WorkspaceProjectPage({
     projectId: project.id,
     supabase,
   })
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('plan')
+    .eq('id', user.id)
+    .maybeSingle()
 
   return (
     <ProjectChatContainer
@@ -62,6 +82,8 @@ export default async function WorkspaceProjectPage({
           ? user.user_metadata.avatar_url
           : null
       }
+      userPlanLabel={formatPlan(profile?.plan)}
+      userTokenCount={28}
     />
   )
 }

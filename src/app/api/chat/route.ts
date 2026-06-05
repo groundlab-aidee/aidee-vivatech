@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server'
 
-import { buildInitialUserPrompt, buildSystemPrompt } from '@/lib/chat/context'
+import {
+  buildInitialUserPrompt,
+  buildReferenceGuidelineBlock,
+  buildSystemPrompt,
+} from '@/lib/chat/context'
 import { isExpertKey, type ExpertKey } from '@/lib/chat/experts'
 import {
   appendImageBlockIfPresent,
@@ -197,19 +201,38 @@ function buildProjectStartSnapshot(
 
 function buildProjectCardResponse({
   project,
-  referenceCount,
+  referenceImages,
 }: {
   project: Awaited<ReturnType<typeof getProjectForUser>>
-  referenceCount: number
+  referenceImages: Awaited<ReturnType<typeof getReferenceImages>>
 }) {
   const snapshot = buildProjectStartSnapshot(project)
   const referenceSummary =
-    referenceCount > 0
-      ? `${referenceCount}개 참고 이미지가 업로드되어 있습니다.`
+    referenceImages.length > 0
+      ? `${referenceImages.length}개 참고 이미지가 업로드되어 있습니다.`
       : '업로드된 참고 이미지는 아직 없습니다.'
+  const referenceGuidelines = buildReferenceGuidelineBlock(referenceImages)
+  const referenceDirection =
+    referenceImages.length > 0
+      ? [
+          '레퍼런스 이미지에서 우선 참고해야 할 방향',
+          '',
+          referenceGuidelines,
+          '',
+          '이 요약이 현재 아이디어를 잘 담고 있나요?',
+          '혹시 예상하고 있는 제품의 구체적인 모습이나 보충하고 싶은 설명이 있다면 자유롭게 말씀해주세요.',
+        ]
+      : [
+          '레퍼런스 이미지에서 우선 참고해야 할 방향',
+          '',
+          '아직 업로드된 참고 이미지가 없어, 설문 내용을 기준으로 방향을 잡겠습니다.',
+          '',
+          '예상하고 있는 제품의 구체적인 모습이나 보충하고 싶은 설명이 있다면 자유롭게 말씀해주세요.',
+        ]
 
   return [
-    "새로운 프로젝트가 시작되었네요! 'Aidee'팀과 함께 아이디어를 구체화해보아요.",
+    '새로운 프로젝트가 생성되었습니다.',
+    "'Aidee' 팀이 사용자의 아이디어를 구체화할 수 있도록, 현재까지 저장된 내용을 먼저 요약해 드릴게요.",
     '',
     '<<AIDEE_PROJECT_DIRECTION>>',
     'Project Direction',
@@ -242,8 +265,7 @@ function buildProjectCardResponse({
     referenceSummary,
     '<</AIDEE_PROJECT_DIRECTION>>',
     '',
-    '제품의 구체적인 모습이나 추가 설명이 있다면 편하게 알려주세요.',
-    '형태, 색감, 재질, 사용 장면, 꼭 들어갔으면 하는 디테일처럼 떠오르는 내용만 적어주셔도 좋아요.',
+    ...referenceDirection,
   ].join('\n')
 }
 
@@ -422,7 +444,7 @@ export async function POST(request: Request) {
     if (isInitialEntry) {
       assistantContent = buildProjectCardResponse({
         project,
-        referenceCount: referenceImages.length,
+        referenceImages,
       })
     } else {
       const conversationMessages = [

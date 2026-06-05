@@ -4,6 +4,10 @@ import Image from 'next/image'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 
+import { useProjectChatSidebar } from '@/components/app-shell/ProjectChatSidebarContext'
+import type { ExpertKey } from '@/lib/chat/experts'
+import type { StageKey } from '@/lib/chat/stages'
+
 const navItems = [
   {
     href: '/workspace',
@@ -23,16 +27,103 @@ const navItems = [
   },
 ] as const
 
+const expertItems: Array<{
+  colorClassName: string
+  key: Exclude<ExpertKey, 'aidee'>
+  label: string
+}> = [
+  {
+    colorClassName: 'border-indigo-300',
+    key: 'planner',
+    label: '기획전략가',
+  },
+  {
+    colorClassName: 'border-fuchsia-300',
+    key: 'style_designer',
+    label: '스타일디자이너',
+  },
+  {
+    colorClassName: 'border-emerald-300',
+    key: 'engineer',
+    label: '엔지니어',
+  },
+  {
+    colorClassName: 'border-sky-300',
+    key: 'marketer',
+    label: '마케터',
+  },
+]
+
+const processSteps: Array<{
+  index: number
+  label: string
+  stageKeys: StageKey[]
+}> = [
+  {
+    index: 1,
+    label: '제품 아이디어 & 개발 조건 정리',
+    stageKeys: ['step_0_start', 'step_1_idea'],
+  },
+  {
+    index: 2,
+    label: '사용자 명확화',
+    stageKeys: ['step_2_persona', 'step_2_research'],
+  },
+  {
+    index: 3,
+    label: '디자인 개발 방향성 도출',
+    stageKeys: ['step_3_direction'],
+  },
+  {
+    index: 4,
+    label: '스타일 컨셉 도출',
+    stageKeys: ['step_4_style'],
+  },
+  {
+    index: 5,
+    label: '디자인 제안',
+    stageKeys: ['step_5_design'],
+  },
+  {
+    index: 6,
+    label: '평가 및 RFP 문서 생성',
+    stageKeys: ['step_6_rfp'],
+  },
+  {
+    index: 7,
+    label: '협력업체 연결',
+    stageKeys: ['step_6_company'],
+  },
+]
+
 function isActivePath(pathname: string, href: string) {
+  if (pathname.startsWith('/workspace/project/')) {
+    return href === '/chat'
+  }
+
   return pathname === href || pathname.startsWith(`${href}/`)
 }
 
 export function AppSidebar() {
   const pathname = usePathname()
+  const { sidebarState } = useProjectChatSidebar()
+
+  if (
+    pathname.startsWith('/workspace/project/') &&
+    sidebarState.showProgress
+  ) {
+    return (
+      <ProjectProgressSidebar
+        activeExpert={sidebarState.activeExpert}
+        activeStageKey={sidebarState.activeStageKey}
+        pathname={pathname}
+      />
+    )
+  }
 
   return (
-    <aside className="hidden w-[clamp(232px,16.667vw,320px)] shrink-0 flex-col gap-2 overflow-hidden bg-neutral-900 lg:flex">
-      <div className="flex h-[clamp(78px,5.833vw,112px)] w-full items-center justify-between px-[clamp(24px,2.083vw,40px)] pb-[clamp(24px,2.083vw,40px)] pt-[clamp(32px,2.5vw,48px)]">
+    <aside className="hidden w-[clamp(220px,31.25svh,320px)] shrink-0 flex-col gap-2 overflow-hidden bg-neutral-900 lg:flex">
+      <div className="flex h-[clamp(76px,10.94svh,112px)] w-full items-center justify-between px-[clamp(24px,3.9svh,40px)] pb-[clamp(22px,3.9svh,40px)] pt-[clamp(30px,4.69svh,48px)]">
         <Image
           src="/assets/logos/aidee-logo-blue.svg"
           alt="Aidee"
@@ -40,12 +131,12 @@ export function AppSidebar() {
           height={64}
           priority
           unoptimized
-          className="h-[clamp(44px,3.333vw,64px)] w-[clamp(121px,9.167vw,176px)] object-contain"
+          className="h-[clamp(40px,6.25svh,64px)] w-[clamp(110px,17.19svh,176px)] object-contain"
         />
-        <div className="h-[clamp(32px,2.083vw,40px)] w-[clamp(32px,2.083vw,40px)]" />
+        <div className="h-[clamp(30px,3.9svh,40px)] w-[clamp(30px,3.9svh,40px)]" />
       </div>
 
-      <nav className="border-b border-neutral-800 px-[clamp(12px,0.833vw,16px)] pb-[clamp(40px,3.333vw,64px)] pt-[clamp(12px,0.833vw,16px)]">
+      <nav className="border-b border-neutral-800 px-[clamp(12px,1.56svh,16px)] pb-[clamp(28px,4.69svh,64px)] pt-[clamp(10px,1.56svh,16px)]">
         <div className="flex w-full flex-col items-start">
           {navItems.map((item) => {
             const active = isActivePath(pathname, item.href)
@@ -57,8 +148,8 @@ export function AppSidebar() {
                 aria-current={active ? 'page' : undefined}
                 className={
                   active
-                    ? 'inline-flex h-[clamp(40px,2.5vw,48px)] w-full items-center gap-[clamp(12px,1.042vw,20px)] rounded-lg bg-gradient-to-l from-zinc-800 to-slate-600/50 px-[clamp(14px,1.042vw,20px)] py-2 text-[clamp(14px,0.833vw,16px)] font-semibold leading-6 text-white shadow-[0px_4px_8px_0px_rgba(0,0,0,0.10),inset_0px_1px_0px_0px_rgba(255,255,255,0.05)]'
-                    : 'inline-flex h-[clamp(40px,2.5vw,48px)] w-full items-center gap-[clamp(12px,1.042vw,20px)] overflow-hidden rounded-lg px-[clamp(14px,1.042vw,20px)] py-2 text-[clamp(14px,0.833vw,16px)] font-semibold leading-6 text-zinc-500 transition hover:bg-neutral-800/70 hover:text-zinc-200'
+                    ? 'inline-flex h-[clamp(36px,4.69svh,48px)] w-full items-center gap-[clamp(12px,1.95svh,20px)] rounded-lg bg-gradient-to-l from-zinc-800 to-slate-600/50 px-[clamp(14px,1.95svh,20px)] py-2 text-[clamp(13px,1.56svh,16px)] font-semibold leading-6 text-white shadow-[0px_4px_8px_0px_rgba(0,0,0,0.10),inset_0px_1px_0px_0px_rgba(255,255,255,0.05)]'
+                    : 'inline-flex h-[clamp(36px,4.69svh,48px)] w-full items-center gap-[clamp(12px,1.95svh,20px)] overflow-hidden rounded-lg px-[clamp(14px,1.95svh,20px)] py-2 text-[clamp(13px,1.56svh,16px)] font-semibold leading-6 text-zinc-500 transition hover:bg-neutral-800/70 hover:text-zinc-200'
                 }
               >
                 <Image
@@ -67,7 +158,7 @@ export function AppSidebar() {
                   width={28}
                   height={28}
                   unoptimized
-                  className="h-[clamp(20px,1.458vw,28px)] w-[clamp(20px,1.458vw,28px)] shrink-0 object-contain"
+                  className="h-[clamp(20px,2.73svh,28px)] w-[clamp(20px,2.73svh,28px)] shrink-0 object-contain"
                 />
                 <span>{item.label}</span>
               </Link>
@@ -76,5 +167,145 @@ export function AppSidebar() {
         </div>
       </nav>
     </aside>
+  )
+}
+
+function SidebarLogo() {
+  return (
+    <div className="flex h-[clamp(76px,10.94svh,112px)] w-full items-center justify-between px-[clamp(24px,3.9svh,40px)] pb-[clamp(22px,3.9svh,40px)] pt-[clamp(30px,4.69svh,48px)]">
+      <Image
+        src="/assets/logos/aidee-logo-blue.svg"
+        alt="Aidee"
+        width={176}
+        height={64}
+        priority
+        unoptimized
+        className="h-[clamp(40px,6.25svh,64px)] w-[clamp(110px,17.19svh,176px)] object-contain"
+      />
+      <div className="h-[clamp(30px,3.9svh,40px)] w-[clamp(30px,3.9svh,40px)]" />
+    </div>
+  )
+}
+
+function ProjectProgressSidebar({
+  activeExpert,
+  activeStageKey,
+  pathname,
+}: {
+  activeExpert: ExpertKey
+  activeStageKey: StageKey
+  pathname: string
+}) {
+  return (
+    <aside className="hidden w-[clamp(220px,31.25svh,320px)] shrink-0 flex-col overflow-hidden bg-neutral-900 lg:flex">
+      <SidebarLogo />
+
+      <SidebarNav pathname={pathname} />
+
+      <section className="border-b border-neutral-800 px-[clamp(12px,1.56svh,16px)] py-[clamp(10px,1.56svh,16px)]">
+        <div className="flex flex-col gap-[3px]">
+          {expertItems.map((expert) => {
+            const selected = activeExpert === expert.key
+
+            return (
+              <div
+                key={expert.key}
+                className={`flex h-[clamp(36px,4.69svh,48px)] items-center gap-[clamp(12px,1.95svh,20px)] rounded-lg px-[clamp(14px,1.95svh,20px)] py-2 ${
+                  selected
+                    ? 'bg-gradient-to-l from-zinc-800 to-slate-600/50 text-white'
+                    : 'text-zinc-500'
+                }`}
+              >
+                <div
+                  className={`h-[clamp(20px,2.73svh,28px)] w-[clamp(20px,2.73svh,28px)] rounded-full border-2 ${
+                    selected ? expert.colorClassName : 'border-zinc-500'
+                  }`}
+                />
+                <span className="font-['Inter'] text-[clamp(13px,1.56svh,16px)] font-semibold leading-6">
+                  {expert.label}
+                </span>
+              </div>
+            )
+          })}
+        </div>
+      </section>
+
+      <section className="min-h-0 flex-1 overflow-hidden px-[clamp(12px,1.56svh,16px)] py-[clamp(14px,2.34svh,24px)]">
+        <div className="relative ml-2 flex flex-col gap-[clamp(10px,1.95svh,20px)]">
+          <div className="absolute bottom-3 left-4 top-3 w-px bg-slate-700" />
+          {processSteps.map((step) => {
+            const active = step.stageKeys.includes(activeStageKey)
+
+            return (
+              <div
+                key={step.index}
+                className="relative z-10 flex items-center gap-5"
+              >
+                <div
+                  className={`flex shrink-0 items-center justify-center rounded-full ${
+                    active
+                      ? 'h-[clamp(12px,1.56svh,16px)] w-[clamp(12px,1.56svh,16px)] bg-blue-600 outline outline-1 outline-offset-[-1px] outline-white'
+                      : 'h-[clamp(9px,1.17svh,12px)] w-[clamp(9px,1.17svh,12px)] border border-zinc-500 bg-neutral-800'
+                  }`}
+                >
+                  {active ? <div className="h-[5px] w-[5px] rounded-full bg-white" /> : null}
+                </div>
+                <div className="flex min-w-0 items-center gap-1">
+                  <span
+                    className={`font-['Inter'] text-[clamp(12px,1.37svh,14px)] font-semibold ${
+                      active ? 'text-white' : 'text-zinc-500'
+                    }`}
+                  >
+                    {String(step.index).padStart(2, '0')}.
+                  </span>
+                  <span
+                    className={`min-w-0 font-['Inter'] text-[clamp(12px,1.37svh,14px)] font-semibold ${
+                      active ? 'text-white' : 'text-zinc-500'
+                    }`}
+                  >
+                    {step.label}
+                  </span>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </section>
+    </aside>
+  )
+}
+
+function SidebarNav({ pathname }: { pathname: string }) {
+  return (
+    <nav className="border-b border-neutral-800 px-[clamp(12px,1.56svh,16px)] pb-[clamp(10px,1.56svh,16px)] pt-[clamp(10px,1.56svh,16px)]">
+      <div className="flex w-full flex-col items-start">
+        {navItems.map((item) => {
+          const active = isActivePath(pathname, item.href)
+
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              aria-current={active ? 'page' : undefined}
+              className={
+                active
+                  ? 'inline-flex h-[clamp(36px,4.69svh,48px)] w-full items-center gap-[clamp(12px,1.95svh,20px)] rounded-lg bg-gradient-to-l from-zinc-800 to-slate-600/50 px-[clamp(14px,1.95svh,20px)] py-2 font-["Inter"] text-[clamp(13px,1.56svh,16px)] font-semibold leading-6 text-white shadow-[0px_4px_8px_0px_rgba(0,0,0,0.10),inset_0px_1px_0px_0px_rgba(255,255,255,0.05)]'
+                  : 'inline-flex h-[clamp(36px,4.69svh,48px)] w-full items-center gap-[clamp(12px,1.95svh,20px)] overflow-hidden rounded-lg px-[clamp(14px,1.95svh,20px)] py-2 font-["Inter"] text-[clamp(13px,1.56svh,16px)] font-semibold leading-6 text-zinc-500 transition hover:bg-neutral-800/70 hover:text-zinc-200'
+              }
+            >
+              <Image
+                src={item.icon}
+                alt=""
+                width={28}
+                height={28}
+                unoptimized
+                className="h-[clamp(20px,2.73svh,28px)] w-[clamp(20px,2.73svh,28px)] shrink-0 object-contain"
+              />
+              <span>{item.label}</span>
+            </Link>
+          )
+        })}
+      </div>
+    </nav>
   )
 }
