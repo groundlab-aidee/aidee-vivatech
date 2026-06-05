@@ -1,5 +1,68 @@
 import { WorkspaceHome } from '@/components/workspace/WorkspaceHome'
+import type { WorkspaceProject } from '@/components/workspace/WorkspaceHome'
+import { createClient } from '@/lib/supabase/server'
 
-export default function WorkspacePage() {
-  return <WorkspaceHome />
+type ProjectRow = {
+  created_at: string
+  id: string
+  requirements: unknown
+  title: string | null
+}
+
+function getStringFromPath(value: unknown, path: string[]) {
+  let current = value
+
+  for (const key of path) {
+    if (!current || typeof current !== 'object') {
+      return undefined
+    }
+
+    current = (current as Record<string, unknown>)[key]
+  }
+
+  return typeof current === 'string' ? current : undefined
+}
+
+function mapProject(row: ProjectRow): WorkspaceProject {
+  const title =
+    row.title ||
+    getStringFromPath(row.requirements, ['generated', 'title']) ||
+    '새 프로젝트'
+
+  return {
+    createdAt: row.created_at,
+    id: row.id,
+    recommendedStage: getStringFromPath(row.requirements, [
+      'generated',
+      'recommendedStage',
+    ]),
+    summary: getStringFromPath(row.requirements, ['generated', 'summary']),
+    title,
+  }
+}
+
+export default async function WorkspacePage() {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+
+  const { data: projects, error } = user
+    ? await supabase
+        .from('projects')
+        .select('id, title, created_at, requirements')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(12)
+    : { data: [], error: null }
+
+  if (error) {
+    console.warn('Failed to load workspace projects.', {
+      code: error.code,
+      hint: error.hint,
+      message: error.message,
+    })
+  }
+
+  return <WorkspaceHome projects={(projects ?? []).map(mapProject)} />
 }

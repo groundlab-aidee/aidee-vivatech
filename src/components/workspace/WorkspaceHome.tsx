@@ -1,8 +1,11 @@
 'use client'
 
 import Image from 'next/image'
-import type { ChangeEvent, DragEvent } from 'react'
+import Link from 'next/link'
+import type { ChangeEvent, DragEvent, KeyboardEvent } from 'react'
 import { useEffect, useRef, useState } from 'react'
+
+import { ProjectSurveyModal } from '@/components/workspace/ProjectSurveyModal'
 
 const MAX_REFERENCE_FILES = 4
 const MAX_REFERENCE_FILE_SIZE = 10 * 1024 * 1024
@@ -13,13 +16,105 @@ const ACCEPTED_IMAGE_TYPES = [
   'image/webp',
 ]
 
-export function WorkspaceHome() {
+export type WorkspaceProject = {
+  createdAt: string
+  id: string
+  recommendedStage?: string
+  summary?: string
+  title: string
+}
+
+type WorkspaceHomeProps = {
+  projects: WorkspaceProject[]
+}
+
+function formatProjectDate(value: string) {
+  const date = new Date(value)
+
+  if (Number.isNaN(date.getTime())) {
+    return ''
+  }
+
+  return new Intl.DateTimeFormat('ko-KR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  })
+    .format(date)
+    .replace(/\s/g, '')
+    .replace(/\.$/, '')
+}
+
+function getStageLabel(stage?: string) {
+  if (!stage) {
+    return 'Step1'
+  }
+
+  const stageKeyMap: Record<string, string> = {
+    step_0_start: 'Step1',
+    step_1_idea: 'Step1',
+    step_2_persona: 'Step2',
+    step_2_research: 'Step2',
+    step_3_direction: 'Step3',
+    step_4_style: 'Step4',
+    step_5_design: 'Step5',
+    step_6_rfp: 'Step6',
+    step_6_company: 'Step7',
+  }
+  const normalized = stage.trim().toLowerCase()
+  const mappedStage = stageKeyMap[normalized]
+
+  if (mappedStage) {
+    return mappedStage
+  }
+
+  const compactStage = normalized.replace(/\s+/g, '')
+
+  if (/초기|아이디어|개발조건/.test(compactStage)) {
+    return 'Step1'
+  }
+
+  if (/페르소나|리서치|사용자|타겟/.test(compactStage)) {
+    return 'Step2'
+  }
+
+  if (/방향|방향성/.test(compactStage)) {
+    return 'Step3'
+  }
+
+  if (/스타일|컨셉|콘셉트/.test(compactStage)) {
+    return 'Step4'
+  }
+
+  if (/디자인|시안|제안/.test(compactStage)) {
+    return 'Step5'
+  }
+
+  if (/평가|rfp|기획안|제안요청서/.test(compactStage)) {
+    return 'Step6'
+  }
+
+  if (/협력|업체|파트너|연결/.test(compactStage)) {
+    return 'Step7'
+  }
+
+  const match = stage.match(/\d+/)
+
+  return match ? `Step${Math.min(Number(match[0]), 7)}` : 'Step1'
+}
+
+export function WorkspaceHome({ projects }: WorkspaceHomeProps) {
   const [isUploadOpen, setIsUploadOpen] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
+  const [isSurveyOpen, setIsSurveyOpen] = useState(false)
+  const [prompt, setPrompt] = useState('')
   const [referenceImages, setReferenceImages] = useState<File[]>([])
   const [referencePreviews, setReferencePreviews] = useState<string[]>([])
   const [uploadError, setUploadError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const promptFormRef = useRef<HTMLFormElement | null>(null)
+  const promptInputRef = useRef<HTMLTextAreaElement | null>(null)
+  const referencePreviewsRef = useRef<string[]>([])
 
   function addReferenceFiles(files: File[]) {
     if (files.length === 0) {
@@ -42,10 +137,15 @@ export function WorkspaceHome() {
 
     setUploadError(null)
     setReferenceImages((current) => [...current, ...filesToAdd])
+    const nextPreviews = filesToAdd.map((file) => URL.createObjectURL(file))
     setReferencePreviews((current) => [
       ...current,
-      ...filesToAdd.map((file) => URL.createObjectURL(file)),
+      ...nextPreviews,
     ])
+    referencePreviewsRef.current = [
+      ...referencePreviewsRef.current,
+      ...nextPreviews,
+    ]
   }
 
   function handleFileInputChange(event: ChangeEvent<HTMLInputElement>) {
@@ -69,14 +169,53 @@ export function WorkspaceHome() {
 
     setReferenceImages((current) => current.filter((_, itemIndex) => itemIndex !== index))
     setReferencePreviews((current) => current.filter((_, itemIndex) => itemIndex !== index))
+    referencePreviewsRef.current = referencePreviewsRef.current.filter(
+      (_, itemIndex) => itemIndex !== index
+    )
     setUploadError(null)
   }
 
   useEffect(() => {
     return () => {
-      referencePreviews.forEach((preview) => URL.revokeObjectURL(preview))
+      referencePreviewsRef.current.forEach((preview) => URL.revokeObjectURL(preview))
     }
-  }, [referencePreviews])
+  }, [])
+
+  useEffect(() => {
+    const textarea = promptInputRef.current
+
+    if (!textarea) {
+      return
+    }
+
+    const lineHeight = 24
+    const maxRows = 5
+    const maxHeight = lineHeight * maxRows
+
+    textarea.style.height = 'auto'
+    textarea.style.height = `${Math.min(textarea.scrollHeight, maxHeight)}px`
+    textarea.style.overflowY =
+      textarea.scrollHeight > maxHeight ? 'auto' : 'hidden'
+  }, [prompt])
+
+  function resetWorkspaceDraft() {
+    referencePreviewsRef.current.forEach((preview) => URL.revokeObjectURL(preview))
+    referencePreviewsRef.current = []
+    setPrompt('')
+    setReferenceImages([])
+    setReferencePreviews([])
+    setUploadError(null)
+    setIsUploadOpen(false)
+  }
+
+  function handlePromptKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) {
+      return
+    }
+
+    event.preventDefault()
+    promptFormRef.current?.requestSubmit()
+  }
 
   return (
     <div
@@ -97,6 +236,7 @@ export function WorkspaceHome() {
       <h1 className="w-full max-w-[1498px] text-center text-3xl font-bold leading-[48px] text-neutral-900 sm:text-4xl sm:leading-[64px]">
         간단한 아이디어로 시작해 보세요.
       </h1>
+      <div className="justify-start text-neutral-400 text-lg font-medium font-['Pretendard'] leading-[80px]">누구를 위해, 어떤 목적으로, 무엇을 만들고 싶은지 적어주세요.</div>
 
       <div className="mt-12 flex w-full flex-col lg:w-[calc(100%-clamp(320px,36.04%,568px))]">
         {isUploadOpen ? (
@@ -176,11 +316,21 @@ export function WorkspaceHome() {
         ) : null}
 
         <form
-          onSubmit={(event) => event.preventDefault()}
+          ref={promptFormRef}
+          onSubmit={(event) => {
+            event.preventDefault()
+            if (!prompt.trim()) {
+              setUploadError('제품 아이디어를 먼저 입력해주세요.')
+              return
+            }
+
+            setUploadError(null)
+            setIsSurveyOpen(true)
+          }}
           className={
             isUploadOpen
-              ? 'relative z-10 -mt-[47px] flex h-[clamp(56px,7.037svh,76px)] w-full items-center justify-between overflow-hidden rounded-xl border border-gray-200 bg-white px-4 py-3 shadow-[0px_4px_3px_0px_rgba(0,0,0,0.10)]'
-              : 'relative z-10 flex h-[clamp(56px,7.037svh,76px)] w-full items-center justify-between overflow-hidden rounded-xl border border-gray-200 bg-white px-4 py-3 shadow-[0px_4px_3px_0px_rgba(0,0,0,0.10)]'
+              ? 'relative z-10 -mt-[47px] flex min-h-[clamp(56px,7.037svh,76px)] w-full items-center justify-between overflow-hidden rounded-xl border border-gray-200 bg-white px-4 py-3 shadow-[0px_4px_3px_0px_rgba(0,0,0,0.10)]'
+              : 'relative z-10 flex min-h-[clamp(56px,7.037svh,76px)] w-full items-center justify-between overflow-hidden rounded-xl border border-gray-200 bg-white px-4 py-3 shadow-[0px_4px_3px_0px_rgba(0,0,0,0.10)]'
           }
         >
           <div className="flex min-w-0 flex-1 items-center gap-3">
@@ -204,10 +354,14 @@ export function WorkspaceHome() {
               제품 아이디어 입력
             </label>
             <textarea
+              ref={promptInputRef}
               id="workspace-prompt"
               rows={1}
+              value={prompt}
+              onChange={(event) => setPrompt(event.target.value)}
+              onKeyDown={handlePromptKeyDown}
               placeholder="어떤 제품을 만들고 싶은가요?"
-              className="h-8 flex-1 resize-none border-0 bg-transparent py-1 text-[16px] font-medium leading-6 text-neutral-900 outline-none placeholder:text-neutral-400 sm:text-[18px]"
+              className="max-h-[120px] flex-1 resize-none border-0 bg-transparent py-1 text-[16px] font-medium leading-6 text-neutral-900 outline-none placeholder:text-neutral-400 sm:text-[18px]"
             />
           </div>
           <button
@@ -226,6 +380,23 @@ export function WorkspaceHome() {
           </button>
         </form>
       </div>
+
+      <section className="mt-[clamp(96px,18.333svh,198px)] w-full max-w-[1285px] lg:w-[82.3%]">
+        <h2 className="font-['Inter'] text-xl font-semibold leading-[56px] text-neutral-900 sm:text-2xl">
+          최신 프로젝트
+        </h2>
+        {projects.length > 0 ? (
+          <div className="grid grid-cols-1 gap-x-2.5 gap-y-[clamp(32px,4.444svh,48px)] sm:grid-cols-2 lg:grid-cols-4">
+            {projects.map((project, index) => (
+              <ProjectCard key={project.id} project={project} index={index} />
+            ))}
+          </div>
+        ) : (
+          <p className="mt-4 rounded-xl border border-gray-200 bg-gray-50 px-5 py-6 text-sm font-medium text-zinc-500">
+            아직 생성된 프로젝트가 없습니다.
+          </p>
+        )}
+      </section>
 
       {isDragging ? (
         <div className="absolute inset-0 z-50 flex items-center justify-center rounded-[19px] bg-white/90">
@@ -251,6 +422,76 @@ export function WorkspaceHome() {
           </div>
         </div>
       ) : null}
+
+      {isSurveyOpen ? (
+        <ProjectSurveyModal
+          initialIdea={prompt}
+          initialReferenceImages={referenceImages}
+          onClose={() => setIsSurveyOpen(false)}
+          onCreated={resetWorkspaceDraft}
+        />
+      ) : null}
     </div>
+  )
+}
+
+function ProjectCard({
+  index,
+  project,
+}: {
+  index: number
+  project: WorkspaceProject
+}) {
+  const isHighlighted = index % 4 === 2
+
+  return (
+    <Link
+      href={`/workspace/project/${project.id}`}
+      className="group block min-w-0 rounded-xl bg-white outline-none"
+    >
+      <div className="relative aspect-[320/208] overflow-hidden rounded-xl border-2 border-gray-200 bg-gray-200 shadow-[0px_8px_24px_6px_rgba(0,0,0,0.12)] transition group-hover:-translate-y-0.5 group-hover:shadow-[0px_10px_28px_8px_rgba(0,0,0,0.14)]">
+        <div
+          className={`absolute right-[6.25%] top-[7.2%] flex aspect-square w-[7.5%] min-w-5 max-w-6 items-center justify-center overflow-hidden rounded ${
+            isHighlighted ? 'bg-yellow-400' : ''
+          }`}
+        >
+          <Image
+            src="/assets/icons/project/star.svg"
+            alt=""
+            width={24}
+            height={24}
+            unoptimized
+            className="h-6 w-6 object-contain"
+          />
+        </div>
+      </div>
+
+      <div className="relative aspect-[320/64] overflow-hidden rounded-xl bg-white">
+        <div className="grid h-full grid-rows-[56.25%_43.75%]">
+          <div className="grid min-h-0 grid-cols-[minmax(0,65%)_1fr] items-start pl-[3.75%] pr-[5.625%] pt-[2.5%]">
+            <h3 className="min-w-0 truncate font-['Pretendard'] text-sm font-semibold leading-5 text-black 2xl:text-base">
+              {project.title}
+            </h3>
+            <div className="flex justify-end pt-[1.5625%]">
+              <div className="flex aspect-square w-[7.5%] min-w-5 max-w-6 items-center justify-center">
+                <Image
+                  src="/assets/icons/project/more-horizontal.svg"
+                  alt=""
+                  width={24}
+                  height={24}
+                  unoptimized
+                  className="h-6 w-6 object-contain"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="flex min-h-0 items-start gap-[7.5%] px-[3.75%] py-[1.25%] font-['Pretendard'] text-xs font-medium leading-5 text-stone-300 2xl:text-sm">
+            <span>{formatProjectDate(project.createdAt)}</span>
+            <span>{getStageLabel(project.recommendedStage)}</span>
+          </div>
+        </div>
+      </div>
+    </Link>
   )
 }

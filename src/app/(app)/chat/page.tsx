@@ -1,9 +1,18 @@
-export default function ChatPage() {
-  return (
-    <div className="flex min-h-full flex-col px-8 py-10 lg:px-10">
-      <h1 className="text-[32px] font-bold leading-10 text-neutral-900">
-        채팅
-      </h1>
-    </div>
-  )
+import { redirect } from 'next/navigation'
+
+type ChatPageProps = {
+  searchParams: Promise<{
+    projectId?: string | string[]
+  }>
+}
+
+export default async function ChatPage({ searchParams }: ChatPageProps) {
+  const { projectId } = await searchParams
+  const safeProjectId = typeof projectId === 'string' ? projectId : ''
+
+  if (safeProjectId) {
+    redirect(`/workspace/project/${safeProjectId}`)
+  }
+
+  redirect('/workspace')
 }
