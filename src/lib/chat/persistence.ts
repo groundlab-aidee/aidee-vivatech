@@ -46,10 +46,28 @@ export async function getProjectForUser({
 }) {
   const { data, error } = await supabase
     .from('projects')
-    .select('id, title, requirements')
+    .select('id, title, requirements, is_favorite')
     .eq('id', projectId)
     .eq('user_id', userId)
     .maybeSingle()
+
+  if (
+    error?.code === 'PGRST204' ||
+    (error?.code === '42703' && /is_favorite/i.test(error.message))
+  ) {
+    const { data: fallbackData, error: fallbackError } = await supabase
+      .from('projects')
+      .select('id, title, requirements')
+      .eq('id', projectId)
+      .eq('user_id', userId)
+      .maybeSingle()
+
+    if (fallbackError) {
+      throw fallbackError
+    }
+
+    return (fallbackData ?? null) as ProjectContextRecord | null
+  }
 
   if (error) {
     throw error

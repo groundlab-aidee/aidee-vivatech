@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/server'
 type ProjectRow = {
   created_at: string
   id: string
+  is_favorite?: boolean | null
   requirements: unknown
   title: string | null
 }
@@ -32,6 +33,7 @@ function mapProject(row: ProjectRow): WorkspaceProject {
   return {
     createdAt: row.created_at,
     id: row.id,
+    isFavorite: row.is_favorite === true,
     recommendedStage: getStringFromPath(row.requirements, [
       'generated',
       'recommendedStage',
@@ -47,14 +49,26 @@ export default async function WorkspacePage() {
     data: { user },
   } = await supabase.auth.getUser()
 
-  const { data: projects, error } = user
+  const projectsQuery = user
     ? await supabase
         .from('projects')
-        .select('id, title, created_at, requirements')
+        .select('id, title, created_at, requirements, is_favorite')
         .eq('user_id', user.id)
         .order('created_at', { ascending: false })
         .limit(12)
     : { data: [], error: null }
+  const { data: projects, error } =
+    user &&
+    (projectsQuery.error?.code === 'PGRST204' ||
+      (projectsQuery.error?.code === '42703' &&
+        /is_favorite/i.test(projectsQuery.error.message)))
+      ? await supabase
+          .from('projects')
+          .select('id, title, created_at, requirements')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false })
+          .limit(12)
+      : projectsQuery
 
   if (error) {
     console.warn('Failed to load workspace projects.', {

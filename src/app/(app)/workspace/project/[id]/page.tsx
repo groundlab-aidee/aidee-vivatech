@@ -78,6 +78,7 @@ export default async function WorkspaceProjectPage({
       isNewProject={resolvedSearchParams.isNew === 'true'}
       projectId={project.id}
       projectTitle={project.title || '새 프로젝트'}
+      initialIsFavorite={project.is_favorite === true}
       userAvatarUrl={getResolvedAvatarUrl({
         metadata: user.user_metadata,
         profileAvatarUrl: profile?.avatar_url,

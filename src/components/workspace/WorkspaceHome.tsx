@@ -5,6 +5,8 @@ import Link from 'next/link'
 import type { ChangeEvent, DragEvent, KeyboardEvent } from 'react'
 import { useEffect, useRef, useState } from 'react'
 
+import { ProjectFavoriteButton } from '@/components/project/ProjectFavoriteButton'
+import { ProjectMoreMenu } from '@/components/project/ProjectMoreMenu'
 import { ProjectSurveyModal } from '@/components/workspace/ProjectSurveyModal'
 
 const MAX_REFERENCE_FILES = 4
@@ -19,6 +21,7 @@ const ACCEPTED_IMAGE_TYPES = [
 export type WorkspaceProject = {
   createdAt: string
   id: string
+  isFavorite?: boolean
   recommendedStage?: string
   summary?: string
   title: string
@@ -104,6 +107,7 @@ function getStageLabel(stage?: string) {
 }
 
 export function WorkspaceHome({ projects }: WorkspaceHomeProps) {
+  const [workspaceProjects, setWorkspaceProjects] = useState(projects)
   const [isUploadOpen, setIsUploadOpen] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
   const [isSurveyOpen, setIsSurveyOpen] = useState(false)
@@ -385,10 +389,18 @@ export function WorkspaceHome({ projects }: WorkspaceHomeProps) {
         <h2 className="font-['Inter'] text-xl font-semibold leading-[56px] text-neutral-900 sm:text-2xl">
           최신 프로젝트
         </h2>
-        {projects.length > 0 ? (
+        {workspaceProjects.length > 0 ? (
           <div className="grid grid-cols-1 gap-x-2.5 gap-y-[clamp(32px,4.444svh,48px)] sm:grid-cols-2 lg:grid-cols-4">
-            {projects.map((project, index) => (
-              <ProjectCard key={project.id} project={project} index={index} />
+            {workspaceProjects.map((project) => (
+              <ProjectCard
+                key={project.id}
+                project={project}
+                onDeleted={(projectId) =>
+                  setWorkspaceProjects((current) =>
+                    current.filter((item) => item.id !== projectId)
+                  )
+                }
+              />
             ))}
           </div>
         ) : (
@@ -436,62 +448,53 @@ export function WorkspaceHome({ projects }: WorkspaceHomeProps) {
 }
 
 function ProjectCard({
-  index,
+  onDeleted,
   project,
 }: {
-  index: number
+  onDeleted: (projectId: string) => void
   project: WorkspaceProject
 }) {
-  const isHighlighted = index % 4 === 2
-
   return (
-    <Link
-      href={`/workspace/project/${project.id}`}
-      className="group block min-w-0 rounded-xl bg-white outline-none"
-    >
-      <div className="relative aspect-[320/208] overflow-hidden rounded-xl border-2 border-gray-200 bg-gray-200 shadow-[0px_8px_24px_6px_rgba(0,0,0,0.12)] transition group-hover:-translate-y-0.5 group-hover:shadow-[0px_10px_28px_8px_rgba(0,0,0,0.14)]">
-        <div
-          className={`absolute right-[6.25%] top-[7.2%] flex aspect-square w-[7.5%] min-w-5 max-w-6 items-center justify-center overflow-hidden rounded ${
-            isHighlighted ? 'bg-yellow-400' : ''
-          }`}
-        >
-          <Image
-            src="/assets/icons/project/star.svg"
-            alt=""
-            width={24}
-            height={24}
-            unoptimized
-            className="h-6 w-6 object-contain"
-          />
-        </div>
-      </div>
+    <article className="group relative min-w-0 rounded-xl bg-white outline-none">
+      <Link
+        href={`/workspace/project/${project.id}`}
+        className="block rounded-xl outline-none"
+      >
+        <div className="relative aspect-[320/208] overflow-hidden rounded-xl border-2 border-gray-200 bg-gray-200 shadow-[0px_8px_24px_6px_rgba(0,0,0,0.12)] transition group-hover:-translate-y-0.5 group-hover:shadow-[0px_10px_28px_8px_rgba(0,0,0,0.14)]" />
 
-      <div className="relative aspect-[320/64] overflow-hidden rounded-xl bg-white">
-        <div className="grid h-full grid-rows-[56.25%_43.75%]">
-          <div className="grid min-h-0 grid-cols-[minmax(0,65%)_1fr] items-start pl-[3.75%] pr-[5.625%] pt-[2.5%]">
-            <h3 className="min-w-0 truncate font-['Pretendard'] text-sm font-semibold leading-5 text-black 2xl:text-base">
-              {project.title}
-            </h3>
-            <div className="flex justify-end pt-[1.5625%]">
-              <div className="flex aspect-square w-[7.5%] min-w-5 max-w-6 items-center justify-center">
-                <Image
-                  src="/assets/icons/project/more-horizontal.svg"
-                  alt=""
-                  width={24}
-                  height={24}
-                  unoptimized
-                  className="h-6 w-6 object-contain"
-                />
-              </div>
+        <div className="relative aspect-[320/64] overflow-hidden rounded-xl bg-white">
+          <div className="grid h-full grid-rows-[56.25%_43.75%]">
+            <div className="grid min-h-0 grid-cols-[minmax(0,65%)_1fr] items-start pl-[3.75%] pr-[5.625%] pt-[2.5%]">
+              <h3 className="min-w-0 truncate font-['Pretendard'] text-sm font-semibold leading-5 text-black 2xl:text-base">
+                {project.title}
+              </h3>
+              <div />
+            </div>
+
+            <div className="flex min-h-0 items-start gap-[7.5%] px-[3.75%] py-[1.25%] font-['Pretendard'] text-xs font-medium leading-5 text-stone-300 2xl:text-sm">
+              <span>{formatProjectDate(project.createdAt)}</span>
+              <span>{getStageLabel(project.recommendedStage)}</span>
             </div>
           </div>
-
-          <div className="flex min-h-0 items-start gap-[7.5%] px-[3.75%] py-[1.25%] font-['Pretendard'] text-xs font-medium leading-5 text-stone-300 2xl:text-sm">
-            <span>{formatProjectDate(project.createdAt)}</span>
-            <span>{getStageLabel(project.recommendedStage)}</span>
-          </div>
         </div>
+      </Link>
+
+      <div className="absolute right-[6.25%] top-[7.2%] z-20 flex aspect-square w-[7.5%] min-w-5 max-w-6 items-center justify-center overflow-hidden rounded">
+        <ProjectFavoriteButton
+          projectId={project.id}
+          initialIsFavorite={project.isFavorite}
+          className="flex h-full w-full items-center justify-center disabled:opacity-60"
+        />
       </div>
-    </Link>
+
+      <div className="absolute right-[5.625%] top-[78%] z-20">
+        <ProjectMoreMenu
+          projectId={project.id}
+          onDeleted={onDeleted}
+          placement="top"
+          triggerClassName="flex h-6 w-6 items-center justify-center rounded transition hover:bg-zinc-100"
+        />
+      </div>
+    </article>
   )
 }

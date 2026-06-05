@@ -15,6 +15,8 @@ import {
   defaultProjectChatSidebarState,
   useProjectChatSidebar,
 } from '@/components/app-shell/ProjectChatSidebarContext'
+import { ProjectFavoriteButton } from '@/components/project/ProjectFavoriteButton'
+import { ProjectMoreMenu } from '@/components/project/ProjectMoreMenu'
 import {
   getExpertDefinition,
   type ExpertKey,
@@ -29,6 +31,7 @@ type ProjectChatContainerProps = {
   isNewProject: boolean
   projectId: string
   projectTitle: string
+  initialIsFavorite?: boolean
   userAvatarUrl?: string | null
   userPlanLabel?: string
   userTokenCount?: number
@@ -409,6 +412,7 @@ export function ProjectChatContainer({
   isNewProject,
   projectId,
   projectTitle,
+  initialIsFavorite = false,
   userAvatarUrl,
   userPlanLabel = 'Free',
   userTokenCount = 28,
@@ -729,34 +733,16 @@ export function ProjectChatContainer({
             {projectTitle}
           </h1>
           <div className="flex shrink-0 items-center gap-2">
-            <button
-              type="button"
-              aria-label="프로젝트 즐겨찾기"
-              className="flex h-[clamp(28px,2.96svh,32px)] w-[clamp(28px,2.96svh,32px)] items-center justify-center rounded-lg transition hover:bg-zinc-100"
-            >
-              <Image
-                src="/assets/icons/project/star.svg"
-                alt=""
-                width={24}
-                height={24}
-                unoptimized
-                className="h-[clamp(20px,2.22svh,24px)] w-[clamp(20px,2.22svh,24px)] object-contain"
-              />
-            </button>
-            <button
-              type="button"
-              aria-label="프로젝트 더보기"
-              className="flex h-[clamp(28px,2.96svh,32px)] w-[clamp(28px,2.96svh,32px)] items-center justify-center rounded-lg transition hover:bg-zinc-100"
-            >
-              <Image
-                src="/assets/icons/project/more-horizontal.svg"
-                alt=""
-                width={24}
-                height={24}
-                unoptimized
-                className="h-[clamp(20px,2.22svh,24px)] w-[clamp(20px,2.22svh,24px)] object-contain"
-              />
-            </button>
+            <ProjectFavoriteButton
+              projectId={projectId}
+              initialIsFavorite={initialIsFavorite}
+              className="flex h-[clamp(28px,2.96svh,32px)] w-[clamp(28px,2.96svh,32px)] items-center justify-center rounded-lg transition hover:bg-zinc-100 disabled:opacity-60"
+            />
+            <ProjectMoreMenu
+              projectId={projectId}
+              redirectAfterDelete="/workspace"
+              triggerClassName="flex h-[clamp(28px,2.96svh,32px)] w-[clamp(28px,2.96svh,32px)] items-center justify-center rounded-lg transition hover:bg-zinc-100"
+            />
           </div>
         </header>
 

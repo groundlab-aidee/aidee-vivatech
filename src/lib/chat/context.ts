@@ -3,6 +3,7 @@ import { getExpertPrompt, type ExpertKey } from '@/lib/chat/experts'
 
 export type ProjectContextRecord = {
   id: string
+  is_favorite?: boolean | null
   requirements: Record<string, unknown> | null
   title: string | null
 }
