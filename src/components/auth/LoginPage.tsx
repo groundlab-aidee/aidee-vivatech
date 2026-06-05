@@ -21,10 +21,10 @@ export function LoginPage({
               <Image
                 src="/assets/logos/aidee-logo-blue.svg"
                 alt="Aidee"
-                width={172}
-                height={60}
+                width={115}
+                height={40}
                 priority
-                className="h-[60px] w-auto"
+                className="h-10 w-auto"
                 style={{ width: 'auto' }}
               />
 

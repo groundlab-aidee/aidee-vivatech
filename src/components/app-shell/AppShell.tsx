@@ -58,12 +58,12 @@ export function AppShell({ children, user }: AppShellProps) {
                       <Image
                         src="/assets/logos/aidee-logo-blue.svg"
                         alt="Aidee"
-                        width={112}
+                        width={115}
                         height={40}
                         priority
                         unoptimized
-                        className="h-10 w-28 object-contain"
-                        style={{ width: '112px', height: '40px' }}
+                        className="h-10 w-auto object-contain"
+                        style={{ width: 'auto' }}
                       />
                     </div>
                     <div className="hidden min-w-0 flex-1 lg:block">
@@ -79,7 +79,7 @@ export function AppShell({ children, user }: AppShellProps) {
                         </div>
                       ) : null}
                       <div className="flex shrink-0 items-center justify-end gap-1">
-                        <div className="relative h-[clamp(32px,2.083vw,40px)] w-[clamp(32px,2.083vw,40px)] shrink-0 overflow-hidden rounded-3xl bg-green-200">
+                        <div className="relative h-[clamp(32px,2.083vw,40px)] w-[clamp(32px,2.083vw,40px)] shrink-0 overflow-hidden rounded-xl bg-green-200">
                           {user.avatarUrl ? (
                             <Image
                               src={user.avatarUrl}
@@ -87,6 +87,7 @@ export function AppShell({ children, user }: AppShellProps) {
                               width={40}
                               height={40}
                               className="h-full w-full object-cover"
+                              referrerPolicy="no-referrer"
                               unoptimized
                             />
                           ) : (

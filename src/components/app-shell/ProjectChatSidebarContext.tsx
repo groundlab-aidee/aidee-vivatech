@@ -13,12 +13,14 @@ import type { StageKey } from '@/lib/chat/stages'
 
 export type ProjectChatSidebarState = {
   activeExpert: ExpertKey
+  activeExperts: ExpertKey[]
   activeStageKey: StageKey
   showProgress: boolean
 }
 
 export const defaultProjectChatSidebarState: ProjectChatSidebarState = {
   activeExpert: 'aidee',
+  activeExperts: [],
   activeStageKey: 'step_0_start',
   showProgress: false,
 }

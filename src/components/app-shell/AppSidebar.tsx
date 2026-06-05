@@ -28,27 +28,27 @@ const navItems = [
 ] as const
 
 const expertItems: Array<{
-  colorClassName: string
+  icon: string
   key: Exclude<ExpertKey, 'aidee'>
   label: string
 }> = [
   {
-    colorClassName: 'border-indigo-300',
+    icon: '/assets/icons/chat/strategist.svg',
     key: 'planner',
     label: '기획전략가',
   },
   {
-    colorClassName: 'border-fuchsia-300',
+    icon: '/assets/icons/chat/designer.svg',
     key: 'style_designer',
     label: '스타일디자이너',
   },
   {
-    colorClassName: 'border-emerald-300',
+    icon: '/assets/icons/chat/engineer.svg',
     key: 'engineer',
     label: '엔지니어',
   },
   {
-    colorClassName: 'border-sky-300',
+    icon: '/assets/icons/chat/marketer.svg',
     key: 'marketer',
     label: '마케터',
   },
@@ -115,6 +115,7 @@ export function AppSidebar() {
     return (
       <ProjectProgressSidebar
         activeExpert={sidebarState.activeExpert}
+        activeExperts={sidebarState.activeExperts}
         activeStageKey={sidebarState.activeStageKey}
         pathname={pathname}
       />
@@ -127,11 +128,12 @@ export function AppSidebar() {
         <Image
           src="/assets/logos/aidee-logo-blue.svg"
           alt="Aidee"
-          width={176}
-          height={64}
+          width={115}
+          height={40}
           priority
           unoptimized
-          className="h-[clamp(40px,6.25svh,64px)] w-[clamp(110px,17.19svh,176px)] object-contain"
+          className="h-[clamp(40px,6.25svh,64px)] w-auto object-contain"
+          style={{ width: 'auto' }}
         />
         <div className="h-[clamp(30px,3.9svh,40px)] w-[clamp(30px,3.9svh,40px)]" />
       </div>
@@ -176,11 +178,12 @@ function SidebarLogo() {
       <Image
         src="/assets/logos/aidee-logo-blue.svg"
         alt="Aidee"
-        width={176}
-        height={64}
+        width={115}
+        height={40}
         priority
         unoptimized
-        className="h-[clamp(40px,6.25svh,64px)] w-[clamp(110px,17.19svh,176px)] object-contain"
+        className="h-[clamp(40px,6.25svh,64px)] w-auto object-contain"
+        style={{ width: 'auto' }}
       />
       <div className="h-[clamp(30px,3.9svh,40px)] w-[clamp(30px,3.9svh,40px)]" />
     </div>
@@ -189,13 +192,19 @@ function SidebarLogo() {
 
 function ProjectProgressSidebar({
   activeExpert,
+  activeExperts,
   activeStageKey,
   pathname,
 }: {
   activeExpert: ExpertKey
+  activeExperts: ExpertKey[]
   activeStageKey: StageKey
   pathname: string
 }) {
+  const activeStepIndex =
+    processSteps.find((step) => step.stageKeys.includes(activeStageKey))
+      ?.index ?? 1
+
   return (
     <aside className="hidden w-[clamp(220px,31.25svh,320px)] shrink-0 flex-col overflow-hidden bg-neutral-900 lg:flex">
       <SidebarLogo />
@@ -205,7 +214,10 @@ function ProjectProgressSidebar({
       <section className="border-b border-neutral-800 px-[clamp(12px,1.56svh,16px)] py-[clamp(10px,1.56svh,16px)]">
         <div className="flex flex-col gap-[3px]">
           {expertItems.map((expert) => {
-            const selected = activeExpert === expert.key
+            const selected =
+              activeExperts.length > 0
+                ? activeExperts.includes(expert.key)
+                : activeExpert === expert.key
 
             return (
               <div
@@ -216,9 +228,14 @@ function ProjectProgressSidebar({
                     : 'text-zinc-500'
                 }`}
               >
-                <div
-                  className={`h-[clamp(20px,2.73svh,28px)] w-[clamp(20px,2.73svh,28px)] rounded-full border-2 ${
-                    selected ? expert.colorClassName : 'border-zinc-500'
+                <Image
+                  src={expert.icon}
+                  alt=""
+                  width={28}
+                  height={28}
+                  unoptimized
+                  className={`h-[clamp(20px,2.73svh,28px)] w-[clamp(20px,2.73svh,28px)] shrink-0 object-contain ${
+                    selected ? 'opacity-100' : 'opacity-45'
                   }`}
                 />
                 <span className="font-['Inter'] text-[clamp(13px,1.56svh,16px)] font-semibold leading-6">
@@ -230,37 +247,51 @@ function ProjectProgressSidebar({
         </div>
       </section>
 
-      <section className="min-h-0 flex-1 overflow-hidden px-[clamp(12px,1.56svh,16px)] py-[clamp(14px,2.34svh,24px)]">
-        <div className="relative ml-2 flex flex-col gap-[clamp(10px,1.95svh,20px)]">
-          <div className="absolute bottom-3 left-4 top-3 w-px bg-slate-700" />
+      <section className="min-h-0 flex-1 overflow-hidden px-[clamp(16px,2.34svh,26px)] py-[clamp(14px,2.34svh,24px)]">
+        <div className="relative flex flex-col gap-[clamp(10px,1.95svh,20px)]">
+          <div className="absolute bottom-3 left-2 top-3 w-px bg-slate-700" />
           {processSteps.map((step) => {
             const active = step.stageKeys.includes(activeStageKey)
+            const completed = step.index < activeStepIndex
+            const visible = active || completed
 
             return (
               <div
                 key={step.index}
-                className="relative z-10 flex items-center gap-5"
+                className="relative z-10 flex items-center gap-[clamp(14px,1.85svh,20px)]"
               >
-                <div
-                  className={`flex shrink-0 items-center justify-center rounded-full ${
-                    active
-                      ? 'h-[clamp(12px,1.56svh,16px)] w-[clamp(12px,1.56svh,16px)] bg-blue-600 outline outline-1 outline-offset-[-1px] outline-white'
-                      : 'h-[clamp(9px,1.17svh,12px)] w-[clamp(9px,1.17svh,12px)] border border-zinc-500 bg-neutral-800'
-                  }`}
-                >
-                  {active ? <div className="h-[5px] w-[5px] rounded-full bg-white" /> : null}
+                <div className="flex h-4 w-4 shrink-0 items-center justify-center">
+                  {completed ? (
+                    <div className="flex h-3 w-3 items-center justify-center rounded-full border border-white bg-white">
+                      <div className="h-[5px] w-1.5 -translate-y-px -rotate-45 border-b border-l border-blue-600" />
+                    </div>
+                  ) : active ? (
+                    <div className="flex h-4 w-4 items-center justify-center rounded-lg bg-blue-600 outline outline-1 outline-offset-[-1px] outline-white">
+                      <div className="h-[5px] w-[5px] rounded-full bg-white" />
+                    </div>
+                  ) : (
+                    <div className="h-3 w-3 rounded-full border border-gray-400 bg-neutral-800" />
+                  )}
                 </div>
-                <div className="flex min-w-0 items-center gap-1">
+                <div className="flex min-w-0 items-center gap-1.5">
                   <span
-                    className={`font-['Inter'] text-[clamp(12px,1.37svh,14px)] font-semibold ${
-                      active ? 'text-white' : 'text-zinc-500'
+                    className={`font-['Inter'] font-semibold ${
+                      active
+                        ? 'text-[clamp(12px,1.3svh,14px)] text-white'
+                        : `text-[clamp(11px,1.2svh,13px)] ${
+                            visible ? 'text-white' : 'text-gray-400'
+                          }`
                     }`}
                   >
                     {String(step.index).padStart(2, '0')}.
                   </span>
                   <span
-                    className={`min-w-0 font-['Inter'] text-[clamp(12px,1.37svh,14px)] font-semibold ${
-                      active ? 'text-white' : 'text-zinc-500'
+                    className={`min-w-0 font-['Inter'] font-semibold ${
+                      active
+                        ? 'text-[clamp(12px,1.3svh,14px)] text-white'
+                        : `text-[clamp(11px,1.2svh,13px)] ${
+                            visible ? 'text-white' : 'text-gray-400'
+                          }`
                     }`}
                   >
                     {step.label}

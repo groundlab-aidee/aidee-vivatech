@@ -5,6 +5,7 @@ import type { ChatMessageRecord } from '@/lib/chat/persistence'
 import { getProjectForUser, getProjectMessages } from '@/lib/chat/persistence'
 import { DEFAULT_STAGE_KEY } from '@/lib/chat/stages'
 import { createClient } from '@/lib/supabase/server'
+import { getResolvedAvatarUrl } from '@/lib/supabase/user-metadata'
 
 type ProjectPageProps = {
   params: Promise<{
@@ -66,7 +67,7 @@ export default async function WorkspaceProjectPage({
   })
   const { data: profile } = await supabase
     .from('profiles')
-    .select('plan')
+    .select('plan, avatar_url')
     .eq('id', user.id)
     .maybeSingle()
 
@@ -77,11 +78,10 @@ export default async function WorkspaceProjectPage({
       isNewProject={resolvedSearchParams.isNew === 'true'}
       projectId={project.id}
       projectTitle={project.title || '새 프로젝트'}
-      userAvatarUrl={
-        typeof user.user_metadata.avatar_url === 'string'
-          ? user.user_metadata.avatar_url
-          : null
-      }
+      userAvatarUrl={getResolvedAvatarUrl({
+        metadata: user.user_metadata,
+        profileAvatarUrl: profile?.avatar_url,
+      })}
       userPlanLabel={formatPlan(profile?.plan)}
       userTokenCount={28}
     />

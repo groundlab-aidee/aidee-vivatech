@@ -154,9 +154,9 @@ function getStageInstruction(stageKey: StageKey) {
     case 'step_1_idea':
       return '지금은 STEP 1입니다. 저장된 requirements를 기준으로 제품 아이디어와 개발 조건을 정리하고, 부족한 결정 요소를 질문 1개로 좁히세요.'
     case 'step_2_persona':
-      return '지금은 STEP 2 페르소나 정리입니다. 타겟 사용자, 사용 장면, 불편함, 선택 기준을 확인하고 부족하면 질문 1개만 하세요.'
+      return '지금은 STEP 2 페르소나 정리입니다. 타겟 사용자, 사용 장면, 불편함, 선택 기준을 확인하고 부족하면 질문 1개만 하세요. STEP 3로 넘어가기 전에는 반드시 Persona Summary를 Demographic Info, Persona Story, Problem & Needs, Current Behavior, Lifestyle Context, Relationship Keyword 6개 항목으로 정리해야 합니다. Persona Card 생성/확정 전에는 STEP 3 또는 다음 단계 진행을 언급하지 마세요.'
     case 'step_2_research':
-      return '지금은 STEP 2 리서치입니다. 페르소나와 시장/경쟁 맥락을 바탕으로 인사이트를 정리하세요.'
+      return '지금은 STEP 2 리서치입니다. 페르소나와 시장/경쟁 맥락을 바탕으로 인사이트를 정리하세요. Persona Card가 생성되지 않았다면 STEP 3로 넘어가지 말고 Persona Summary 6개 항목을 먼저 정리하세요.'
     case 'step_3_direction':
       return '지금은 STEP 3입니다. 감성, 기능, 심미 우선순위와 핵심 가치, 제외할 방향을 정리하세요.'
     case 'step_4_style':

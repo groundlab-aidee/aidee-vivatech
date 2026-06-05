@@ -8,6 +8,10 @@ import {
   extractGeneratedImagesBlock,
   type GeneratedImageBlock,
 } from '@/lib/chat/image-blocks'
+import {
+  extractPersonaCardBlock,
+  type PersonaCardData,
+} from '@/lib/chat/persona-card'
 import { DEFAULT_STAGE_KEY, isKnownStageKey, type StageKey } from '@/lib/chat/stages'
 
 export type ChatRole = 'assistant' | 'system' | 'user'
@@ -17,6 +21,7 @@ export type ChatMessageRecord = {
   created_at: string | null
   generatedImageBlock: GeneratedImageBlock | null
   id: string
+  personaCardBlock: PersonaCardData | null
   role: ChatRole
   seq_order: number
   stageKey: StageKey
@@ -116,12 +121,15 @@ export function mapMessageRow(row: RawMessageRow): ChatMessageRecord {
   const { cleanedText, imageBlock } = extractGeneratedImagesBlock(
     stripInternalBlocks(row.content)
   )
+  const { cleanedText: visibleText, personaCardBlock } =
+    extractPersonaCardBlock(cleanedText)
 
   return {
-    content: cleanedText,
+    content: visibleText,
     created_at: row.created_at,
     generatedImageBlock: imageBlock,
     id: row.id,
+    personaCardBlock,
     role: ['assistant', 'system', 'user'].includes(row.role)
       ? (row.role as ChatRole)
       : 'user',

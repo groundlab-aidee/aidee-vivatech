@@ -122,8 +122,8 @@ export function PlanSelector({ selectPlanAction }: PlanSelectorProps) {
         <Image
           src="/assets/logos/aidee-logo-blue.svg"
           alt="Aidee"
-          width={192}
-          height={64}
+          width={115}
+          height={40}
           priority
           className="h-16 w-auto"
           style={{ width: 'auto' }}

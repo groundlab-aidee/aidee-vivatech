@@ -6,6 +6,7 @@ import {
   type PlanSelectionResult,
 } from '@/components/onboarding/PlanSelector'
 import { createClient } from '@/lib/supabase/server'
+import { getUserAvatarUrl, getUserFullName } from '@/lib/supabase/user-metadata'
 
 const planIds = new Set<PlanId>(['free', 'basic', 'pro', 'business'])
 
@@ -67,17 +68,15 @@ export default async function OnboardingPlanPage() {
       redirect('/workspace')
     }
 
+    const avatarUrl = getUserAvatarUrl(actionUser.user_metadata)
     const { data: updatedProfile, error: updateError } = await actionSupabase
       .from('profiles')
       .upsert(
         {
           id: actionUser.id,
           email: actionUser.email ?? null,
-          full_name:
-            actionUser.user_metadata.full_name ??
-            actionUser.user_metadata.name ??
-            null,
-          avatar_url: actionUser.user_metadata.avatar_url ?? null,
+          full_name: getUserFullName(actionUser.user_metadata),
+          ...(avatarUrl ? { avatar_url: avatarUrl } : {}),
           provider: actionUser.app_metadata.provider ?? 'google',
           plan,
           plan_selected_at: new Date().toISOString(),

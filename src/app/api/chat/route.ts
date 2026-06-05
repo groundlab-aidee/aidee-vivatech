@@ -28,6 +28,10 @@ import {
   getReferenceImages,
   insertProjectMessage,
 } from '@/lib/chat/persistence'
+import {
+  appendPersonaCardBlock,
+  buildPersonaCardDataFromText,
+} from '@/lib/chat/persona-card'
 import { createClient } from '@/lib/supabase/server'
 
 export const maxDuration = 60
@@ -88,6 +92,48 @@ function isImageRequest(text: string) {
   return /이미지|시안|렌더|무드보드|비주얼|visual|render|image|그려|보여줘|만들어줘/i.test(
     text
   )
+}
+
+function hasPersonaCard(messages: Awaited<ReturnType<typeof getProjectMessages>>) {
+  return messages.some((message) => Boolean(message.personaCardBlock))
+}
+
+function shouldCreatePersonaCard({
+  currentStageKey,
+  hasExistingPersonaCard,
+  text,
+  transitionToStep3,
+}: {
+  currentStageKey: StageKey
+  hasExistingPersonaCard: boolean
+  text: string
+  transitionToStep3: boolean
+}) {
+  if (hasExistingPersonaCard || !currentStageKey.startsWith('step_2')) {
+    return false
+  }
+
+  return (
+    transitionToStep3 ||
+    /persona\s*summary|persona\s*card|페르소나\s*(?:요약|카드)|demographic\s*info|problem\s*&?\s*needs?|relationship\s*keyword/i.test(
+      text
+    )
+  )
+}
+
+function removePrematureStep3Transition(text: string) {
+  if (!/STEP\s*3|다음\s*단계|넘어가/i.test(text)) {
+    return text
+  }
+
+  return text
+    .split('\n')
+    .filter(
+      (line) =>
+        !/STEP\s*3|다음\s*단계|넘어가겠습니다|넘어갈지|진행할까요/i.test(line)
+    )
+    .join('\n')
+    .trim()
 }
 
 function cleanSingleLineText(text: string) {
@@ -520,9 +566,34 @@ export async function POST(request: Request) {
           currentStageKey,
           text: assistantContent,
         })
-        responseStageKey = stageMeta.transition
-          ? stageMeta.nextStageKey
-          : stageMeta.currentStageKey
+        const transitionToStep3 =
+          stageMeta.transition && stageMeta.nextStageKey === 'step_3_direction'
+        const createPersonaCard = shouldCreatePersonaCard({
+          currentStageKey,
+          hasExistingPersonaCard: hasPersonaCard(conversationMessages),
+          text: assistantContent,
+          transitionToStep3,
+        })
+
+        if (createPersonaCard) {
+          const personaText = removePrematureStep3Transition(assistantContent)
+          assistantContent = appendPersonaCardBlock({
+            data: buildPersonaCardDataFromText(assistantContent),
+            text: [
+              personaText,
+              '',
+              'Persona Card를 생성했습니다.',
+              '카드를 확인한 뒤 다음 단계 진행 여부를 결정하겠습니다.',
+            ]
+              .filter(Boolean)
+              .join('\n'),
+          })
+          responseStageKey = 'step_2_research'
+        } else {
+          responseStageKey = stageMeta.transition
+            ? stageMeta.nextStageKey
+            : stageMeta.currentStageKey
+        }
       }
     }
 

@@ -16,10 +16,10 @@ import {
   useProjectChatSidebar,
 } from '@/components/app-shell/ProjectChatSidebarContext'
 import {
-  EXPERT_DEFINITIONS,
   getExpertDefinition,
   type ExpertKey,
 } from '@/lib/chat/experts'
+import type { GeneratedImagePurpose } from '@/lib/chat/image-blocks'
 import { extractRfpJsonBlock } from '@/lib/chat/rfp'
 import type { StageKey } from '@/lib/chat/stages'
 
@@ -78,6 +78,59 @@ type LibraryArtifactKind =
 type LibraryArtifact = {
   kind: LibraryArtifactKind
   title: string
+}
+
+function getImageArtifactKind(purpose?: GeneratedImagePurpose): LibraryArtifactKind | null {
+  switch (purpose) {
+    case 'persona':
+      return 'persona'
+    case 'style_reference':
+      return 'mood_board'
+    case 'design':
+    case 'thumbnail':
+      return 'rendering'
+    default:
+      return null
+  }
+}
+
+const EXPERT_MENU_ITEMS: Array<{
+  icon: string
+  key: Exclude<ExpertKey, 'aidee'>
+  label: string
+}> = [
+  {
+    icon: '/assets/icons/chat/strategist.svg',
+    key: 'planner',
+    label: '기획전략가',
+  },
+  {
+    icon: '/assets/icons/chat/designer.svg',
+    key: 'style_designer',
+    label: '스타일디자이너',
+  },
+  {
+    icon: '/assets/icons/chat/engineer.svg',
+    key: 'engineer',
+    label: '엔지니어',
+  },
+  {
+    icon: '/assets/icons/chat/marketer.svg',
+    key: 'marketer',
+    label: '마케터',
+  },
+]
+
+const STAGE_EXPERTS: Record<StageKey, ExpertKey[]> = {
+  step_0_start: ['planner'],
+  step_1_idea: ['planner'],
+  step_2_persona: ['planner', 'marketer'],
+  step_2_research: ['planner', 'marketer'],
+  step_3_direction: ['planner', 'engineer', 'marketer', 'style_designer'],
+  step_4_style: ['style_designer'],
+  step_5_design: ['style_designer', 'engineer'],
+  step_6_rfp: ['planner', 'engineer', 'marketer', 'style_designer'],
+  step_6_company: ['planner'],
 }
 
 const LIBRARY_ARTIFACTS: LibraryArtifact[] = [
@@ -362,11 +415,13 @@ export function ProjectChatContainer({
 }: ProjectChatContainerProps) {
   const { setSidebarState } = useProjectChatSidebar()
   const didRequestInitialResponseRef = useRef(false)
+  const expertMenuRef = useRef<HTMLDivElement | null>(null)
   const messageScrollRef = useRef<HTMLDivElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const [messages, setMessages] = useState(initialMessages)
   const [stageKey, setStageKey] = useState(initialStageKey)
   const [activeExpert, setActiveExpert] = useState<ExpertKey>('aidee')
+  const [isExpertMenuOpen, setIsExpertMenuOpen] = useState(false)
   const [input, setInput] = useState('')
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [selectedArtifactKind, setSelectedArtifactKind] =
@@ -392,13 +447,73 @@ export function ProjectChatContainer({
 
     return null
   }, [visibleMessages])
+  const availableArtifacts = useMemo(() => {
+    const availableKinds = new Set<LibraryArtifactKind>()
+
+    if (latestProjectDirection) {
+      availableKinds.add('project_direction')
+    }
+
+    for (const message of visibleMessages) {
+      if (message.personaCardBlock) {
+        availableKinds.add('persona')
+      }
+
+      const imageArtifactKind = getImageArtifactKind(
+        message.generatedImageBlock?.purpose
+      )
+
+      if (imageArtifactKind && message.generatedImageBlock?.images.length) {
+        availableKinds.add(imageArtifactKind)
+      }
+
+      if (extractRfpJsonBlock(message.content).rfp) {
+        availableKinds.add('project_report')
+      }
+    }
+
+    return LIBRARY_ARTIFACTS.filter((artifact) =>
+      availableKinds.has(artifact.kind)
+    )
+  }, [latestProjectDirection, visibleMessages])
   const selectedArtifact = useMemo(
     () =>
-      LIBRARY_ARTIFACTS.find(
+      availableArtifacts.find(
         (artifact) => artifact.kind === selectedArtifactKind
       ) ?? null,
-    [selectedArtifactKind]
+    [availableArtifacts, selectedArtifactKind]
   )
+
+  useEffect(() => {
+    if (!isExpertMenuOpen) {
+      return
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      const target = event.target
+
+      if (
+        target instanceof Node &&
+        !expertMenuRef.current?.contains(target)
+      ) {
+        setIsExpertMenuOpen(false)
+      }
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        setIsExpertMenuOpen(false)
+      }
+    }
+
+    document.addEventListener('pointerdown', handlePointerDown)
+    document.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [isExpertMenuOpen])
 
   const requestAssistantResponse = useCallback(async ({
     forceImageGeneration,
@@ -419,6 +534,7 @@ export function ProjectChatContainer({
           created_at: new Date().toISOString(),
           generatedImageBlock: null,
           id: `optimistic-${crypto.randomUUID()}`,
+          personaCardBlock: null,
           role: 'user',
           seq_order:
             messages.reduce(
@@ -566,6 +682,7 @@ export function ProjectChatContainer({
 
     setSidebarState({
       activeExpert,
+      activeExperts: STAGE_EXPERTS[stageKey],
       activeStageKey: stageKey,
       showProgress: hasAssistantMessage,
     })
@@ -645,7 +762,7 @@ export function ProjectChatContainer({
 
         <section
           ref={messageScrollRef}
-          className="min-h-0 flex-1 overflow-y-auto px-[clamp(24px,3.7svh,40px)] py-[clamp(24px,3.7svh,40px)]"
+          className="app-content-scrollbar min-h-0 flex-1 overflow-y-auto px-[clamp(24px,3.7svh,40px)] py-[clamp(24px,3.7svh,40px)]"
         >
           <div className="mx-auto flex w-full max-w-[1150px] flex-col gap-[clamp(14px,1.85svh,20px)]">
             {visibleMessages.length > 0 ? (
@@ -678,76 +795,109 @@ export function ProjectChatContainer({
             </p>
           ) : null}
 
-          <div className="mb-3 flex flex-wrap gap-2">
-            {EXPERT_DEFINITIONS.map((expert) => {
-              const isActive = expert.key === activeExpert
+          <div ref={expertMenuRef} className="relative mx-auto w-full max-w-[1171px]">
+            {isExpertMenuOpen ? (
+              <div className="absolute bottom-[calc(100%+12px)] left-0 z-30 w-48 overflow-hidden rounded-[20px] border-[3px] border-gray-100 bg-white py-1 shadow-[2px_2px_8px_1px_rgba(0,0,0,0.25)]">
+                <div className="flex h-10 items-center px-5">
+                  <p className="font-['Inter'] text-xs font-medium leading-6 text-zinc-400">
+                    AI 전문가 선택
+                  </p>
+                </div>
+                <div className="flex flex-col">
+                  {EXPERT_MENU_ITEMS.map((expert) => {
+                    const isActive = activeExpert === expert.key
 
-              return (
-                <button
-                  key={expert.key}
-                  type="button"
-                  onClick={() => setActiveExpert(expert.key)}
-                  disabled={isPending}
-                  className={`rounded-full px-3 py-1.5 text-xs font-bold ring-1 transition disabled:cursor-not-allowed disabled:opacity-50 ${
-                    isActive
-                      ? expert.accentClassName
-                      : 'bg-white text-zinc-500 ring-zinc-200 hover:text-zinc-900'
-                  }`}
-                >
-                  {expert.label}
-                </button>
-              )
-            })}
-          </div>
+                    return (
+                      <button
+                        key={expert.key}
+                        type="button"
+                        disabled={isPending}
+                        onClick={() => {
+                          setActiveExpert(expert.key)
+                          setIsExpertMenuOpen(false)
+                        }}
+                        className={`group flex h-12 w-full items-center gap-5 rounded-lg px-5 py-3 text-left transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 ${
+                          isActive ? 'bg-blue-50 text-zinc-900' : 'text-zinc-500'
+                        }`}
+                      >
+                        <Image
+                          src={expert.icon}
+                          alt=""
+                          width={28}
+                          height={28}
+                          unoptimized
+                          className={`h-7 w-7 shrink-0 object-contain transition duration-150 group-hover:brightness-100 group-hover:grayscale-0 ${
+                            isActive
+                              ? 'brightness-100 grayscale-0'
+                              : 'brightness-0 grayscale opacity-60'
+                          }`}
+                        />
+                        <span className="min-w-0 flex-1 font-['Inter'] text-sm font-semibold leading-6">
+                          {expert.label}
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            ) : null}
 
-          <form
-            className="mx-auto flex min-h-[clamp(52px,5.93svh,64px)] w-full max-w-[1171px] items-end gap-[clamp(12px,1.48svh,16px)] overflow-hidden rounded-[20px] bg-white px-[clamp(20px,2.22svh,24px)] py-[clamp(10px,1.11svh,12px)] shadow-[0px_1px_5px_1px_rgba(0,0,0,0.25)] outline outline-2 outline-offset-[-2px] outline-stone-300"
-            onSubmit={(event) => {
-              event.preventDefault()
-              submitMessage(input)
-            }}
-          >
-            <div className="mb-1 flex h-[clamp(20px,2.22svh,24px)] w-[clamp(20px,2.22svh,24px)] shrink-0 items-center justify-center rounded-full bg-blue-600">
-              <div className="h-[clamp(11px,1.3svh,14px)] w-[clamp(11px,1.3svh,14px)] rounded-full bg-white" />
-            </div>
-            <textarea
-              ref={textareaRef}
-              rows={1}
-              value={input}
-              onChange={(event) => {
-                setInput(event.target.value)
-                requestAnimationFrame(resizeComposer)
+            <form
+              className="flex min-h-[clamp(52px,5.93svh,64px)] w-full items-end gap-[clamp(12px,1.48svh,16px)] overflow-hidden rounded-[20px] bg-white px-[clamp(20px,2.22svh,24px)] py-[clamp(10px,1.11svh,12px)] shadow-[0px_1px_5px_1px_rgba(0,0,0,0.25)] outline outline-2 outline-offset-[-2px] outline-stone-300"
+              onSubmit={(event) => {
+                event.preventDefault()
+                submitMessage(input)
               }}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
-                  event.preventDefault()
-                  submitMessage(input)
-                }
-              }}
-              placeholder={activeExpertDefinition.inputLabel}
-              className="max-h-28 min-h-6 min-w-0 flex-1 resize-none overflow-y-auto bg-transparent font-['Pretendard'] text-[clamp(13px,1.3svh,14px)] font-medium leading-6 text-neutral-900 outline-none placeholder:text-stone-300"
-            />
-            <button
-              type="submit"
-              disabled={isPending || !input.trim()}
-              aria-label="메시지 전송"
-              className="mb-0.5 flex h-[clamp(28px,2.96svh,32px)] w-[clamp(28px,2.96svh,32px)] shrink-0 items-center justify-center rounded-full text-stone-300 transition hover:bg-blue-50 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              <Image
-                src="/assets/icons/chat/chat-send-2.svg"
-                alt=""
-                width={20}
-                height={20}
-                unoptimized
-                className="h-[clamp(18px,1.85svh,20px)] w-[clamp(18px,1.85svh,20px)] object-contain"
+              <button
+                type="button"
+                disabled={isPending}
+                aria-expanded={isExpertMenuOpen}
+                aria-label="AI 전문가 선택"
+                onClick={() => setIsExpertMenuOpen((open) => !open)}
+                className="mb-1 flex h-[clamp(20px,2.22svh,24px)] w-[clamp(20px,2.22svh,24px)] shrink-0 items-center justify-center rounded-full bg-blue-600 transition hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-300 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <div className="h-[clamp(11px,1.3svh,14px)] w-[clamp(11px,1.3svh,14px)] rounded-full bg-white" />
+              </button>
+              <textarea
+                ref={textareaRef}
+                rows={1}
+                value={input}
+                onChange={(event) => {
+                  setInput(event.target.value)
+                  requestAnimationFrame(resizeComposer)
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+                    event.preventDefault()
+                    submitMessage(input)
+                  }
+                }}
+                placeholder={activeExpertDefinition.inputLabel}
+                className="max-h-28 min-h-6 min-w-0 flex-1 resize-none overflow-y-auto bg-transparent font-['Pretendard'] text-[clamp(13px,1.3svh,14px)] font-medium leading-6 text-neutral-900 outline-none placeholder:text-stone-300"
               />
-            </button>
-          </form>
+              <button
+                type="submit"
+                disabled={isPending || !input.trim()}
+                aria-label="메시지 전송"
+                className="mb-0.5 flex h-[clamp(28px,2.96svh,32px)] w-[clamp(28px,2.96svh,32px)] shrink-0 items-center justify-center rounded-full text-stone-300 transition hover:bg-blue-50 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <Image
+                  src="/assets/icons/chat/chat-send-2.svg"
+                  alt=""
+                  width={20}
+                  height={20}
+                  unoptimized
+                  className="h-[clamp(18px,1.85svh,20px)] w-[clamp(18px,1.85svh,20px)] object-contain"
+                />
+              </button>
+            </form>
+          </div>
         </div>
       </section>
 
       <LibraryPanel
-        artifacts={LIBRARY_ARTIFACTS}
+        artifacts={availableArtifacts}
         onSelectArtifact={setSelectedArtifactKind}
         planLabel={userPlanLabel}
         selectedArtifactKind={selectedArtifactKind}
@@ -783,7 +933,7 @@ function LibraryPanel({
     <aside className="flex h-full w-[18.3%] min-w-[clamp(220px,23.7svh,256px)] max-w-[clamp(248px,26.67svh,288px)] shrink-0 flex-col overflow-hidden bg-white">
       <header className="flex h-[clamp(52px,5.93svh,64px)] shrink-0 items-center justify-end border-b border-gray-200 px-[clamp(18px,2.59svh,28px)] py-[clamp(10px,1.48svh,16px)]">
         <div className="flex items-center justify-end gap-1">
-          <div className="relative h-[clamp(32px,3.7svh,40px)] w-[clamp(32px,3.7svh,40px)] shrink-0 overflow-hidden rounded-3xl bg-green-200">
+          <div className="relative h-[clamp(32px,3.7svh,40px)] w-[clamp(32px,3.7svh,40px)] shrink-0 overflow-hidden rounded-xl bg-green-200">
             {userAvatarUrl ? (
               <Image
                 src={userAvatarUrl}
@@ -792,6 +942,7 @@ function LibraryPanel({
                 height={40}
                 unoptimized
                 className="h-full w-full object-cover"
+                referrerPolicy="no-referrer"
               />
             ) : (
               <div className="flex h-full w-full items-center justify-center text-sm font-bold text-green-900">
@@ -822,7 +973,7 @@ function LibraryPanel({
         </div>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-[clamp(18px,2.22svh,24px)] py-[clamp(18px,2.22svh,24px)]">
+      <div className="app-content-scrollbar min-h-0 flex-1 overflow-y-auto px-[clamp(18px,2.22svh,24px)] py-[clamp(18px,2.22svh,24px)]">
         <div className="flex flex-col gap-[clamp(10px,1.3svh,14px)]">
           {artifacts.map((artifact, index) => {
             const isProjectDirection = artifact.kind === 'project_direction'
@@ -1037,6 +1188,64 @@ function LibraryPlaceholderCard({ artifact }: { artifact: LibraryArtifact }) {
           이 라이브러리 항목은 클릭 동작과 모달 구조가 먼저 연결되었습니다.
           이후 해당 단계의 생성 결과 컴포넌트를 같은 위치에 연결하면 됩니다.
         </p>
+      </div>
+    </div>
+  )
+}
+
+function PersonaCardPreview({
+  data,
+}: {
+  data: NonNullable<ChatMessageRecord['personaCardBlock']>
+}) {
+  const sections = [
+    { items: data.demographicInfo, title: 'Demographic Info' },
+    { items: data.personaStory, title: 'Persona Story' },
+    { items: data.problemNeeds, title: 'Problem & Needs' },
+    { items: data.currentBehavior, title: 'Current Behavior' },
+    { items: data.lifestyleContext, title: 'Lifestyle Context' },
+    { items: data.relationshipKeyword, title: 'Relationship Keyword' },
+  ]
+
+  return (
+    <div className="w-full max-w-[800px] overflow-hidden rounded-[20px] bg-white p-6 outline outline-[3px] outline-offset-[-3px] outline-zinc-200">
+      <div className="flex min-h-[292px] overflow-hidden rounded-xl bg-white shadow-[0px_0px_24px_0px_rgba(0,0,0,0.12)]">
+        <div className="w-36 shrink-0 bg-zinc-300">
+          {data.imageUrl ? (
+            <Image
+              src={data.imageUrl}
+              alt=""
+              width={144}
+              height={292}
+              unoptimized
+              className="h-full w-full object-cover"
+            />
+          ) : null}
+        </div>
+        <div className="min-w-0 flex-1 p-4">
+          <h2 className="mb-3 font-['Inter'] text-lg font-bold text-zinc-700">
+            Persona Card
+          </h2>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-3">
+            {sections.map((section) => (
+              <section key={section.title} className="min-w-0">
+                <h3 className="border-b border-zinc-400 pb-0.5 font-['Inter'] text-[11px] font-bold leading-4 text-blue-600">
+                  {section.title}
+                </h3>
+                <div className="mt-1 space-y-0.5">
+                  {section.items.slice(0, 2).map((item, index) => (
+                    <p
+                      key={`${section.title}-${index}-${item}`}
+                      className="font-['Pretendard'] text-[11px] font-semibold leading-4 text-zinc-700"
+                    >
+                      • {item}
+                    </p>
+                  ))}
+                </div>
+              </section>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   )
@@ -1292,6 +1501,7 @@ function ChatBubble({
     !displayContent &&
     !beforeProjectDirection &&
     !projectDirection &&
+    !message.personaCardBlock &&
     !message.generatedImageBlock?.images.length &&
     !rfpBlock.rfp
   ) {
@@ -1315,6 +1525,7 @@ function ChatBubble({
               height={64}
               unoptimized
               className="h-full w-full object-cover"
+              referrerPolicy="no-referrer"
             />
           ) : (
             <span className="font-['Inter'] text-[clamp(18px,1.85svh,20px)] font-bold text-green-900">U</span>
@@ -1333,6 +1544,9 @@ function ChatBubble({
       ) : null}
 
       {projectDirection ? <ProjectDirectionCard data={projectDirection} /> : null}
+      {message.personaCardBlock ? (
+        <PersonaCardPreview data={message.personaCardBlock} />
+      ) : null}
 
       {displayContent || message.generatedImageBlock?.images.length ? (
         <div className="w-full rounded-[20px] bg-slate-200 px-[clamp(24px,3.33svh,36px)] py-[clamp(20px,2.59svh,28px)] outline outline-[3px] outline-offset-[-3px] outline-zinc-200">

@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 
 import { AppShell } from '@/components/app-shell/AppShell'
 import { createClient } from '@/lib/supabase/server'
+import { getResolvedAvatarUrl, getUserFullName } from '@/lib/supabase/user-metadata'
 
 const planLabels: Record<string, string> = {
   free: 'Free',
@@ -41,11 +42,13 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
 
   const displayName =
     profile?.full_name ??
-    user.user_metadata.full_name ??
-    user.user_metadata.name ??
+    getUserFullName(user.user_metadata) ??
     user.email?.split('@')[0] ??
     '사용자'
-  const avatarUrl = profile?.avatar_url ?? user.user_metadata.avatar_url ?? null
+  const avatarUrl = getResolvedAvatarUrl({
+    metadata: user.user_metadata,
+    profileAvatarUrl: profile?.avatar_url,
+  })
 
   return (
     <AppShell
