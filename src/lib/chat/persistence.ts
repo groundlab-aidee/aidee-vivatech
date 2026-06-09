@@ -100,7 +100,7 @@ export async function getReferenceImages({
   return (data ?? []) as ReferenceImageContextRecord[]
 }
 
-function getMessageStage(content: string) {
+export function getMessageStage(content: string) {
   const match = content.match(/<<AIDEE_STAGE>>\s*([\s\S]*?)\s*<<\/AIDEE_STAGE>>/i)
 
   if (!match) {

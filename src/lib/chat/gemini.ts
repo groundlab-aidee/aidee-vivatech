@@ -9,7 +9,12 @@ export type GeminiMessage = {
 }
 
 const DEFAULT_TEXT_MODEL = 'gemini-2.5-flash'
-const DEFAULT_IMAGE_MODEL = 'gemini-2.5-flash-image'
+const DEFAULT_IMAGE_MODEL = 'gemini-3.1-flash-image'
+const FALLBACK_IMAGE_MODELS = [
+  DEFAULT_IMAGE_MODEL,
+  'gemini-2.5-flash-image',
+  'gemini-2.5-flash-image-preview',
+]
 
 export function getGeminiApiKey() {
   return process.env.GOOGLE_GENERATIVE_AI_API_KEY ?? process.env.GEMINI_API_KEY
@@ -168,6 +173,76 @@ function extractInlineImages(payload: unknown) {
   })
 }
 
+function getGeminiImageFailureDetail(payload: unknown) {
+  const text = getTextFromGeminiPayload(payload).trim()
+
+  if (text) {
+    return `Gemini returned text instead of an image: ${text.slice(0, 240)}`
+  }
+
+  if (!payload || typeof payload !== 'object') {
+    return 'Gemini returned no image'
+  }
+
+  const candidates = (payload as { candidates?: unknown }).candidates
+
+  if (Array.isArray(candidates) && candidates.length > 0) {
+    const finishReasons = candidates
+      .map((candidate) =>
+        candidate && typeof candidate === 'object' && 'finishReason' in candidate
+          ? (candidate as { finishReason?: unknown }).finishReason
+          : null
+      )
+      .filter(Boolean)
+      .join(', ')
+
+    return finishReasons
+      ? `Gemini returned no image. finishReason: ${finishReasons}`
+      : 'Gemini returned no image'
+  }
+
+  return 'Gemini returned no image'
+}
+
+function getGeminiApiErrorMessage({
+  model,
+  payload,
+  status,
+}: {
+  model: string
+  payload: unknown
+  status: number
+}) {
+  if (
+    payload &&
+    typeof payload === 'object' &&
+    'error' in payload &&
+    payload.error &&
+    typeof payload.error === 'object'
+  ) {
+    const error = payload.error as {
+      code?: unknown
+      message?: unknown
+      status?: unknown
+    }
+    const message =
+      typeof error.message === 'string' ? error.message : 'Unknown Gemini error'
+    const code = typeof error.code === 'number' ? `code ${error.code}` : null
+    const errorStatus =
+      typeof error.status === 'string' ? error.status : `HTTP ${status}`
+
+    return `Gemini image generation failed with ${model}: ${[
+      errorStatus,
+      code,
+      message,
+    ]
+      .filter(Boolean)
+      .join(' - ')}`
+  }
+
+  return `Gemini image generation failed with ${model}: HTTP ${status}`
+}
+
 async function generateSingleImage({
   apiKey,
   model,
@@ -178,13 +253,10 @@ async function generateSingleImage({
   prompt: string
 }) {
   const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+    `https://generativelanguage.googleapis.com/v1/models/${model}:generateContent`,
     {
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          responseModalities: ['TEXT', 'IMAGE'],
-        },
       }),
       headers: {
         'Content-Type': 'application/json',
@@ -196,25 +268,62 @@ async function generateSingleImage({
   const payload = (await response.json().catch(() => null)) as unknown
 
   if (!response.ok) {
-    throw new Error('Gemini image generation failed')
+    throw new Error(
+      getGeminiApiErrorMessage({
+        model,
+        payload,
+        status: response.status,
+      })
+    )
   }
 
   const image = extractInlineImages(payload)[0]
 
   if (!image) {
-    throw new Error('Gemini returned no image')
+    throw new Error(getGeminiImageFailureDetail(payload))
   }
 
   return image
 }
 
+async function generateSingleImageWithFallback({
+  apiKey,
+  models,
+  prompt,
+}: {
+  apiKey: string
+  models: string[]
+  prompt: string
+}) {
+  const errors: string[] = []
+
+  for (const model of models) {
+    try {
+      return {
+        image: await generateSingleImage({
+          apiKey,
+          model,
+          prompt,
+        }),
+        model,
+      }
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  throw new Error(errors.join('\n'))
+}
+
 export async function generateGeminiImages({
+  aspectRatio,
   apiKey,
   count = 1,
-  model = DEFAULT_IMAGE_MODEL,
+  model = process.env.GEMINI_IMAGE_MODEL ?? DEFAULT_IMAGE_MODEL,
   prompt,
   purpose,
 }: {
+  aspectRatio?: string
   apiKey: string
   count?: number
   model?: string
@@ -222,25 +331,34 @@ export async function generateGeminiImages({
   purpose: GeneratedImageBlock['purpose']
 }) {
   const images: string[] = []
+  const models = [
+    model,
+    ...FALLBACK_IMAGE_MODELS.filter((fallbackModel) => fallbackModel !== model),
+  ]
+  let usedModel = model
 
   for (let index = 0; index < count; index += 1) {
-    const image = await generateSingleImage({
+    const generated = await generateSingleImageWithFallback({
       apiKey,
-      model,
+      models,
       prompt: [
         prompt,
         '',
         `Generate exactly one standalone image. Variation ${index + 1} of ${count}.`,
+        aspectRatio ? `Preferred aspect ratio: ${aspectRatio}.` : '',
         'No collage, no grid, no text overlay, no watermark.',
-      ].join('\n'),
+      ]
+        .filter(Boolean)
+        .join('\n'),
     })
 
-    images.push(image)
+    usedModel = generated.model
+    images.push(generated.image)
   }
 
   return {
     images,
-    model,
+    model: usedModel,
     prompt,
     purpose,
     selectedImageIndex: null,

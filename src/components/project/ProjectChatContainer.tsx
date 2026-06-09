@@ -22,6 +22,7 @@ import {
   type ExpertKey,
 } from '@/lib/chat/experts'
 import type { GeneratedImagePurpose } from '@/lib/chat/image-blocks'
+import type { PersonaCardData } from '@/lib/chat/persona-card'
 import { extractRfpJsonBlock } from '@/lib/chat/rfp'
 import type { StageKey } from '@/lib/chat/stages'
 
@@ -44,7 +45,25 @@ type ChatApiResponse = {
   userMessage?: ChatMessageRecord | null
 }
 
-type ForceImageGeneration = 'design_revision' | 'initial_design' | 'style_reference'
+type ForceImageGeneration =
+  | 'design_revision'
+  | 'initial_design'
+  | 'persona_card'
+  | 'style_reference'
+
+type DirectionArtifactKind =
+  | 'brand_positioning'
+  | 'consumption_keywords'
+  | 'market_size'
+
+type KeywordArtifactKind = 'experience_keywords' | 'relationship_keywords'
+
+type KeywordCardData = {
+  description: string
+  keywords: string[]
+  kind: KeywordArtifactKind
+  title: string
+}
 
 type ChatChoice = {
   key: 'A' | 'B' | 'C'
@@ -278,6 +297,73 @@ function stripInternalBlocksForDisplay(text: string) {
     .trim()
 }
 
+function hasDirectionWidgets(content: string) {
+  return /<<AIDEE_DIRECTION_WIDGETS>>[\s\S]*?<<\/AIDEE_DIRECTION_WIDGETS>>/.test(
+    content
+  )
+}
+
+function extractKeywordCardData(content: string): KeywordCardData | null {
+  const normalized = stripInternalBlocksForDisplay(content)
+  const match = normalized.match(
+    /(?:^|\n)#{1,3}\s*Keywords:\s*(Experience|Relationship)\s*\n([\s\S]*?)(?=\n#{1,3}\s|\n\s*다음\s*STEP|\s*$)/i
+  )
+
+  if (!match) {
+    return null
+  }
+
+  const titleSuffix = match[1].toLowerCase()
+  const kind: KeywordArtifactKind =
+    titleSuffix === 'experience'
+      ? 'experience_keywords'
+      : 'relationship_keywords'
+  const body = match[2]
+    .replace(/\*\*/g, '')
+    .replace(/\r\n/g, '\n')
+    .trim()
+  const rawLines = body
+    .split('\n')
+    .map((line) =>
+      line
+        .replace(/^[-•*]\s*/, '')
+        .replace(/^\d+[.)]\s*/, '')
+        .replace(/^#{1,6}\s*/, '')
+        .trim()
+    )
+    .filter(Boolean)
+  const keywordCandidates = rawLines
+    .flatMap((line) => line.split(/,|\/|·|#|  +/))
+    .map((item) =>
+      item
+        .replace(/[:：].*$/, '')
+        .replace(/[.!?。！？]+$/g, '')
+        .trim()
+    )
+    .filter(
+      (item) =>
+        item.length >= 2 &&
+        item.length <= 18 &&
+        !/keywords?|experience|relationship|키워드|요약|설명/i.test(item)
+    )
+  const keywords = Array.from(new Set(keywordCandidates)).slice(0, 24)
+  const description = rawLines
+    .filter((line) => line.length > 18)
+    .slice(0, 4)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  return {
+    description:
+      description ||
+      `${keywords.slice(0, 4).join(', ')} 중심의 경험 키워드를 정리했습니다.`,
+    keywords: keywords.length > 0 ? keywords : rawLines.slice(0, 12),
+    kind,
+    title: `Keywords: ${match[1][0].toUpperCase()}${match[1].slice(1).toLowerCase()}`,
+  }
+}
+
 function splitAssistantChoices(content: string): {
   choices: ChatChoice[]
   displayContent: string
@@ -430,6 +516,13 @@ export function ProjectChatContainer({
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [selectedArtifactKind, setSelectedArtifactKind] =
     useState<LibraryArtifactKind | null>(null)
+  const [personaCardModalData, setPersonaCardModalData] =
+    useState<PersonaCardData | null>(null)
+  const [keywordCardModalData, setKeywordCardModalData] =
+    useState<KeywordCardData | null>(null)
+  const [visualizedKeywordCards, setVisualizedKeywordCards] = useState<
+    Partial<Record<KeywordArtifactKind, KeywordCardData>>
+  >({})
   const [isPending, setIsPending] = useState(false)
   const activeExpertDefinition = getExpertDefinition(activeExpert)
   const visibleMessages = useMemo(
@@ -451,6 +544,15 @@ export function ProjectChatContainer({
 
     return null
   }, [visibleMessages])
+  const latestVisualizedPersonaCard = useMemo(() => {
+    for (const message of [...visibleMessages].reverse()) {
+      if (message.personaCardBlock?.imageUrl) {
+        return message.personaCardBlock
+      }
+    }
+
+    return null
+  }, [visibleMessages])
   const availableArtifacts = useMemo(() => {
     const availableKinds = new Set<LibraryArtifactKind>()
 
@@ -458,8 +560,16 @@ export function ProjectChatContainer({
       availableKinds.add('project_direction')
     }
 
+    if (visualizedKeywordCards.experience_keywords) {
+      availableKinds.add('experience_keywords')
+    }
+
+    if (visualizedKeywordCards.relationship_keywords) {
+      availableKinds.add('relationship_keywords')
+    }
+
     for (const message of visibleMessages) {
-      if (message.personaCardBlock) {
+      if (message.personaCardBlock?.imageUrl) {
         availableKinds.add('persona')
       }
 
@@ -479,7 +589,7 @@ export function ProjectChatContainer({
     return LIBRARY_ARTIFACTS.filter((artifact) =>
       availableKinds.has(artifact.kind)
     )
-  }, [latestProjectDirection, visibleMessages])
+  }, [latestProjectDirection, visibleMessages, visualizedKeywordCards])
   const selectedArtifact = useMemo(
     () =>
       availableArtifacts.find(
@@ -529,7 +639,7 @@ export function ProjectChatContainer({
     const trimmed = message.trim()
 
     if (isPending) {
-      return
+      return null
     }
 
     const optimisticUserMessage: ChatMessageRecord | null = trimmed
@@ -610,6 +720,7 @@ export function ProjectChatContainer({
         return nextMessages
       })
       setStageKey(result.nextStageKey ?? stageKey)
+      return assistantMessage
     } catch (error) {
       if (optimisticUserMessage) {
         setMessages((current) =>
@@ -623,17 +734,57 @@ export function ProjectChatContainer({
       setErrorMessage(
         error instanceof Error ? error.message : '채팅 응답 생성에 실패했습니다.'
       )
+      return null
     } finally {
       setIsPending(false)
     }
   }, [activeExpert, isPending, messages, projectId, stageKey])
 
-  function submitMessage(message: string, forceImageGeneration?: ForceImageGeneration) {
+  async function submitMessage(
+    message: string,
+    forceImageGeneration?: ForceImageGeneration
+  ) {
     if (!message.trim()) {
       return
     }
 
-    requestAssistantResponse({ forceImageGeneration, message })
+    const assistantMessage = await requestAssistantResponse({
+      forceImageGeneration,
+      message,
+    })
+
+    if (assistantMessage?.personaCardBlock?.imageUrl) {
+      setPersonaCardModalData(assistantMessage.personaCardBlock)
+    }
+  }
+
+  async function visualizePersonaCard(personaCard?: PersonaCardData | null) {
+    if (personaCard?.imageUrl) {
+      setPersonaCardModalData(personaCard)
+      return
+    }
+
+    if (latestVisualizedPersonaCard) {
+      setPersonaCardModalData(latestVisualizedPersonaCard)
+      return
+    }
+
+    const assistantMessage = await requestAssistantResponse({
+      forceImageGeneration: 'persona_card',
+      message: '',
+    })
+
+    if (assistantMessage?.personaCardBlock?.imageUrl) {
+      setPersonaCardModalData(assistantMessage.personaCardBlock)
+    }
+  }
+
+  function visualizeKeywordCard(data: KeywordCardData) {
+    setVisualizedKeywordCards((current) => ({
+      ...current,
+      [data.kind]: data,
+    }))
+    setKeywordCardModalData(data)
   }
 
   function resizeComposer() {
@@ -726,7 +877,7 @@ export function ProjectChatContainer({
   }
 
   return (
-    <div className="flex h-full min-h-0 bg-white">
+    <div className="relative flex h-full min-h-0 bg-white">
       <section className="flex min-w-0 flex-1 flex-col border-r border-gray-200 bg-white">
         <header className="flex h-[clamp(52px,5.93svh,64px)] shrink-0 items-center justify-between border-b border-gray-200 bg-white px-[clamp(24px,3.7svh,40px)] py-[clamp(10px,1.48svh,16px)] shadow-[0px_12px_40px_-12px_rgba(0,0,0,0.06)]">
           <h1 className="min-w-0 truncate font-['Inter'] text-[clamp(20px,2.22svh,24px)] font-semibold leading-10 text-neutral-900">
@@ -759,6 +910,8 @@ export function ProjectChatContainer({
                   disabled={isPending}
                   onChoice={(value) => submitMessage(value)}
                   onDownloadRfp={downloadRfp}
+                  onVisualizeKeyword={visualizeKeywordCard}
+                  onVisualizePersona={visualizePersonaCard}
                   userAvatarUrl={userAvatarUrl}
                 />
               ))
@@ -884,7 +1037,23 @@ export function ProjectChatContainer({
 
       <LibraryPanel
         artifacts={availableArtifacts}
-        onSelectArtifact={setSelectedArtifactKind}
+        onSelectArtifact={(kind) => {
+          if (kind === 'persona' && latestVisualizedPersonaCard) {
+            setPersonaCardModalData(latestVisualizedPersonaCard)
+            return
+          }
+
+          if (
+            (kind === 'experience_keywords' ||
+              kind === 'relationship_keywords') &&
+            visualizedKeywordCards[kind]
+          ) {
+            setKeywordCardModalData(visualizedKeywordCards[kind])
+            return
+          }
+
+          setSelectedArtifactKind(kind)
+        }}
         planLabel={userPlanLabel}
         selectedArtifactKind={selectedArtifactKind}
         tokenCount={userTokenCount}
@@ -895,6 +1064,16 @@ export function ProjectChatContainer({
         artifact={selectedArtifact}
         onClose={() => setSelectedArtifactKind(null)}
         projectDirection={latestProjectDirection}
+      />
+
+      <PersonaCardModal
+        data={personaCardModalData}
+        onClose={() => setPersonaCardModalData(null)}
+      />
+
+      <KeywordCardModal
+        data={keywordCardModalData}
+        onClose={() => setKeywordCardModalData(null)}
       />
     </div>
   )
@@ -919,7 +1098,7 @@ function LibraryPanel({
     <aside className="flex h-full w-[18.3%] min-w-[clamp(220px,23.7svh,256px)] max-w-[clamp(248px,26.67svh,288px)] shrink-0 flex-col overflow-hidden bg-white">
       <header className="flex h-[clamp(52px,5.93svh,64px)] shrink-0 items-center justify-end border-b border-gray-200 px-[clamp(18px,2.59svh,28px)] py-[clamp(10px,1.48svh,16px)]">
         <div className="flex items-center justify-end gap-1">
-          <div className="relative h-[clamp(32px,3.7svh,40px)] w-[clamp(32px,3.7svh,40px)] shrink-0 overflow-hidden rounded-xl bg-green-200">
+          <div className="relative h-[clamp(32px,3.7svh,40px)] w-[clamp(32px,3.7svh,40px)] shrink-0 overflow-hidden rounded-full bg-green-200">
             {userAvatarUrl ? (
               <Image
                 src={userAvatarUrl}
@@ -985,11 +1164,11 @@ function LibraryPanel({
                 </h2>
                 {isProjectDirection ? (
                   <>
-                    <div className="absolute bottom-3 right-3 h-[clamp(42px,5.19svh,56px)] w-[clamp(42px,5.19svh,56px)] rounded-full bg-yellow-300" />
+                    <div className="absolute bottom-3 right-3 h-[clamp(42px,5.19svh,56px)] w-[clamp(42px,5.19svh,56px)] rounded-full bg-[#DDF444]" />
                     <div className="absolute bottom-3 right-[clamp(50px,5.93svh,64px)] h-[clamp(42px,5.19svh,56px)] w-[clamp(42px,5.19svh,56px)] rounded-full bg-blue-600" />
                   </>
                 ) : index % 3 === 1 ? (
-                  <div className="absolute bottom-0 left-0 h-[clamp(46px,5.93svh,64px)] w-full bg-yellow-300" />
+                  <div className="absolute bottom-0 left-0 h-[clamp(46px,5.93svh,64px)] w-full bg-[#DDF444]" />
                 ) : index % 3 === 2 ? (
                   <>
                     <div className="absolute bottom-4 left-3 h-[clamp(38px,4.44svh,48px)] w-[clamp(84px,10.37svh,112px)] rounded-full bg-blue-600" />
@@ -1179,60 +1358,415 @@ function LibraryPlaceholderCard({ artifact }: { artifact: LibraryArtifact }) {
   )
 }
 
-function PersonaCardPreview({
+function PersonaCardModal({
   data,
+  onClose,
 }: {
-  data: NonNullable<ChatMessageRecord['personaCardBlock']>
+  data: PersonaCardData | null
+  onClose: () => void
 }) {
-  const sections = [
-    { items: data.demographicInfo, title: 'Demographic Info' },
-    { items: data.personaStory, title: 'Persona Story' },
-    { items: data.problemNeeds, title: 'Problem & Needs' },
-    { items: data.currentBehavior, title: 'Current Behavior' },
-    { items: data.lifestyleContext, title: 'Lifestyle Context' },
-    { items: data.relationshipKeyword, title: 'Relationship Keyword' },
+  if (!data) {
+    return null
+  }
+
+  return (
+    <div
+      className="absolute inset-0 z-[70] flex items-center justify-center bg-neutral-900/70 p-6"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Persona Card"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose()
+        }
+      }}
+    >
+      <PersonaCardFull data={data} onClose={onClose} />
+    </div>
+  )
+}
+
+function getPersonaList(items: string[], fallback: string) {
+  const cleaned = items
+    .map((item) => item.replace(/\.{2,}|…/g, '').trim())
+    .filter(Boolean)
+
+  return cleaned.length > 0 ? cleaned : [fallback]
+}
+
+function PersonaCardFull({
+  data,
+  onClose,
+}: {
+  data: PersonaCardData
+  onClose: () => void
+}) {
+  const demographic = getPersonaList(data.demographicInfo, '사용자 정보 정리 필요')
+  const personaStory = getPersonaList(data.personaStory, '사용 맥락 정리 필요')
+  const problemNeeds = getPersonaList(data.problemNeeds, '핵심 문제 정리 필요')
+  const currentBehavior = getPersonaList(data.currentBehavior, '현재 행동 정리 필요')
+  const lifestyleContext = getPersonaList(
+    data.lifestyleContext,
+    '생활 맥락 정리 필요'
+  )
+  const relationshipKeyword = getPersonaList(
+    data.relationshipKeyword,
+    '관계 키워드 정리 필요'
+  )
+  const demographicLabels = [
+    '이름 & 나이',
+    '상태',
+    '주요 환경',
+    '생활 패턴',
+    '핵심 특징',
+  ]
+  const tags = problemNeeds
+    .flatMap((item) => item.split(/,|\/|·/))
+    .map((item) => item.replace(/^#/, '').trim())
+    .filter(Boolean)
+    .slice(0, 3)
+
+  return (
+    <div className="relative aspect-[1176/780] max-h-[calc(100svh-96px)] w-[calc(100%-48px)] max-w-[1176px] overflow-hidden rounded-[20px] bg-white shadow-[0px_24px_60px_0px_rgba(0,0,0,0.24)]">
+      <div className="absolute inset-[3.2%] rounded-[20px] border-2 border-slate-200 shadow-[0px_1px_4px_0px_rgba(0,0,0,0.25)]" />
+
+      <div className="absolute bottom-[3.7%] left-[2.3%] top-[3.6%] w-[27.2%] overflow-hidden rounded-2xl bg-indigo-400">
+        {data.imageUrl ? (
+          <Image
+            src={data.imageUrl}
+            alt=""
+            width={492}
+            height={738}
+            unoptimized
+            className="h-full w-full object-cover"
+          />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center bg-indigo-100 font-['Inter'] text-sm font-semibold text-indigo-500">
+            Persona Image
+          </div>
+        )}
+      </div>
+
+      <button
+        type="button"
+        onClick={onClose}
+        className="absolute right-[3.7%] top-[5.2%] flex h-8 w-8 items-center justify-center rounded-lg bg-gray-100 text-zinc-700 transition hover:bg-gray-200"
+        aria-label="Persona Card 닫기"
+      >
+        <span className="absolute h-0.5 w-4 rotate-45 rounded-full bg-current" />
+        <span className="absolute h-0.5 w-4 -rotate-45 rounded-full bg-current" />
+      </button>
+
+      <div className="absolute bottom-[8.5%] left-[37%] right-[5.6%] top-[4.2%] flex flex-col">
+        <h2 className="mb-[3.5%] font-['Inter'] text-3xl font-semibold leading-10 text-neutral-800">
+          <span className="text-blue-600">P</span>ersona Card
+        </h2>
+
+        <div className="grid min-h-0 flex-1 grid-cols-2 gap-x-[8.5%] gap-y-[4.2%]">
+          <PersonaInfoSection
+            number="01."
+            title="Demographic Info"
+          >
+            <div className="grid grid-cols-[86px_minmax(0,1fr)] gap-y-1.5">
+              {demographicLabels.map((label, index) => (
+                <FragmentPair
+                  key={label}
+                  label={label}
+                  value={demographic[index] ?? '정리 필요'}
+                />
+              ))}
+            </div>
+          </PersonaInfoSection>
+
+          <PersonaInfoSection number="04." title="Current Behavior">
+            <PersonaBulletList items={currentBehavior} />
+          </PersonaInfoSection>
+
+          <PersonaInfoSection number="02." title="Persona Story">
+            <p className="line-clamp-4 font-['Pretendard'] text-[13px] font-medium leading-[22px] text-black">
+              {personaStory.join(' ')}
+            </p>
+            {tags.length > 0 ? (
+              <div className="mt-4 flex flex-wrap gap-2">
+                {tags.map((tag) => (
+                  <span
+                    key={tag}
+                    className="rounded-[100px] bg-[#DDF444] px-3.5 font-['Pretendard'] text-[11px] font-medium leading-7 text-black"
+                  >
+                    #{tag}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+          </PersonaInfoSection>
+
+          <PersonaInfoSection number="05." title="Lifestyle Context">
+            <PersonaBulletList items={lifestyleContext} />
+          </PersonaInfoSection>
+
+          <PersonaInfoSection number="03." title="Problem & Needs">
+            <PersonaBulletList items={problemNeeds} />
+          </PersonaInfoSection>
+
+          <PersonaInfoSection number="06." title="Relationship Keyword">
+            <PersonaBulletList items={relationshipKeyword} />
+          </PersonaInfoSection>
+        </div>
+      </div>
+
+    </div>
+  )
+}
+
+function FragmentPair({ label, value }: { label: string; value: string }) {
+  return (
+    <>
+      <dt className="font-['Pretendard'] text-[13px] font-semibold leading-[19px] text-blue-600">
+        {label}
+      </dt>
+      <dd className="line-clamp-1 min-w-0 font-['Pretendard'] text-[13px] font-medium leading-[19px] text-black">
+        {value}
+      </dd>
+    </>
+  )
+}
+
+function PersonaInfoSection({
+  children,
+  number,
+  title,
+}: {
+  children: ReactNode
+  number: string
+  title: string
+}) {
+  return (
+    <section className="min-h-0 overflow-hidden">
+      <div className="flex items-center gap-2 border-b border-blue-600 pb-2 font-['Inter'] text-[17px] font-semibold leading-6 text-blue-600">
+        <span>{number}</span>
+        <h3 className="truncate">{title}</h3>
+      </div>
+      <div className="pt-3">{children}</div>
+    </section>
+  )
+}
+
+function PersonaBulletList({ items }: { items: string[] }) {
+  return (
+    <ul className="space-y-1">
+      {items.slice(0, 4).map((item, index) => (
+        <li
+          key={`${item}-${index}`}
+          className="flex gap-3 font-['Pretendard'] text-[13px] font-medium leading-[19px] text-black"
+        >
+          <span className="mt-2 h-1 w-1 shrink-0 rounded-full bg-blue-600" />
+          <span className="line-clamp-1 min-w-0">{item}</span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function KeywordCardModal({
+  data,
+  onClose,
+}: {
+  data: KeywordCardData | null
+  onClose: () => void
+}) {
+  if (!data) {
+    return null
+  }
+
+  return (
+    <div
+      className="absolute inset-0 z-[70] flex items-center justify-center bg-neutral-900/70 p-6"
+      role="dialog"
+      aria-modal="true"
+      aria-label={data.title}
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose()
+        }
+      }}
+    >
+      <KeywordCard data={data} onClose={onClose} />
+    </div>
+  )
+}
+
+function getKeywordCardSubtitle(data: KeywordCardData) {
+  const [first, second, third] = data.keywords
+
+  if (first && second && third) {
+    return `${first}, ${second}, ${third} 중심의 경험 방향`
+  }
+
+  return data.kind === 'experience_keywords'
+    ? '사용자가 느끼는 경험 가치를 정리한 키워드'
+    : '제품과 사용자 맥락의 관계를 정리한 키워드'
+}
+
+function KeywordCard({
+  data,
+  onClose,
+}: {
+  data: KeywordCardData
+  onClose: () => void
+}) {
+  const keywords = data.keywords.slice(0, 28)
+  const featuredKeywords = new Set(
+    keywords.filter((_, index) => index % 3 === 1 || index % 5 === 0).slice(0, 12)
+  )
+
+  return (
+    <div className="relative aspect-[1176/780] max-h-[calc(100svh-96px)] w-[calc(100%-48px)] max-w-[1176px] overflow-hidden rounded-[20px] bg-white shadow-[0px_24px_60px_0px_rgba(0,0,0,0.24)]">
+      <div className="absolute inset-x-0 bottom-[5.1%] h-[32.5%] bg-zinc-300/40" />
+
+      <button
+        type="button"
+        onClick={onClose}
+        className="absolute right-[3.7%] top-[5.2%] flex h-8 w-8 items-center justify-center rounded-lg bg-gray-100 text-zinc-700 transition hover:bg-gray-200"
+        aria-label="키워드 카드 닫기"
+      >
+        <span className="absolute h-0.5 w-4 rotate-45 rounded-full bg-current" />
+        <span className="absolute h-0.5 w-4 -rotate-45 rounded-full bg-current" />
+      </button>
+
+      <div className="absolute left-[4.7%] top-[5.1%]">
+        <h2 className="whitespace-pre-line font-['Inter'] text-4xl font-medium leading-10 text-black">
+          <span className="text-blue-600">K</span>
+          {data.title.replace(/^K/i, '').replace(': ', ':\n')}
+        </h2>
+      </div>
+
+      <div className="absolute left-[4.7%] right-[40%] top-[23.7%]">
+        <p className="mb-8 font-['Pretendard'] text-xl font-bold leading-7 text-blue-600">
+          {getKeywordCardSubtitle(data)}
+        </p>
+        <p className="font-['Pretendard'] text-sm font-medium leading-6 text-black">
+          {data.description}
+        </p>
+      </div>
+
+      <div className="absolute bottom-[3.8%] left-0 right-0 h-[33.8%] overflow-hidden rounded-[20px] shadow-[0px_4px_4px_0px_rgba(0,0,0,0.20)]">
+        <div className="flex h-full flex-col justify-center gap-3 px-[4.4%]">
+          <div className="flex flex-wrap gap-3">
+            <p className="mr-6 self-center font-['Inter'] text-3xl font-semibold leading-8 text-black/80">
+              Define
+            </p>
+            {keywords.slice(0, 9).map((keyword) => (
+              <KeywordChip
+                key={`top-${keyword}`}
+                featured={featuredKeywords.has(keyword)}
+                label={keyword}
+              />
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-3 pl-[8%]">
+            {keywords.slice(9, 19).map((keyword) => (
+              <KeywordChip
+                key={`middle-${keyword}`}
+                featured={featuredKeywords.has(keyword)}
+                label={keyword}
+              />
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-3">
+            {keywords.slice(19, 28).map((keyword) => (
+              <KeywordChip
+                key={`bottom-${keyword}`}
+                featured={featuredKeywords.has(keyword)}
+                label={keyword}
+              />
+            ))}
+            <p className="ml-auto self-center font-['Inter'] text-3xl font-semibold leading-8 text-black/80">
+              Your {data.kind === 'experience_keywords' ? 'Experience' : 'Relationship'}
+            </p>
+          </div>
+        </div>
+        <p className="absolute left-[5.4%] top-0 font-['Pretendard'] text-base font-semibold leading-6 text-black">
+          <span className="text-blue-600">K</span>eywords
+        </p>
+      </div>
+    </div>
+  )
+}
+
+function KeywordChip({
+  featured,
+  label,
+}: {
+  featured: boolean
+  label: string
+}) {
+  return (
+    <span
+      className={`inline-flex h-9 max-w-[220px] items-center justify-center truncate rounded-[100px] px-5 font-['Pretendard'] text-base font-medium leading-6 outline outline-[0.52px] outline-offset-[-0.52px] outline-neutral-500 ${
+        featured
+          ? 'bg-blue-600 text-white shadow-[0px_4px_4px_0px_rgba(0,0,0,0.25)]'
+          : 'bg-white/60 text-blue-600'
+      }`}
+    >
+      {label}
+    </span>
+  )
+}
+
+function DirectionResearchWidgets({
+  disabled,
+  onSelect,
+}: {
+  disabled: boolean
+  onSelect: (kind: DirectionArtifactKind) => void
+}) {
+  const widgets: Array<{
+    description: string
+    index: string
+    kind: DirectionArtifactKind
+    title: string
+  }> = [
+    {
+      description: 'TAM/SAM/SOM 관점으로 진입 시장을 봅니다.',
+      index: '1',
+      kind: 'market_size',
+      title: '시장 규모',
+    },
+    {
+      description: '구매 동기와 소비 키워드를 정리합니다.',
+      index: '2',
+      kind: 'consumption_keywords',
+      title: '소비 트렌드',
+    },
+    {
+      description: '경쟁 구도와 브랜드 포지션을 비교합니다.',
+      index: '3',
+      kind: 'brand_positioning',
+      title: '경쟁사',
+    },
   ]
 
   return (
-    <div className="w-full max-w-[800px] overflow-hidden rounded-[20px] bg-white p-6 outline outline-[3px] outline-offset-[-3px] outline-zinc-200">
-      <div className="flex min-h-[292px] overflow-hidden rounded-xl bg-white shadow-[0px_0px_24px_0px_rgba(0,0,0,0.12)]">
-        <div className="w-36 shrink-0 bg-zinc-300">
-          {data.imageUrl ? (
-            <Image
-              src={data.imageUrl}
-              alt=""
-              width={144}
-              height={292}
-              unoptimized
-              className="h-full w-full object-cover"
-            />
-          ) : null}
-        </div>
-        <div className="min-w-0 flex-1 p-4">
-          <h2 className="mb-3 font-['Inter'] text-lg font-bold text-zinc-700">
-            Persona Card
-          </h2>
-          <div className="grid grid-cols-2 gap-x-4 gap-y-3">
-            {sections.map((section) => (
-              <section key={section.title} className="min-w-0">
-                <h3 className="border-b border-zinc-400 pb-0.5 font-['Inter'] text-[11px] font-bold leading-4 text-blue-600">
-                  {section.title}
-                </h3>
-                <div className="mt-1 space-y-0.5">
-                  {section.items.slice(0, 2).map((item, index) => (
-                    <p
-                      key={`${section.title}-${index}-${item}`}
-                      className="font-['Pretendard'] text-[11px] font-semibold leading-4 text-zinc-700"
-                    >
-                      • {item}
-                    </p>
-                  ))}
-                </div>
-              </section>
-            ))}
-          </div>
-        </div>
-      </div>
+    <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-3">
+      {widgets.map((widget) => (
+        <button
+          key={widget.kind}
+          type="button"
+          disabled={disabled}
+          onClick={() => onSelect(widget.kind)}
+          className="min-h-28 rounded-[20px] border border-zinc-200 bg-white p-4 text-left shadow-sm transition hover:border-blue-200 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <span className="mb-3 flex h-7 w-7 items-center justify-center rounded-full bg-blue-600 font-['Inter'] text-sm font-bold text-white">
+            {widget.index}
+          </span>
+          <span className="block font-['Pretendard'] text-sm font-bold text-neutral-900">
+            {widget.title}
+          </span>
+          <span className="mt-1 block font-['Pretendard'] text-xs font-medium leading-5 text-zinc-500">
+            {widget.description}
+          </span>
+        </button>
+      ))}
     </div>
   )
 }
@@ -1448,12 +1982,16 @@ function ChatBubble({
   message,
   onChoice,
   onDownloadRfp,
+  onVisualizeKeyword,
+  onVisualizePersona,
   userAvatarUrl,
 }: {
   disabled: boolean
   message: ChatMessageRecord
   onChoice: (value: string) => void
   onDownloadRfp: () => void
+  onVisualizeKeyword: (data: KeywordCardData) => void
+  onVisualizePersona: (personaCard?: PersonaCardData | null) => void
   userAvatarUrl?: string | null
 }) {
   const isUser = message.role === 'user'
@@ -1463,6 +2001,10 @@ function ChatBubble({
     : null
   const projectDirectionSplit = projectDirection
     ? splitProjectDirectionContent(rfpBlock.cleanedText)
+    : null
+  const directionWidgets = !isUser && hasDirectionWidgets(rfpBlock.cleanedText)
+  const keywordCard = !isUser
+    ? extractKeywordCardData(rfpBlock.cleanedText)
     : null
   const cleanedContent = stripInternalBlocksForDisplay(
     projectDirectionSplit?.after ?? rfpBlock.cleanedText
@@ -1487,6 +2029,8 @@ function ChatBubble({
     !displayContent &&
     !beforeProjectDirection &&
     !projectDirection &&
+    !directionWidgets &&
+    !keywordCard &&
     !message.personaCardBlock &&
     !message.generatedImageBlock?.images.length &&
     !rfpBlock.rfp
@@ -1530,10 +2074,6 @@ function ChatBubble({
       ) : null}
 
       {projectDirection ? <ProjectDirectionCard data={projectDirection} /> : null}
-      {message.personaCardBlock ? (
-        <PersonaCardPreview data={message.personaCardBlock} />
-      ) : null}
-
       {displayContent || message.generatedImageBlock?.images.length ? (
         <div className="w-full rounded-[20px] bg-slate-200 px-[clamp(24px,3.33svh,36px)] py-[clamp(20px,2.59svh,28px)] outline outline-[3px] outline-offset-[-3px] outline-zinc-200">
           {displayContent ? (
@@ -1558,6 +2098,21 @@ function ChatBubble({
         </div>
       ) : null}
 
+      {directionWidgets ? (
+        <DirectionResearchWidgets
+          disabled={disabled}
+          onSelect={(kind) => {
+            const labelMap: Record<DirectionArtifactKind, string> = {
+              brand_positioning: '경쟁사 리서치 보기',
+              consumption_keywords: '소비 트렌드 리서치 보기',
+              market_size: '시장 규모 리서치 보기',
+            }
+
+            onChoice(labelMap[kind])
+          }}
+        />
+      ) : null}
+
       <div className="flex flex-wrap items-center gap-3">
         {isStageProceedPrompt(displayContent) ? (
           <>
@@ -1573,7 +2128,7 @@ function ChatBubble({
               type="button"
               disabled={disabled}
               onClick={() => onChoice('더 하고 싶은 말이 있어요')}
-              className="rounded-[30px] bg-yellow-300 px-[clamp(16px,1.85svh,20px)] py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
+              className="rounded-[30px] bg-[#DDF444] px-[clamp(16px,1.85svh,20px)] py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
             >
               더 하고 싶은 말이 있어요
             </button>
@@ -1582,7 +2137,7 @@ function ChatBubble({
 
         {choices.length > 0 ? (
           <>
-            <span className="rounded-[30px] bg-yellow-300 px-[clamp(16px,1.85svh,20px)] py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black">
+            <span className="rounded-[30px] bg-[#DDF444] px-[clamp(16px,1.85svh,20px)] py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black">
               힌트 보기
             </span>
             {choices.map((choice) => (
@@ -1607,6 +2162,36 @@ function ChatBubble({
             className="rounded-[30px] bg-blue-600 px-[clamp(16px,1.85svh,20px)] py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-white disabled:opacity-50"
           >
             RFP 다운로드
+          </button>
+        ) : null}
+
+        {message.personaCardBlock && !message.personaCardBlock.imageUrl ? (
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => void onVisualizePersona(message.personaCardBlock)}
+            className="inline-flex items-center gap-1 rounded-[30px] bg-blue-600 px-[clamp(16px,1.85svh,20px)] py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-white disabled:opacity-50"
+          >
+            시각화 하기
+            <span className="ml-0.5 flex h-4 w-4 items-center justify-center">
+              <span className="h-2.5 w-2.5 rounded-sm border border-white" />
+            </span>
+            <span>2</span>
+          </button>
+        ) : null}
+
+        {keywordCard ? (
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => onVisualizeKeyword(keywordCard)}
+            className="inline-flex items-center gap-1 rounded-[30px] bg-[#DDF444] px-[clamp(16px,1.85svh,20px)] py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
+          >
+            시각화 하기
+            <span className="ml-0.5 flex h-4 w-4 items-center justify-center">
+              <span className="h-2.5 w-2.5 rounded-sm border border-black" />
+            </span>
+            <span>2</span>
           </button>
         ) : null}
       </div>

@@ -3,6 +3,17 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+  --semantic-accent-static-white: #ffffff;
+  --semantic-icon-secondary: #71717a;
+  --semantic-surface-background-default: #ffffff;
+  --semantic-surface-overlay-default: #ffffff;
+  --semantic-surface-overlay-raised-strong: #f4f4f5;
+  --semantic-surface-overlay-sunken-strong: #e4e4e7;
+  --semantic-text-primary: #18181b;
+  --semantic-text-secondary: #27272a;
+  --semantic-text-tertiary: #3f3f46;
+  --semantic-text-quaternary: #71717a;
+  --semantic-text-quinary: #a1a1aa;
 }
 
 @theme inline {
@@ -23,6 +34,62 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-sans);
+}
+
+.dashboard-page {
+  container-type: inline-size;
+}
+
+.dashboard-columns {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.dashboard-column {
+  grid-template-rows: minmax(0, 171fr) minmax(0, 573fr);
+}
+
+.dashboard-summary-card {
+  min-width: 0;
+}
+
+.dashboard-detail-card {
+  height: 100%;
+}
+
+.project-list-scroll {
+  scrollbar-color: #94a3b8 #cbd5e1;
+  scrollbar-width: thin;
+}
+
+.project-list-scroll::-webkit-scrollbar {
+  width: 10px;
+}
+
+.project-list-scroll::-webkit-scrollbar-track {
+  border-radius: 10px;
+  background: #cbd5e1;
+}
+
+.project-list-scroll::-webkit-scrollbar-thumb {
+  border: 3px solid #cbd5e1;
+  border-radius: 10px;
+  background: #94a3b8;
+}
+
+@container (max-width: 880px) {
+  .dashboard-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .dashboard-column {
+    grid-template-rows: auto minmax(440px, 573px);
+  }
+}
+
+@media (max-width: 880px) {
+  .dashboard-page {
+    overflow-y: auto;
+  }
 }
 
 .app-content-scrollbar {

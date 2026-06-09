@@ -41,6 +41,27 @@ export function getNextStageKey(stageKey: StageKey) {
   return NEXT_STAGE_KEY_MAP[stageKey] ?? null
 }
 
+export function getProcessStepIndex(stageKey: StageKey) {
+  switch (stageKey) {
+    case 'step_0_start':
+    case 'step_1_idea':
+      return 1
+    case 'step_2_persona':
+    case 'step_2_research':
+      return 2
+    case 'step_3_direction':
+      return 3
+    case 'step_4_style':
+      return 4
+    case 'step_5_design':
+      return 5
+    case 'step_6_rfp':
+      return 6
+    case 'step_6_company':
+      return 7
+  }
+}
+
 export function canRequestRfpStage(stageKey: StageKey) {
   return stageKey === 'step_5_design' || stageKey === 'step_6_rfp'
 }
@@ -72,6 +93,15 @@ export function resolveIntentStageKey({
   currentStageKey: StageKey
   lastUserMessage: string
 }): StageKey {
+  if (
+    currentStageKey === 'step_2_research' &&
+    /(?:궁금한\s*점|더\s*탐색|추가\s*질문).*(?:없|괜찮)|없어|없습니다|다음\s*(?:단계|STEP)|STEP\s*3|넘어가/i.test(
+      lastUserMessage
+    )
+  ) {
+    return 'step_3_direction'
+  }
+
   if (currentStageKey === 'step_4_style' && hasStyleReferenceSelection(lastUserMessage)) {
     return 'step_5_design'
   }

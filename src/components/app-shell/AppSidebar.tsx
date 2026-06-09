@@ -6,7 +6,7 @@ import { usePathname } from 'next/navigation'
 
 import { useProjectChatSidebar } from '@/components/app-shell/ProjectChatSidebarContext'
 import type { ExpertKey } from '@/lib/chat/experts'
-import type { StageKey } from '@/lib/chat/stages'
+import { getProcessStepIndex, type StageKey } from '@/lib/chat/stages'
 
 const navItems = [
   {
@@ -201,9 +201,7 @@ function ProjectProgressSidebar({
   activeStageKey: StageKey
   pathname: string
 }) {
-  const activeStepIndex =
-    processSteps.find((step) => step.stageKeys.includes(activeStageKey))
-      ?.index ?? 1
+  const activeStepIndex = getProcessStepIndex(activeStageKey)
 
   return (
     <aside className="hidden w-[clamp(220px,31.25svh,320px)] shrink-0 flex-col overflow-hidden bg-neutral-900 lg:flex">

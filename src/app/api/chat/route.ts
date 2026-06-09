@@ -39,7 +39,11 @@ export const maxDuration = 60
 type ChatRequestBody = {
   activeExpert?: unknown
   currentStageKey?: unknown
-  forceImageGeneration?: 'design_revision' | 'initial_design' | 'style_reference'
+  forceImageGeneration?:
+    | 'design_revision'
+    | 'initial_design'
+    | 'persona_card'
+    | 'style_reference'
   message?: unknown
   projectId?: unknown
 }
@@ -94,8 +98,54 @@ function isImageRequest(text: string) {
   )
 }
 
+function isPersonaCardVisualizationRequest(text: string) {
+  return (
+    /페르소나|persona/i.test(text) &&
+    /시각화|이미지|카드|visual|image|보여줘|생성|만들어/i.test(text)
+  )
+}
+
+function isPersonaCardConfirmRequest(text: string) {
+  return /페르소나\s*카드.*확정|persona\s*card.*confirm/i.test(text)
+}
+
+function buildStage3TransitionPrompt() {
+  return [
+    '다음으로 STEP 3. 디자인/개발 방향성 도출 단계로 넘어가겠습니다.',
+    '이 단계에서는 시장 규모, 소비 트렌드, 경쟁사 리서치를 통해 제품의 방향성을 정리합니다.',
+    '진행할까요?',
+  ].join('\n')
+}
+
+function buildPostPersonaKeywordPrompt() {
+  return [
+    'Persona Card를 생성했습니다.',
+    '',
+    '이제 이 페르소나가 제품을 사용하며 기대하는 경험을 키워드로 정리하겠습니다.',
+    '먼저 Keywords: Experience부터 도출할게요.',
+    '',
+    '이 사용자가 제품을 사용한 뒤 가장 강하게 느껴야 하는 감정은 무엇이어야 하나요?',
+    '',
+    'A. 안심과 안정감',
+    'B. 편리함과 효율감',
+    'C. 애착과 즐거움',
+  ].join('\n')
+}
+
 function hasPersonaCard(messages: Awaited<ReturnType<typeof getProjectMessages>>) {
   return messages.some((message) => Boolean(message.personaCardBlock))
+}
+
+function getLatestPersonaCard(
+  messages: Awaited<ReturnType<typeof getProjectMessages>>
+) {
+  for (const message of [...messages].reverse()) {
+    if (message.personaCardBlock) {
+      return message.personaCardBlock
+    }
+  }
+
+  return null
 }
 
 function shouldCreatePersonaCard({
@@ -369,6 +419,39 @@ function buildDesignImagePrompt({
   ].join('\n')
 }
 
+function buildPersonaImagePrompt({
+  personaCard,
+  projectTitle,
+}: {
+  personaCard: NonNullable<
+    Awaited<ReturnType<typeof getProjectMessages>>[number]['personaCardBlock']
+  >
+  projectTitle: string
+}) {
+  const sectionText = [
+    `Demographic: ${personaCard.demographicInfo.slice(0, 5).join(', ')}`,
+    `Story: ${personaCard.personaStory.slice(0, 1).join(' ')}`,
+    `Problem needs: ${personaCard.problemNeeds.slice(0, 5).join(', ')}`,
+    `Current behavior: ${personaCard.currentBehavior.slice(0, 5).join(', ')}`,
+    `Lifestyle: ${personaCard.lifestyleContext.slice(0, 5).join(', ')}`,
+    `Relationship: ${personaCard.relationshipKeyword.slice(0, 5).join(', ')}`,
+  ].join('\n')
+
+  return [
+    'Create one polished persona portrait image for a product planning persona card.',
+    `Project title: ${projectTitle}`,
+    '',
+    'Persona summary:',
+    sectionText,
+    '',
+    'Image direction:',
+    '- one realistic editorial portrait or lifestyle portrait of the target user',
+    '- clean modern lighting, high quality, suitable for a professional design document',
+    '- show the person in a relevant daily environment when useful',
+    '- no text overlay, no UI, no watermark, no collage, no grid',
+  ].join('\n')
+}
+
 async function generateRfp({
   apiKey,
   messages,
@@ -445,11 +528,16 @@ export async function POST(request: Request) {
     const requestedStageKey = normalizeStage(body.currentStageKey)
     const activeExpert = normalizeExpert(body.activeExpert)
     const userMessage = typeof body.message === 'string' ? body.message.trim() : ''
+    const isForcedGeneration = Boolean(body.forceImageGeneration)
     const hasAssistantMessage = existingMessages.some(
       (message) => message.role === 'assistant'
     )
     const isInitialEntry = !hasAssistantMessage && !userMessage
-    const messageForModel = isInitialEntry ? buildInitialUserPrompt(project) : userMessage
+    const messageForModel = isInitialEntry
+      ? buildInitialUserPrompt(project)
+      : userMessage || (isForcedGeneration ? '시각화 생성 요청' : '')
+    const isPersonaConfirmMessage =
+      !isInitialEntry && isPersonaCardConfirmRequest(messageForModel)
 
     if (!messageForModel) {
       return NextResponse.json({ error: 'message is required' }, { status: 400 })
@@ -465,7 +553,7 @@ export async function POST(request: Request) {
         -1
       ) + 1
 
-    const savedUserMessage = isInitialEntry
+    const savedUserMessage = isInitialEntry || (isForcedGeneration && !userMessage)
       ? null
       : await insertProjectMessage({
           content: userMessage,
@@ -479,7 +567,7 @@ export async function POST(request: Request) {
 
     const apiKey = isInitialEntry ? null : getGeminiApiKey()
 
-    if (!isInitialEntry && !apiKey) {
+    if (!isInitialEntry && !isPersonaConfirmMessage && !apiKey) {
       return NextResponse.json({ error: 'Gemini API key is missing' }, { status: 500 })
     }
 
@@ -511,6 +599,9 @@ export async function POST(request: Request) {
         referenceImages,
       })
       const conversation = buildConversation(modelMessages)
+      const shouldGeneratePersonaCardImage =
+        body.forceImageGeneration === 'persona_card' ||
+        isPersonaCardVisualizationRequest(messageForModel)
       const shouldGenerateStyleImages =
         (body.forceImageGeneration === 'style_reference' ||
           currentStageKey === 'step_4_style') &&
@@ -521,7 +612,42 @@ export async function POST(request: Request) {
         (currentStageKey === 'step_5_design' && isImageRequest(messageForModel))
       const shouldGenerateRfp = currentStageKey === 'step_6_rfp'
 
-      if (shouldGenerateRfp) {
+      if (
+        currentStageKey.startsWith('step_2') &&
+        isPersonaConfirmMessage
+      ) {
+        assistantContent = buildStage3TransitionPrompt()
+        responseStageKey = 'step_3_direction'
+      } else if (shouldGeneratePersonaCardImage) {
+        const personaCard = getLatestPersonaCard(conversationMessages)
+
+        if (!personaCard) {
+          return NextResponse.json(
+            { error: 'Persona card data is missing' },
+            { status: 400 }
+          )
+        }
+
+        const personaImageBlock = await generateGeminiImages({
+          apiKey: requiredApiKey,
+          aspectRatio: '3:4',
+          count: 1,
+          prompt: buildPersonaImagePrompt({
+            personaCard,
+            projectTitle: project.title || 'Untitled project',
+          }),
+          purpose: 'persona',
+        })
+
+        assistantContent = appendPersonaCardBlock({
+          data: {
+            ...personaCard,
+            imageUrl: personaImageBlock.images[0] ?? personaCard.imageUrl ?? null,
+          },
+          text: '',
+        })
+        responseStageKey = currentStageKey
+      } else if (shouldGenerateRfp) {
         assistantContent = await generateRfp({
           apiKey: requiredApiKey,
           messages: modelMessages,
@@ -582,8 +708,7 @@ export async function POST(request: Request) {
             text: [
               personaText,
               '',
-              'Persona Card를 생성했습니다.',
-              '카드를 확인한 뒤 다음 단계 진행 여부를 결정하겠습니다.',
+              buildPostPersonaKeywordPrompt(),
             ]
               .filter(Boolean)
               .join('\n'),

@@ -37,6 +37,7 @@ export function AppShell({ children, user }: AppShellProps) {
   const [projectChatSidebar, setProjectChatSidebar] =
     useState<ProjectChatSidebarState>(defaultProjectChatSidebarState)
   const isProjectChat = pathname.startsWith('/workspace/project/')
+  const isDashboard = pathname.startsWith('/dashboard')
 
   return (
     <AppShellHeaderProvider value={{ header, setHeader }}>
@@ -79,7 +80,7 @@ export function AppShell({ children, user }: AppShellProps) {
                         </div>
                       ) : null}
                       <div className="flex shrink-0 items-center justify-end gap-1">
-                        <div className="relative h-[clamp(32px,2.083vw,40px)] w-[clamp(32px,2.083vw,40px)] shrink-0 overflow-hidden rounded-xl bg-green-200">
+                        <div className="relative h-[clamp(32px,2.083vw,40px)] w-[clamp(32px,2.083vw,40px)] shrink-0 overflow-hidden rounded-full bg-green-200">
                           {user.avatarUrl ? (
                             <Image
                               src={user.avatarUrl}
@@ -137,7 +138,9 @@ export function AppShell({ children, user }: AppShellProps) {
 
                 <div
                   className={`app-content-scrollbar min-h-0 flex-1 overscroll-contain ${
-                    isProjectChat ? 'overflow-hidden' : 'overflow-y-auto'
+                    isProjectChat || isDashboard
+                      ? 'overflow-hidden'
+                      : 'overflow-y-auto'
                   }`}
                 >
                   {children}

@@ -107,7 +107,9 @@ function getStageLabel(stage?: string) {
 }
 
 export function WorkspaceHome({ projects }: WorkspaceHomeProps) {
-  const [workspaceProjects, setWorkspaceProjects] = useState(projects)
+  const [deletedProjectIds, setDeletedProjectIds] = useState<Set<string>>(
+    () => new Set()
+  )
   const [isUploadOpen, setIsUploadOpen] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
   const [isSurveyOpen, setIsSurveyOpen] = useState(false)
@@ -119,6 +121,9 @@ export function WorkspaceHome({ projects }: WorkspaceHomeProps) {
   const promptFormRef = useRef<HTMLFormElement | null>(null)
   const promptInputRef = useRef<HTMLTextAreaElement | null>(null)
   const referencePreviewsRef = useRef<string[]>([])
+  const visibleProjects = projects.filter(
+    (project) => !deletedProjectIds.has(project.id)
+  )
 
   function addReferenceFiles(files: File[]) {
     if (files.length === 0) {
@@ -389,15 +394,15 @@ export function WorkspaceHome({ projects }: WorkspaceHomeProps) {
         <h2 className="font-['Inter'] text-xl font-semibold leading-[56px] text-neutral-900 sm:text-2xl">
           최신 프로젝트
         </h2>
-        {workspaceProjects.length > 0 ? (
+        {visibleProjects.length > 0 ? (
           <div className="grid grid-cols-1 gap-x-2.5 gap-y-[clamp(32px,4.444svh,48px)] sm:grid-cols-2 lg:grid-cols-4">
-            {workspaceProjects.map((project) => (
+            {visibleProjects.map((project) => (
               <ProjectCard
                 key={project.id}
                 project={project}
                 onDeleted={(projectId) =>
-                  setWorkspaceProjects((current) =>
-                    current.filter((item) => item.id !== projectId)
+                  setDeletedProjectIds((current) =>
+                    new Set(current).add(projectId)
                   )
                 }
               />

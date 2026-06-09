@@ -49,14 +49,102 @@ const SECTION_ALIASES: Array<{
   },
 ]
 
-function cleanPersonaItem(value: string) {
-  return value
-    .replace(/^[-*•]\s*/, '')
-    .replace(/^\d+[.)]\s*/, '')
-    .replace(/^[:：]\s*/, '')
+const SECTION_TITLE_PATTERNS = [
+  /demographic\s*info/i,
+  /persona\s*story/i,
+  /problem\s*&?\s*needs?/i,
+  /current\s*behavior/i,
+  /lifestyle\s*context/i,
+  /relationship\s*keyword/i,
+  /persona\s*(?:summary|card)/i,
+  /인구통계|사용자\s*정보|타겟\s*정보/i,
+  /페르소나\s*스토리|사용자\s*이야기/i,
+  /문제|니즈|불편/i,
+  /현재\s*행동|현재\s*대응/i,
+  /라이프스타일|생활\s*맥락|사용\s*맥락/i,
+  /관계\s*키워드|관계/i,
+]
+
+const SECTION_LIMITS: Record<PersonaSectionKey, number> = {
+  currentBehavior: 46,
+  demographicInfo: 38,
+  lifestyleContext: 52,
+  personaStory: 128,
+  problemNeeds: 44,
+  relationshipKeyword: 52,
+}
+
+function cleanPersonaItem(value: string, key?: PersonaSectionKey) {
+  const cleaned = value
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/[`"'“”‘’]/g, '')
     .replace(/\*\*/g, '')
+    .replace(/[*_#]/g, '')
+    .replace(/^[-•]\s*/, '')
+    .replace(/^\d+[.)]\s*/, '')
+    .replace(/^[A-C]\.\s*/, '')
+    .replace(/^[:：]\s*/, '')
+    .replace(/^\[[^\]]+\]\s*/, '')
     .replace(/\.{2,}|…/g, '')
+    .replace(/\s+/g, ' ')
     .trim()
+
+  if (
+    !cleaned ||
+    /^```/.test(cleaned) ||
+    /^jsx$/i.test(cleaned) ||
+    /https?:\/\//i.test(cleaned) ||
+    (SECTION_TITLE_PATTERNS.some((pattern) => pattern.test(cleaned)) &&
+      cleaned.length <= 32)
+  ) {
+    return ''
+  }
+
+  const [, valueAfterColon] = cleaned.split(/[:：]/)
+  const content = valueAfterColon?.trim() || cleaned
+
+  return summarizePersonaItem(content, key)
+}
+
+function summarizePersonaItem(value: string, key?: PersonaSectionKey) {
+  const normalized = value
+    .replace(/[.!?。！？]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  if (!normalized) {
+    return ''
+  }
+
+  const limit = key ? SECTION_LIMITS[key] : 36
+
+  if (normalized.length <= limit) {
+    return normalized
+  }
+
+  if (key === 'personaStory') {
+    return normalized.slice(0, limit).trim()
+  }
+
+  const compact = normalized
+    .replace(/하는 사용자(?:입니다|다)?/g, '사용자')
+    .replace(/하고 싶어(?:합니다|함)?/g, '희망')
+    .replace(/필요(?:합니다|함)?/g, '필요')
+    .replace(/어려움(?:을 겪음)?/g, '어려움')
+    .replace(/중요하게 생각함/g, '중시')
+    .replace(/선호(?:합니다)?/g, '선호')
+
+  if (compact.length <= limit) {
+    return compact
+  }
+
+  const phrase = compact
+    .split(/[,，/·]|(?:\s+-\s+)/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .sort((a, b) => a.length - b.length)[0]
+
+  return (phrase || compact).slice(0, limit).trim()
 }
 
 function getSectionKey(line: string): PersonaSectionKey | null {
@@ -76,19 +164,37 @@ function pushItem(
   key: PersonaSectionKey,
   value: string
 ) {
-  const cleaned = cleanPersonaItem(value)
+  const cleaned = cleanPersonaItem(value, key)
 
-  if (cleaned && sections[key].length < 2) {
-    sections[key].push(cleaned.length > 26 ? cleaned.slice(0, 26).trim() : cleaned)
+  if (
+    cleaned &&
+    sections[key].length < (key === 'personaStory' ? 1 : 4) &&
+    !sections[key].some((item) => item === cleaned)
+  ) {
+    sections[key].push(cleaned)
   }
 }
 
 function fallbackItems(text: string) {
   return text
     .split(/\n+/)
-    .map(cleanPersonaItem)
+    .map((item) => cleanPersonaItem(item))
     .filter((line) => line && !/^persona\s*summary/i.test(line))
     .slice(0, 6)
+}
+
+function normalizePersonaCardData(data: Partial<PersonaCardData>) {
+  return PERSONA_SECTION_KEYS.reduce((acc, key) => {
+    const value = data[key]
+    acc[key] = Array.isArray(value)
+      ? value
+          .map((item) => cleanPersonaItem(item, key))
+          .filter(Boolean)
+          .filter((item, index, items) => items.indexOf(item) === index)
+          .slice(0, key === 'personaStory' ? 1 : 4)
+      : []
+    return acc
+  }, {} as Record<PersonaSectionKey, string[]>)
 }
 
 export function buildPersonaCardDataFromText(text: string): PersonaCardData {
@@ -107,12 +213,30 @@ export function buildPersonaCardDataFromText(text: string): PersonaCardData {
 
     if (sectionKey) {
       currentKey = sectionKey
-      const [, inlineValue = ''] = line.split(/[:：]/)
+      const inlineValue = line.includes(':') || line.includes('：')
+        ? line.replace(/^.*?[:：]/, '')
+        : ''
       pushItem(sections, currentKey, inlineValue)
       continue
     }
 
-    if (currentKey && /^[-*•]|\d+[.)]/.test(line.trim())) {
+    const trimmedLine = line.trim()
+
+    if (!currentKey || !trimmedLine) {
+      continue
+    }
+
+    if (/^[-*•]|\d+[.)]|[A-C]\./.test(trimmedLine)) {
+      pushItem(sections, currentKey, line)
+      continue
+    }
+
+    if (currentKey === 'personaStory') {
+      pushItem(sections, currentKey, line)
+      continue
+    }
+
+    if (trimmedLine.includes(':') || trimmedLine.includes('：')) {
       pushItem(sections, currentKey, line)
     }
   }
@@ -168,13 +292,7 @@ export function extractPersonaCardBlock(text: string) {
       return { cleanedText, personaCardBlock: null }
     }
 
-    const data = PERSONA_SECTION_KEYS.reduce((acc, key) => {
-      const value = parsed[key]
-      acc[key] = Array.isArray(value)
-        ? value.filter((item): item is string => typeof item === 'string')
-        : []
-      return acc
-    }, {} as Record<PersonaSectionKey, string[]>)
+    const data = normalizePersonaCardData(parsed)
 
     return {
       cleanedText,
