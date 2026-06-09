@@ -3,7 +3,7 @@
 import Image from 'next/image'
 import { usePathname } from 'next/navigation'
 import type { ReactNode } from 'react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { AppSidebar } from '@/components/app-shell/AppSidebar'
 import {
@@ -25,6 +25,118 @@ type AppShellProps = {
     planLabel: string
     tokenCount?: number
   }
+}
+
+type Language = 'ENG' | 'KOR'
+
+const languages: Array<{ label: string; value: Language }> = [
+  { label: 'English', value: 'ENG' },
+  { label: '한국어', value: 'KOR' },
+]
+
+function LanguageDropdown() {
+  const [isOpen, setIsOpen] = useState(false)
+  const [language, setLanguage] = useState<Language>('KOR')
+  const [menuPosition, setMenuPosition] = useState({ left: 0, top: 0 })
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const buttonRef = useRef<HTMLButtonElement | null>(null)
+
+  useEffect(() => {
+    if (!isOpen) {
+      return
+    }
+
+    function updateMenuPosition() {
+      const button = buttonRef.current
+
+      if (!button) {
+        return
+      }
+
+      const rect = button.getBoundingClientRect()
+      setMenuPosition({
+        left: Math.max(12, rect.right - 176),
+        top: rect.bottom + 8,
+      })
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      if (!containerRef.current?.contains(event.target as Node)) {
+        setIsOpen(false)
+      }
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        setIsOpen(false)
+        buttonRef.current?.focus()
+      }
+    }
+
+    updateMenuPosition()
+    window.addEventListener('resize', updateMenuPosition)
+    window.addEventListener('scroll', updateMenuPosition, true)
+    document.addEventListener('pointerdown', handlePointerDown)
+    document.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+      window.removeEventListener('resize', updateMenuPosition)
+      window.removeEventListener('scroll', updateMenuPosition, true)
+      document.removeEventListener('pointerdown', handlePointerDown)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [isOpen])
+
+  return (
+    <div ref={containerRef} className="relative">
+      <button
+        ref={buttonRef}
+        type="button"
+        aria-label="언어 선택"
+        aria-haspopup="menu"
+        aria-expanded={isOpen}
+        onClick={() => setIsOpen((current) => !current)}
+        className="flex h-[clamp(32px,2.083vw,40px)] w-[clamp(76px,5vw,96px)] items-center justify-center gap-2 rounded-xl text-[clamp(14px,0.938vw,18px)] font-semibold leading-6 text-blue-600 transition hover:bg-blue-50"
+      >
+        <span>{language}</span>
+        <Image
+          src="/assets/icons/account/dropdown.svg"
+          alt=""
+          width={14}
+          height={8}
+          unoptimized
+          className={`h-2 w-3.5 object-contain transition-transform ${
+            isOpen ? 'rotate-180' : ''
+          }`}
+        />
+      </button>
+
+      {isOpen ? (
+        <div
+          role="menu"
+          aria-label="언어 선택"
+          className="fixed z-50 flex w-44 flex-col overflow-hidden rounded-[20px] bg-white shadow-[0px_3px_4px_0px_rgba(0,0,0,0.10)] outline outline-[3px] outline-offset-[-3px] outline-gray-100"
+          style={menuPosition}
+        >
+          {languages.map((item) => (
+            <button
+              key={item.value}
+              type="button"
+              role="menuitemradio"
+              aria-checked={language === item.value}
+              onClick={() => {
+                setLanguage(item.value)
+                setIsOpen(false)
+              }}
+              className="flex h-12 w-full items-center rounded-[20px] px-5 py-3 text-left font-['Inter'] text-sm font-semibold leading-6 text-zinc-500 transition hover:bg-gray-200 hover:text-blue-600 focus-visible:bg-gray-200 focus-visible:text-blue-600 focus-visible:outline-none"
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
 }
 
 export function AppShell({ children, user }: AppShellProps) {
@@ -112,21 +224,7 @@ export function AppShell({ children, user }: AppShellProps) {
                           </span>
                         </div>
 
-                        <button
-                          type="button"
-                          aria-label="언어 선택"
-                          className="flex h-[clamp(32px,2.083vw,40px)] w-[clamp(76px,5vw,96px)] items-center justify-center gap-2 rounded-xl text-[clamp(14px,0.938vw,18px)] font-semibold leading-6 text-blue-600 transition hover:bg-blue-50"
-                        >
-                          <span>KOR</span>
-                          <Image
-                            src="/assets/icons/account/dropdown.svg"
-                            alt=""
-                            width={12}
-                            height={6}
-                            unoptimized
-                            className="h-1.5 w-3 object-contain"
-                          />
-                        </button>
+                        <LanguageDropdown />
 
                         <div className="flex h-[clamp(32px,2.083vw,40px)] w-[clamp(76px,5vw,96px)] items-center justify-center rounded-xl bg-blue-600 px-[clamp(16px,1.25vw,24px)] text-[clamp(14px,0.938vw,18px)] font-semibold leading-6 text-white">
                           {user.planLabel}

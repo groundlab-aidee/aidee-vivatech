@@ -61,7 +61,7 @@ export function ProjectFavoriteButton({
       <Image
         src={
           isFavorite
-            ? '/assets/icons/project/star-selected-gray.svg'
+            ? '/assets/icons/project/star-selected-yellow.svg'
             : '/assets/icons/project/star.svg'
         }
         alt=""
