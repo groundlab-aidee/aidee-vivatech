@@ -303,65 +303,63 @@ function hasDirectionWidgets(content: string) {
   )
 }
 
-function extractKeywordCardData(content: string): KeywordCardData | null {
+function extractKeywordCardsData(content: string): KeywordCardData[] {
   const normalized = stripInternalBlocksForDisplay(content)
-  const match = normalized.match(
-    /(?:^|\n)#{1,3}\s*Keywords:\s*(Experience|Relationship)\s*\n([\s\S]*?)(?=\n#{1,3}\s|\n\s*다음\s*STEP|\s*$)/i
+  const matches = normalized.matchAll(
+    /(?:^|\n)#{1,3}\s*Keywords:\s*(Experience|Relationship)\s*\n([\s\S]*?)(?=\n#{1,3}\s|\n\s*다음\s*STEP|\s*$)/gi
   )
 
-  if (!match) {
-    return null
-  }
+  return Array.from(matches, (match) => {
+    const titleSuffix = match[1].toLowerCase()
+    const kind: KeywordArtifactKind =
+      titleSuffix === 'experience'
+        ? 'experience_keywords'
+        : 'relationship_keywords'
+    const body = match[2]
+      .replace(/\*\*/g, '')
+      .replace(/\r\n/g, '\n')
+      .trim()
+    const rawLines = body
+      .split('\n')
+      .map((line) =>
+        line
+          .replace(/^[-•*]\s*/, '')
+          .replace(/^\d+[.)]\s*/, '')
+          .replace(/^#{1,6}\s*/, '')
+          .trim()
+      )
+      .filter(Boolean)
+    const keywordCandidates = rawLines
+      .flatMap((line) => line.split(/,|\/|·|#|  +/))
+      .map((item) =>
+        item
+          .replace(/[:：].*$/, '')
+          .replace(/[.!?。！？]+$/g, '')
+          .trim()
+      )
+      .filter(
+        (item) =>
+          item.length >= 2 &&
+          item.length <= 18 &&
+          !/keywords?|experience|relationship|키워드|요약|설명/i.test(item)
+      )
+    const keywords = Array.from(new Set(keywordCandidates)).slice(0, 24)
+    const description = rawLines
+      .filter((line) => line.length > 18)
+      .slice(0, 4)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim()
 
-  const titleSuffix = match[1].toLowerCase()
-  const kind: KeywordArtifactKind =
-    titleSuffix === 'experience'
-      ? 'experience_keywords'
-      : 'relationship_keywords'
-  const body = match[2]
-    .replace(/\*\*/g, '')
-    .replace(/\r\n/g, '\n')
-    .trim()
-  const rawLines = body
-    .split('\n')
-    .map((line) =>
-      line
-        .replace(/^[-•*]\s*/, '')
-        .replace(/^\d+[.)]\s*/, '')
-        .replace(/^#{1,6}\s*/, '')
-        .trim()
-    )
-    .filter(Boolean)
-  const keywordCandidates = rawLines
-    .flatMap((line) => line.split(/,|\/|·|#|  +/))
-    .map((item) =>
-      item
-        .replace(/[:：].*$/, '')
-        .replace(/[.!?。！？]+$/g, '')
-        .trim()
-    )
-    .filter(
-      (item) =>
-        item.length >= 2 &&
-        item.length <= 18 &&
-        !/keywords?|experience|relationship|키워드|요약|설명/i.test(item)
-    )
-  const keywords = Array.from(new Set(keywordCandidates)).slice(0, 24)
-  const description = rawLines
-    .filter((line) => line.length > 18)
-    .slice(0, 4)
-    .join(' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-
-  return {
-    description:
-      description ||
-      `${keywords.slice(0, 4).join(', ')} 중심의 경험 키워드를 정리했습니다.`,
-    keywords: keywords.length > 0 ? keywords : rawLines.slice(0, 12),
-    kind,
-    title: `Keywords: ${match[1][0].toUpperCase()}${match[1].slice(1).toLowerCase()}`,
-  }
+    return {
+      description:
+        description ||
+        `${keywords.slice(0, 4).join(', ')} 중심의 경험 키워드를 정리했습니다.`,
+      keywords: keywords.length > 0 ? keywords : rawLines.slice(0, 12),
+      kind,
+      title: `Keywords: ${match[1][0].toUpperCase()}${match[1].slice(1).toLowerCase()}`,
+    }
+  })
 }
 
 function splitAssistantChoices(content: string): {
@@ -599,6 +597,39 @@ export function ProjectChatContainer({
   )
 
   useEffect(() => {
+    const storageKey = `aidee:visualized-keyword-cards:${projectId}`
+    let savedCards: string | null = null
+
+    try {
+      savedCards = window.localStorage.getItem(storageKey)
+    } catch {
+      savedCards = null
+    }
+
+    if (!savedCards) {
+      return
+    }
+
+    const restoreTimer = window.setTimeout(() => {
+      try {
+        setVisualizedKeywordCards(
+          JSON.parse(savedCards) as Partial<
+            Record<KeywordArtifactKind, KeywordCardData>
+          >
+        )
+      } catch {
+        try {
+          window.localStorage.removeItem(storageKey)
+        } catch {
+          // Ignore unavailable browser storage.
+        }
+      }
+    }, 0)
+
+    return () => window.clearTimeout(restoreTimer)
+  }, [projectId])
+
+  useEffect(() => {
     if (!isExpertMenuOpen) {
       return
     }
@@ -780,10 +811,23 @@ export function ProjectChatContainer({
   }
 
   function visualizeKeywordCard(data: KeywordCardData) {
-    setVisualizedKeywordCards((current) => ({
-      ...current,
-      [data.kind]: data,
-    }))
+    setVisualizedKeywordCards((current) => {
+      const nextCards = {
+        ...current,
+        [data.kind]: data,
+      }
+
+      try {
+        window.localStorage.setItem(
+          `aidee:visualized-keyword-cards:${projectId}`,
+          JSON.stringify(nextCards)
+        )
+      } catch {
+        // The visualization remains available for the current session.
+      }
+
+      return nextCards
+    })
     setKeywordCardModalData(data)
   }
 
@@ -908,11 +952,13 @@ export function ProjectChatContainer({
                   key={message.id}
                   message={message}
                   disabled={isPending}
+                  hasVisualizedPersona={Boolean(latestVisualizedPersonaCard)}
                   onChoice={(value) => submitMessage(value)}
                   onDownloadRfp={downloadRfp}
                   onVisualizeKeyword={visualizeKeywordCard}
                   onVisualizePersona={visualizePersonaCard}
                   userAvatarUrl={userAvatarUrl}
+                  visualizedKeywordCards={visualizedKeywordCards}
                 />
               ))
             ) : (
@@ -1038,6 +1084,10 @@ export function ProjectChatContainer({
       <LibraryPanel
         artifacts={availableArtifacts}
         onSelectArtifact={(kind) => {
+          if (kind === 'project_direction') {
+            return
+          }
+
           if (kind === 'persona' && latestVisualizedPersonaCard) {
             setPersonaCardModalData(latestVisualizedPersonaCard)
             return
@@ -1142,40 +1192,127 @@ function LibraryPanel({
         <div className="flex flex-col gap-[clamp(10px,1.3svh,14px)]">
           {artifacts.map((artifact, index) => {
             const isProjectDirection = artifact.kind === 'project_direction'
+            const isPersona = artifact.kind === 'persona'
+            const isExperienceKeywords =
+              artifact.kind === 'experience_keywords'
             const isSelected = artifact.kind === selectedArtifactKind
 
             return (
               <button
                 key={artifact.kind}
                 type="button"
+                disabled={isProjectDirection}
                 onClick={() => onSelectArtifact(artifact.kind)}
-                className={`relative h-[clamp(104px,13.33svh,144px)] overflow-hidden rounded-[20px] text-left outline-none transition ${
-                  isProjectDirection ? 'bg-violet-100' : 'bg-zinc-100 opacity-60'
+                className={`relative mx-auto aspect-[184/140] w-[clamp(136px,17.04svh,184px)] max-w-full overflow-hidden rounded-[clamp(15px,1.85svh,20px)] text-left outline-none transition ${
+                  isProjectDirection
+                    ? 'cursor-default bg-violet-100'
+                    : isPersona
+                      ? 'bg-[#DCD6D8]'
+                      : isExperienceKeywords
+                        ? 'bg-violet-100'
+                    : 'bg-zinc-100'
                 } ${
                   isSelected
                     ? 'ring-2 ring-blue-600'
-                    : 'hover:opacity-100 hover:ring-2 hover:ring-zinc-200'
+                    : isProjectDirection
+                      ? ''
+                      : 'hover:ring-2 hover:ring-zinc-200'
                 }`}
               >
-                <h2 className="absolute left-2.5 top-2.5 whitespace-pre-line font-['Inter'] text-[clamp(20px,2.22svh,24px)] font-medium leading-7 text-black">
-                  {artifact.title
-                    .replace(': ', ':\n')
-                    .replace('Project Direction', 'Project\nDirection')}
-                </h2>
                 {isProjectDirection ? (
+                  <div className="flex h-full flex-col p-[clamp(8px,0.93svh,10px)]">
+                    <h2 className="whitespace-pre-line font-['Inter'] text-[clamp(20px,2.78svh,30px)] font-semibold leading-[1.07] text-black">
+                      Project
+                      <br />
+                      Direction
+                    </h2>
+                    <div className="mt-auto flex justify-end gap-[clamp(4px,0.46svh,5px)]">
+                      <Image
+                        src="/assets/icons/chat-badge/project-direction-arrow.svg"
+                        alt=""
+                        width={54}
+                        height={54}
+                        unoptimized
+                        className="h-[clamp(36px,5svh,54px)] w-[clamp(36px,5svh,54px)] shrink-0"
+                      />
+                      <Image
+                        src="/assets/icons/chat-badge/project-direction-add.svg"
+                        alt=""
+                        width={54}
+                        height={54}
+                        unoptimized
+                        className="h-[clamp(36px,5svh,54px)] w-[clamp(36px,5svh,54px)] shrink-0"
+                      />
+                    </div>
+                  </div>
+                ) : isPersona ? (
                   <>
-                    <div className="absolute bottom-3 right-3 h-[clamp(42px,5.19svh,56px)] w-[clamp(42px,5.19svh,56px)] rounded-full bg-[#DDF444]" />
-                    <div className="absolute bottom-3 right-[clamp(50px,5.93svh,64px)] h-[clamp(42px,5.19svh,56px)] w-[clamp(42px,5.19svh,56px)] rounded-full bg-blue-600" />
+                    <h2 className="absolute left-[5.43%] top-[7.14%] z-10 font-['Inter'] text-[clamp(20px,2.78svh,30px)] font-semibold leading-[1.7] text-[#232323]">
+                      Persona
+                    </h2>
+                    <Image
+                      src="/assets/icons/chat-badge/persona-yellow.svg"
+                      alt=""
+                      width={184}
+                      height={92}
+                      unoptimized
+                      className="absolute left-0 top-[29.29%] h-auto w-full"
+                    />
+                    <Image
+                      src="/assets/icons/chat-badge/persona-black.svg"
+                      alt=""
+                      width={184}
+                      height={79}
+                      unoptimized
+                      className="absolute left-0 top-[43.57%] h-auto w-full"
+                    />
+                  </>
+                ) : isExperienceKeywords ? (
+                  <>
+                    <h2 className="absolute left-[5.43%] top-[7.14%] z-10 whitespace-pre-line font-['Inter'] text-[clamp(20px,2.78svh,30px)] font-semibold leading-[1.07] text-black">
+                      Keywords:
+                      <br />
+                      Experience
+                    </h2>
+                    <Image
+                      src="/assets/icons/chat-badge/keyword-experience-blue1.svg"
+                      alt=""
+                      width={109}
+                      height={50}
+                      unoptimized
+                      className="absolute left-[5.43%] top-[55.71%] h-auto w-[59.24%]"
+                    />
+                    <Image
+                      src="/assets/icons/chat-badge/keyword-experience-blue2.svg"
+                      alt=""
+                      width={60}
+                      height={50}
+                      unoptimized
+                      className="absolute left-[67.39%] top-[55.71%] h-auto w-[32.61%]"
+                    />
                   </>
                 ) : index % 3 === 1 ? (
-                  <div className="absolute bottom-0 left-0 h-[clamp(46px,5.93svh,64px)] w-full bg-[#DDF444]" />
+                  <>
+                    <h2 className="absolute left-2.5 top-2.5 whitespace-pre-line font-['Inter'] text-[clamp(20px,2.22svh,24px)] font-medium leading-7 text-black">
+                      {artifact.title.replace(': ', ':\n')}
+                    </h2>
+                    <div className="absolute bottom-0 left-0 h-[clamp(46px,5.93svh,64px)] w-full bg-[#DDF444]" />
+                  </>
                 ) : index % 3 === 2 ? (
                   <>
+                    <h2 className="absolute left-2.5 top-2.5 whitespace-pre-line font-['Inter'] text-[clamp(20px,2.22svh,24px)] font-medium leading-7 text-black">
+                      {artifact.title.replace(': ', ':\n')}
+                    </h2>
                     <div className="absolute bottom-4 left-3 h-[clamp(38px,4.44svh,48px)] w-[clamp(84px,10.37svh,112px)] rounded-full bg-blue-600" />
                     <div className="absolute bottom-4 left-[clamp(84px,10.37svh,112px)] h-[clamp(38px,4.44svh,48px)] w-[clamp(84px,10.37svh,112px)] rounded-full bg-indigo-400" />
                   </>
                 ) : (
-                  <div className="absolute -bottom-8 -right-8 h-[clamp(84px,10.37svh,112px)] w-[clamp(84px,10.37svh,112px)] rounded-full bg-indigo-300" />
+                  <>
+                    <h2 className="absolute left-2.5 top-2.5 whitespace-pre-line font-['Inter'] text-[clamp(20px,2.22svh,24px)] font-medium leading-7 text-black">
+                      {artifact.title.replace(': ', ':\n')}
+                    </h2>
+                    <div className="absolute -bottom-8 -right-8 h-[clamp(84px,10.37svh,112px)] w-[clamp(84px,10.37svh,112px)] rounded-full bg-indigo-300" />
+                  </>
                 )}
               </button>
             )
@@ -1289,6 +1426,24 @@ function ProjectDirectionCard({ data }: { data: ProjectDirectionData }) {
   )
 }
 
+function useDismissModalOnEscape(isOpen: boolean, onClose: () => void) {
+  useEffect(() => {
+    if (!isOpen) {
+      return
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        onClose()
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [isOpen, onClose])
+}
+
 function LibraryArtifactModal({
   artifact,
   onClose,
@@ -1298,6 +1453,8 @@ function LibraryArtifactModal({
   onClose: () => void
   projectDirection: ProjectDirectionData | null
 }) {
+  useDismissModalOnEscape(Boolean(artifact), onClose)
+
   if (!artifact) {
     return null
   }
@@ -1318,18 +1475,6 @@ function LibraryArtifactModal({
       }}
     >
       <div className="max-h-[calc(100svh-48px)] w-full max-w-[920px] overflow-y-auto rounded-[24px] bg-white p-6 shadow-[0px_24px_60px_0px_rgba(0,0,0,0.24)]">
-        <div className="mb-5 flex justify-end">
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-900"
-            aria-label="라이브러리 모달 닫기"
-          >
-            <span className="h-0.5 w-4 rotate-45 rounded-full bg-current" />
-            <span className="-ml-4 h-0.5 w-4 -rotate-45 rounded-full bg-current" />
-          </button>
-        </div>
-
         <div className="flex justify-center">
           {hasProjectDirection ? (
             <ProjectDirectionCard data={projectDirection} />
@@ -1365,6 +1510,8 @@ function PersonaCardModal({
   data: PersonaCardData | null
   onClose: () => void
 }) {
+  useDismissModalOnEscape(Boolean(data), onClose)
+
   if (!data) {
     return null
   }
@@ -1381,7 +1528,7 @@ function PersonaCardModal({
         }
       }}
     >
-      <PersonaCardFull data={data} onClose={onClose} />
+      <PersonaCardFull data={data} />
     </div>
   )
 }
@@ -1394,13 +1541,7 @@ function getPersonaList(items: string[], fallback: string) {
   return cleaned.length > 0 ? cleaned : [fallback]
 }
 
-function PersonaCardFull({
-  data,
-  onClose,
-}: {
-  data: PersonaCardData
-  onClose: () => void
-}) {
+function PersonaCardFull({ data }: { data: PersonaCardData }) {
   const demographic = getPersonaList(data.demographicInfo, '사용자 정보 정리 필요')
   const personaStory = getPersonaList(data.personaStory, '사용 맥락 정리 필요')
   const problemNeeds = getPersonaList(data.problemNeeds, '핵심 문제 정리 필요')
@@ -1446,16 +1587,6 @@ function PersonaCardFull({
           </div>
         )}
       </div>
-
-      <button
-        type="button"
-        onClick={onClose}
-        className="absolute right-[3.7%] top-[5.2%] flex h-8 w-8 items-center justify-center rounded-lg bg-gray-100 text-zinc-700 transition hover:bg-gray-200"
-        aria-label="Persona Card 닫기"
-      >
-        <span className="absolute h-0.5 w-4 rotate-45 rounded-full bg-current" />
-        <span className="absolute h-0.5 w-4 -rotate-45 rounded-full bg-current" />
-      </button>
 
       <div className="absolute bottom-[8.5%] left-[37%] right-[5.6%] top-[4.2%] flex flex-col">
         <h2 className="mb-[3.5%] font-['Inter'] text-3xl font-semibold leading-10 text-neutral-800">
@@ -1574,6 +1705,8 @@ function KeywordCardModal({
   data: KeywordCardData | null
   onClose: () => void
 }) {
+  useDismissModalOnEscape(Boolean(data), onClose)
+
   if (!data) {
     return null
   }
@@ -1590,7 +1723,7 @@ function KeywordCardModal({
         }
       }}
     >
-      <KeywordCard data={data} onClose={onClose} />
+      <KeywordCard data={data} />
     </div>
   )
 }
@@ -1607,87 +1740,89 @@ function getKeywordCardSubtitle(data: KeywordCardData) {
     : '제품과 사용자 맥락의 관계를 정리한 키워드'
 }
 
-function KeywordCard({
-  data,
-  onClose,
-}: {
-  data: KeywordCardData
-  onClose: () => void
-}) {
+function KeywordCard({ data }: { data: KeywordCardData }) {
   const keywords = data.keywords.slice(0, 28)
   const featuredKeywords = new Set(
     keywords.filter((_, index) => index % 3 === 1 || index % 5 === 0).slice(0, 12)
   )
+  const keywordRows = [
+    keywords.slice(0, 7),
+    keywords.slice(7, 15),
+    keywords.slice(15, 22),
+    keywords.slice(22, 28),
+  ]
 
   return (
-    <div className="relative aspect-[1176/780] max-h-[calc(100svh-96px)] w-[calc(100%-48px)] max-w-[1176px] overflow-hidden rounded-[20px] bg-white shadow-[0px_24px_60px_0px_rgba(0,0,0,0.24)]">
-      <div className="absolute inset-x-0 bottom-[5.1%] h-[32.5%] bg-zinc-300/40" />
-
-      <button
-        type="button"
-        onClick={onClose}
-        className="absolute right-[3.7%] top-[5.2%] flex h-8 w-8 items-center justify-center rounded-lg bg-gray-100 text-zinc-700 transition hover:bg-gray-200"
-        aria-label="키워드 카드 닫기"
-      >
-        <span className="absolute h-0.5 w-4 rotate-45 rounded-full bg-current" />
-        <span className="absolute h-0.5 w-4 -rotate-45 rounded-full bg-current" />
-      </button>
+    <div className="relative aspect-[1176/780] max-h-[calc(100svh-48px)] w-full max-w-[1176px] overflow-hidden rounded-[20px] bg-white shadow-[0px_24px_60px_0px_rgba(0,0,0,0.10)]">
+      <div className="absolute inset-x-0 top-[58.8%] h-[41.2%] bg-zinc-300/40" />
 
       <div className="absolute left-[4.7%] top-[5.1%]">
-        <h2 className="whitespace-pre-line font-['Inter'] text-4xl font-medium leading-10 text-black">
+        <h2 className="whitespace-pre-line font-['Inter'] text-[clamp(24px,3.7svh,36px)] font-medium leading-[1.1] text-black">
           <span className="text-blue-600">K</span>
           {data.title.replace(/^K/i, '').replace(': ', ':\n')}
         </h2>
       </div>
 
-      <div className="absolute left-[4.7%] right-[40%] top-[23.7%]">
-        <p className="mb-8 font-['Pretendard'] text-xl font-bold leading-7 text-blue-600">
+      <div className="absolute left-[4.7%] top-[23.7%] w-[55%]">
+        <p className="mb-[clamp(12px,2.04svh,22px)] font-['Pretendard'] text-[clamp(14px,2.04svh,20px)] font-bold leading-6 text-blue-600">
           {getKeywordCardSubtitle(data)}
         </p>
-        <p className="font-['Pretendard'] text-sm font-medium leading-6 text-black">
+        <p className="font-['Pretendard'] text-[clamp(11px,1.3svh,14px)] font-medium leading-[clamp(17px,2.22svh,24px)] text-black">
           {data.description}
         </p>
       </div>
 
-      <div className="absolute bottom-[3.8%] left-0 right-0 h-[33.8%] overflow-hidden rounded-[20px] shadow-[0px_4px_4px_0px_rgba(0,0,0,0.20)]">
-        <div className="flex h-full flex-col justify-center gap-3 px-[4.4%]">
-          <div className="flex flex-wrap gap-3">
-            <p className="mr-6 self-center font-['Inter'] text-3xl font-semibold leading-8 text-black/80">
+      <span className="absolute left-[4.7%] top-[62.6%] h-[1.8%] w-0 border-l-2 border-blue-600" />
+
+      <div className="absolute bottom-[5%] left-0 right-0 h-[32.8%] overflow-hidden rounded-[20px] shadow-[0px_4px_4px_0px_rgba(0,0,0,0.25)]">
+        <p className="absolute left-[5.4%] top-0 font-['Pretendard'] text-[clamp(11px,1.48svh,16px)] font-semibold leading-6 text-black">
+          <span className="text-blue-600">K</span>eywords
+        </p>
+
+        <div className="flex h-full flex-col justify-center gap-[clamp(6px,1.02svh,11px)] px-[4.4%] pt-[1.6%]">
+          <div className="flex min-w-0 items-center gap-[clamp(6px,1.02svh,11px)] pl-[9.5%]">
+            <p className="mr-[2%] shrink-0 font-['Inter'] text-[clamp(18px,2.78svh,30px)] font-semibold leading-8 text-black/80">
               Define
             </p>
-            {keywords.slice(0, 9).map((keyword) => (
+            {keywordRows[0].map((keyword, index) => (
               <KeywordChip
-                key={`top-${keyword}`}
+                key={`top-${keyword}-${index}`}
                 featured={featuredKeywords.has(keyword)}
                 label={keyword}
               />
             ))}
           </div>
-          <div className="flex flex-wrap gap-3 pl-[8%]">
-            {keywords.slice(9, 19).map((keyword) => (
+          <div className="flex min-w-0 items-center gap-[clamp(6px,1.02svh,11px)]">
+            {keywordRows[1].map((keyword, index) => (
               <KeywordChip
-                key={`middle-${keyword}`}
+                key={`second-${keyword}-${index}`}
                 featured={featuredKeywords.has(keyword)}
                 label={keyword}
               />
             ))}
           </div>
-          <div className="flex flex-wrap gap-3">
-            {keywords.slice(19, 28).map((keyword) => (
+          <div className="flex min-w-0 items-center gap-[clamp(6px,1.02svh,11px)] pl-[9.5%]">
+            {keywordRows[2].map((keyword, index) => (
               <KeywordChip
-                key={`bottom-${keyword}`}
+                key={`third-${keyword}-${index}`}
                 featured={featuredKeywords.has(keyword)}
                 label={keyword}
               />
             ))}
-            <p className="ml-auto self-center font-['Inter'] text-3xl font-semibold leading-8 text-black/80">
+          </div>
+          <div className="flex min-w-0 items-center gap-[clamp(6px,1.02svh,11px)]">
+            {keywordRows[3].map((keyword, index) => (
+              <KeywordChip
+                key={`bottom-${keyword}-${index}`}
+                featured={featuredKeywords.has(keyword)}
+                label={keyword}
+              />
+            ))}
+            <p className="ml-auto shrink-0 font-['Inter'] text-[clamp(18px,2.78svh,30px)] font-semibold leading-8 text-black/80">
               Your {data.kind === 'experience_keywords' ? 'Experience' : 'Relationship'}
             </p>
           </div>
         </div>
-        <p className="absolute left-[5.4%] top-0 font-['Pretendard'] text-base font-semibold leading-6 text-black">
-          <span className="text-blue-600">K</span>eywords
-        </p>
       </div>
     </div>
   )
@@ -1702,7 +1837,7 @@ function KeywordChip({
 }) {
   return (
     <span
-      className={`inline-flex h-9 max-w-[220px] items-center justify-center truncate rounded-[100px] px-5 font-['Pretendard'] text-base font-medium leading-6 outline outline-[0.52px] outline-offset-[-0.52px] outline-neutral-500 ${
+      className={`inline-flex h-[clamp(26px,3.33svh,36px)] min-w-0 shrink items-center justify-center truncate rounded-[100px] px-[clamp(10px,1.85svh,20px)] font-['Pretendard'] text-[clamp(10px,1.48svh,16px)] font-medium leading-6 outline outline-[0.52px] outline-offset-[-0.52px] outline-neutral-500 ${
         featured
           ? 'bg-blue-600 text-white shadow-[0px_4px_4px_0px_rgba(0,0,0,0.25)]'
           : 'bg-white/60 text-blue-600'
@@ -1979,20 +2114,26 @@ function MarkdownContent({ content }: { content: string }) {
 
 function ChatBubble({
   disabled,
+  hasVisualizedPersona,
   message,
   onChoice,
   onDownloadRfp,
   onVisualizeKeyword,
   onVisualizePersona,
   userAvatarUrl,
+  visualizedKeywordCards,
 }: {
   disabled: boolean
+  hasVisualizedPersona: boolean
   message: ChatMessageRecord
   onChoice: (value: string) => void
   onDownloadRfp: () => void
   onVisualizeKeyword: (data: KeywordCardData) => void
   onVisualizePersona: (personaCard?: PersonaCardData | null) => void
   userAvatarUrl?: string | null
+  visualizedKeywordCards: Partial<
+    Record<KeywordArtifactKind, KeywordCardData>
+  >
 }) {
   const isUser = message.role === 'user'
   const rfpBlock = extractRfpJsonBlock(message.content)
@@ -2003,9 +2144,9 @@ function ChatBubble({
     ? splitProjectDirectionContent(rfpBlock.cleanedText)
     : null
   const directionWidgets = !isUser && hasDirectionWidgets(rfpBlock.cleanedText)
-  const keywordCard = !isUser
-    ? extractKeywordCardData(rfpBlock.cleanedText)
-    : null
+  const keywordCards = !isUser
+    ? extractKeywordCardsData(rfpBlock.cleanedText)
+    : []
   const cleanedContent = stripInternalBlocksForDisplay(
     projectDirectionSplit?.after ?? rfpBlock.cleanedText
   )
@@ -2030,7 +2171,7 @@ function ChatBubble({
     !beforeProjectDirection &&
     !projectDirection &&
     !directionWidgets &&
-    !keywordCard &&
+    keywordCards.length === 0 &&
     !message.personaCardBlock &&
     !message.generatedImageBlock?.images.length &&
     !rfpBlock.rfp
@@ -2081,18 +2222,65 @@ function ChatBubble({
           ) : null}
 
           {message.generatedImageBlock?.images.length ? (
-            <div className="mt-5 grid grid-cols-2 gap-3">
-              {message.generatedImageBlock.images.map((image, index) => (
-                <Image
-                  key={`${message.id}-${index}`}
-                  src={image}
-                  alt=""
-                  width={260}
-                  height={260}
-                  unoptimized
-                  className="aspect-square w-full rounded-xl object-cover"
-                />
-              ))}
+            <div className="mt-5">
+              <div className="grid grid-cols-2 gap-3">
+                {message.generatedImageBlock.images.map((image, index) => (
+                  <Image
+                    key={`${message.id}-${index}`}
+                    src={image}
+                    alt=""
+                    width={260}
+                    height={260}
+                    unoptimized
+                    className="aspect-square w-full rounded-xl object-cover"
+                  />
+                ))}
+              </div>
+              {message.generatedImageBlock.purpose === 'style_reference' ? (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {message.generatedImageBlock.images.map((_, index) => (
+                    <button
+                      key={`${message.id}-style-choice-${index}`}
+                      type="button"
+                      disabled={disabled}
+                      onClick={() =>
+                        onChoice(`${index + 1}번 스타일 레퍼런스를 선택할게요`)
+                      }
+                      className="rounded-full border border-zinc-200 bg-white px-4 py-1.5 font-['Pretendard'] text-xs font-semibold text-neutral-700 shadow-sm transition hover:border-blue-300 hover:bg-blue-50 disabled:opacity-50"
+                    >
+                      {index + 1}번 선택
+                    </button>
+                  ))}
+                </div>
+              ) : message.generatedImageBlock.purpose === 'design' ? (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {message.generatedImageBlock.images.map((_, index) => (
+                    <button
+                      key={`${message.id}-design-choice-${index}`}
+                      type="button"
+                      disabled={disabled}
+                      onClick={() =>
+                        onChoice(
+                          `${index + 1}번 디자인 시안을 최종안으로 확정하고 진행할게요`
+                        )
+                      }
+                      className="rounded-full bg-blue-600 px-4 py-1.5 font-['Pretendard'] text-xs font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50"
+                    >
+                      {index + 1}번 시안 확정
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    disabled={disabled}
+                    onClick={() =>
+                      onChoice('현재 디자인 시안을 수정해서 다시 보여주세요')
+                    }
+                    className="rounded-full border border-zinc-200 bg-white px-4 py-1.5 font-['Pretendard'] text-xs font-semibold text-neutral-700 shadow-sm transition hover:border-blue-300 hover:bg-blue-50 disabled:opacity-50"
+                  >
+                    수정안 다시 생성
+                  </button>
+                </div>
+              ) : null}
             </div>
           ) : null}
         </div>
@@ -2165,7 +2353,9 @@ function ChatBubble({
           </button>
         ) : null}
 
-        {message.personaCardBlock && !message.personaCardBlock.imageUrl ? (
+        {message.personaCardBlock &&
+        !message.personaCardBlock.imageUrl &&
+        !hasVisualizedPersona ? (
           <button
             type="button"
             disabled={disabled}
@@ -2180,20 +2370,25 @@ function ChatBubble({
           </button>
         ) : null}
 
-        {keywordCard ? (
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={() => onVisualizeKeyword(keywordCard)}
-            className="inline-flex items-center gap-1 rounded-[30px] bg-[#DDF444] px-[clamp(16px,1.85svh,20px)] py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
-          >
-            시각화 하기
-            <span className="ml-0.5 flex h-4 w-4 items-center justify-center">
-              <span className="h-2.5 w-2.5 rounded-sm border border-black" />
-            </span>
-            <span>2</span>
-          </button>
-        ) : null}
+        {keywordCards.map((keywordCard) =>
+          visualizedKeywordCards[keywordCard.kind] ? null : (
+            <button
+              key={keywordCard.kind}
+              type="button"
+              disabled={disabled}
+              onClick={() => onVisualizeKeyword(keywordCard)}
+              className="inline-flex items-center gap-1 rounded-[30px] bg-[#DDF444] px-[clamp(16px,1.85svh,20px)] py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
+            >
+              {keywordCard.kind === 'experience_keywords'
+                ? 'Experience 시각화'
+                : 'Relationship 시각화'}
+              <span className="ml-0.5 flex h-4 w-4 items-center justify-center">
+                <span className="h-2.5 w-2.5 rounded-sm border border-black" />
+              </span>
+              <span>2</span>
+            </button>
+          )
+        )}
       </div>
     </article>
   )

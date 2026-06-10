@@ -13,7 +13,13 @@ import {
   getGeminiApiKey,
   type GeminiMessage,
 } from '@/lib/chat/gemini'
-import { appendRfpJsonBlock, buildRfpPrompt, parseRfpDocument, stripCodeFence } from '@/lib/chat/rfp'
+import {
+  appendRfpJsonBlock,
+  buildRfpPrompt,
+  extractRfpJsonBlock,
+  parseRfpDocument,
+  stripCodeFence,
+} from '@/lib/chat/rfp'
 import {
   DEFAULT_STAGE_KEY,
   hasStyleReferenceSelection,
@@ -129,6 +135,46 @@ function buildPostPersonaKeywordPrompt() {
     'A. 안심과 안정감',
     'B. 편리함과 효율감',
     'C. 애착과 즐거움',
+  ].join('\n')
+}
+
+function hasAllKeywordResults(
+  messages: Array<{ content: string }>,
+  additionalContent = ''
+) {
+  const content = [...messages.map((message) => message.content), additionalContent]
+    .join('\n')
+
+  return (
+    /#{1,3}\s*Keywords:\s*Experience/i.test(content) &&
+    /#{1,3}\s*Keywords:\s*Relationship/i.test(content)
+  )
+}
+
+function hasAllDirectionResearch(
+  messages: Array<{ content: string }>,
+  additionalContent = ''
+) {
+  const content = [...messages.map((message) => message.content), additionalContent]
+    .join('\n')
+
+  return [
+    /#{1,3}\s*시장\s*규모\s*리서치/i,
+    /#{1,3}\s*소비\s*트렌드\s*리서치/i,
+    /#{1,3}\s*경쟁사\s*리서치/i,
+  ].every((pattern) => pattern.test(content))
+}
+
+function appendDirectionCompletionPrompt(text: string) {
+  if (/STEP\s*4|스타일\s*컨셉.*(?:넘어|진행)|진행할까요/i.test(text)) {
+    return text
+  }
+
+  return [
+    text,
+    '',
+    '세 가지 리서치가 모두 완료되었습니다.',
+    '다음 STEP 4. 스타일 컨셉 도출 단계로 진행할까요?',
   ].join('\n')
 }
 
@@ -489,6 +535,7 @@ async function generateRfp({
       `프로젝트 목표: ${parsed.projectGoal}`,
       '',
       'RFP 문서 데이터가 생성되었습니다.',
+      '다음 STEP 7. 협력업체 연결 단계로 진행할까요?',
     ].join('\n'),
   })
 }
@@ -538,6 +585,8 @@ export async function POST(request: Request) {
       : userMessage || (isForcedGeneration ? '시각화 생성 요청' : '')
     const isPersonaConfirmMessage =
       !isInitialEntry && isPersonaCardConfirmRequest(messageForModel)
+    const canUseStaticStep3Transition =
+      isPersonaConfirmMessage && hasAllKeywordResults(existingMessages)
 
     if (!messageForModel) {
       return NextResponse.json({ error: 'message is required' }, { status: 400 })
@@ -545,6 +594,8 @@ export async function POST(request: Request) {
 
     const currentStageKey = resolveIntentStageKey({
       currentStageKey: requestedStageKey,
+      hasCompletedDirectionResearch: hasAllDirectionResearch(existingMessages),
+      hasCompletedStep2Research: hasAllKeywordResults(existingMessages),
       lastUserMessage: messageForModel,
     })
     const nextSeqOrder =
@@ -567,7 +618,7 @@ export async function POST(request: Request) {
 
     const apiKey = isInitialEntry ? null : getGeminiApiKey()
 
-    if (!isInitialEntry && !isPersonaConfirmMessage && !apiKey) {
+    if (!isInitialEntry && !canUseStaticStep3Transition && !apiKey) {
       return NextResponse.json({ error: 'Gemini API key is missing' }, { status: 500 })
     }
 
@@ -599,22 +650,33 @@ export async function POST(request: Request) {
         referenceImages,
       })
       const conversation = buildConversation(modelMessages)
+      const hasExistingStyleImages = existingMessages.some(
+        (existingMessage) =>
+          existingMessage.generatedImageBlock?.purpose === 'style_reference' &&
+          existingMessage.generatedImageBlock.images.length > 0
+      )
+      const hasExistingRfp = existingMessages.some(
+        (existingMessage) => Boolean(extractRfpJsonBlock(existingMessage.content).rfp)
+      )
       const shouldGeneratePersonaCardImage =
         body.forceImageGeneration === 'persona_card' ||
         isPersonaCardVisualizationRequest(messageForModel)
       const shouldGenerateStyleImages =
         (body.forceImageGeneration === 'style_reference' ||
-          currentStageKey === 'step_4_style') &&
+          (currentStageKey === 'step_4_style' && !hasExistingStyleImages)) &&
         !hasStyleReferenceSelection(messageForModel)
       const shouldGenerateDesignImages =
         body.forceImageGeneration === 'initial_design' ||
         body.forceImageGeneration === 'design_revision' ||
+        (requestedStageKey === 'step_4_style' &&
+          currentStageKey === 'step_5_design') ||
         (currentStageKey === 'step_5_design' && isImageRequest(messageForModel))
-      const shouldGenerateRfp = currentStageKey === 'step_6_rfp'
+      const shouldGenerateRfp =
+        currentStageKey === 'step_6_rfp' && !hasExistingRfp
 
       if (
         currentStageKey.startsWith('step_2') &&
-        isPersonaConfirmMessage
+        canUseStaticStep3Transition
       ) {
         assistantContent = buildStage3TransitionPrompt()
         responseStageKey = 'step_3_direction'
@@ -687,7 +749,16 @@ export async function POST(request: Request) {
           messages: modelMessages,
           system,
         })
-        assistantContent = appendImageBlockIfPresent({ imageBlock, text })
+        const completedDirectionResearch =
+          currentStageKey === 'step_3_direction' &&
+          hasAllDirectionResearch(conversationMessages, text)
+        const responseText = completedDirectionResearch
+          ? appendDirectionCompletionPrompt(text)
+          : text
+        assistantContent = appendImageBlockIfPresent({
+          imageBlock,
+          text: responseText,
+        })
         const stageMeta = inferStageMetaFromText({
           currentStageKey,
           text: assistantContent,

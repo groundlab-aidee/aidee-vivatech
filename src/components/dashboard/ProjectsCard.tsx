@@ -148,7 +148,7 @@ export function ProjectsCard({ projects }: { projects: DashboardProject[] }) {
           </h2>
           <div className="mt-2 flex items-end gap-1">
             <strong className="text-3xl font-bold leading-10 text-zinc-950">
-              {projects.length.toLocaleString('ko-KR')}
+              {filteredProjects.length.toLocaleString('ko-KR')}
             </strong>
             <span className="pb-1 text-lg font-medium text-zinc-700">개</span>
           </div>

@@ -88,18 +88,33 @@ export function hasDesignFinalSelection(text: string) {
 
 export function resolveIntentStageKey({
   currentStageKey,
+  hasCompletedDirectionResearch = false,
+  hasCompletedStep2Research = false,
   lastUserMessage,
 }: {
   currentStageKey: StageKey
+  hasCompletedDirectionResearch?: boolean
+  hasCompletedStep2Research?: boolean
   lastUserMessage: string
 }): StageKey {
   if (
     currentStageKey === 'step_2_research' &&
+    hasCompletedStep2Research &&
     /(?:궁금한\s*점|더\s*탐색|추가\s*질문).*(?:없|괜찮)|없어|없습니다|다음\s*(?:단계|STEP)|STEP\s*3|넘어가/i.test(
       lastUserMessage
     )
   ) {
     return 'step_3_direction'
+  }
+
+  if (
+    currentStageKey === 'step_3_direction' &&
+    hasCompletedDirectionResearch &&
+    /다음\s*(?:단계|STEP)|STEP\s*4|스타일\s*(?:단계|컨셉)|넘어가|진행/i.test(
+      lastUserMessage
+    )
+  ) {
+    return 'step_4_style'
   }
 
   if (currentStageKey === 'step_4_style' && hasStyleReferenceSelection(lastUserMessage)) {
@@ -118,6 +133,15 @@ export function resolveIntentStageKey({
 
   if (/rfp|제안\s*요청서|문서\s*생성|pdf/i.test(lastUserMessage)) {
     return canRequestRfpStage(currentStageKey) ? 'step_6_rfp' : currentStageKey
+  }
+
+  if (
+    currentStageKey === 'step_6_rfp' &&
+    /다음\s*(?:단계|STEP)|STEP\s*7|협력\s*업체|파트너|넘어가|진행/i.test(
+      lastUserMessage
+    )
+  ) {
+    return 'step_6_company'
   }
 
   return currentStageKey
