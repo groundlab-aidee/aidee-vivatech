@@ -65,7 +65,7 @@ const processSteps: Array<{
 }> = [
   {
     index: 1,
-    label: '제품 아이디어 & 개발 조건 정리',
+    label: '개발 조건 정리',
     stageKeys: ['step_0_start', 'step_1_idea'],
   },
   {
@@ -75,7 +75,7 @@ const processSteps: Array<{
   },
   {
     index: 3,
-    label: '디자인 개발 방향성 도출',
+    label: '개발 방향성 도출',
     stageKeys: ['step_3_direction'],
   },
   {
@@ -85,17 +85,17 @@ const processSteps: Array<{
   },
   {
     index: 5,
-    label: '디자인 제안',
+    label: '디자인 시안 확정',
     stageKeys: ['step_5_design'],
   },
   {
     index: 6,
-    label: '평가 및 RFP 문서 생성',
+    label: '프로젝트 기획안 생성',
     stageKeys: ['step_6_rfp'],
   },
   {
     index: 7,
-    label: '협력업체 연결',
+    label: '협력 파트너 매칭',
     stageKeys: ['step_6_company'],
   },
 ]
@@ -116,13 +116,13 @@ const expertLabels: Record<ExpertKey, Record<AppLanguage, string>> = {
 }
 
 const processStepLabels: Record<number, Record<AppLanguage, string>> = {
-  1: { ENG: 'Define Requirements', KOR: '제품 아이디어 & 개발 조건 정리' },
+  1: { ENG: 'Define Requirements', KOR: '개발 조건 정리' },
   2: { ENG: 'Identify Users', KOR: '사용자 명확화' },
-  3: { ENG: 'Set Development Direction', KOR: '디자인 개발 방향성 도출' },
+  3: { ENG: 'Set Development Direction', KOR: '개발 방향성 도출' },
   4: { ENG: 'Establish Style Concept', KOR: '스타일 컨셉 도출' },
-  5: { ENG: 'Finalize Design Drafts', KOR: '디자인 제안' },
-  6: { ENG: 'Generate Project Proposal', KOR: '평가 및 RFP 문서 생성' },
-  7: { ENG: 'Partner Matching', KOR: '협력업체 연결' },
+  5: { ENG: 'Finalize Design Drafts', KOR: '디자인 시안 확정' },
+  6: { ENG: 'Generate Project Proposal', KOR: '프로젝트 기획안 생성' },
+  7: { ENG: 'Partner Matching', KOR: '협력 파트너 매칭' },
 }
 
 function isActivePath(pathname: string, href: string) {

@@ -903,21 +903,25 @@ export function ProjectChatContainer({
         const result = (await response.json().catch(() => null)) as {
           error?: string
         } | null
-        throw new Error(result?.error || 'RFP 다운로드에 실패했습니다.')
+        throw new Error(
+          result?.error || '프로젝트 기획안 다운로드에 실패했습니다.'
+        )
       }
 
       const blob = await response.blob()
       const url = URL.createObjectURL(blob)
       const link = document.createElement('a')
       link.href = url
-      link.download = `${projectTitle || 'aidee-rfp'}.md`
+      link.download = `${projectTitle || 'aidee-project-plan'}.md`
       document.body.appendChild(link)
       link.click()
       link.remove()
       window.setTimeout(() => URL.revokeObjectURL(url), 1000)
     } catch (error) {
       setErrorMessage(
-        error instanceof Error ? error.message : 'RFP 다운로드에 실패했습니다.'
+        error instanceof Error
+          ? error.message
+          : '프로젝트 기획안 다운로드에 실패했습니다.'
       )
     }
   }
@@ -1199,6 +1203,10 @@ function LibraryPanel({
             const isPersona = artifact.kind === 'persona'
             const isExperienceKeywords =
               artifact.kind === 'experience_keywords'
+            const isRelationshipKeywords =
+              artifact.kind === 'relationship_keywords'
+            const isMoodBoard = artifact.kind === 'mood_board'
+            const isRendering = artifact.kind === 'rendering'
             const isSelected = artifact.kind === selectedArtifactKind
 
             return (
@@ -1214,6 +1222,12 @@ function LibraryPanel({
                       ? 'bg-[#DCD6D8]'
                       : isExperienceKeywords
                         ? 'bg-violet-100'
+                        : isRelationshipKeywords
+                          ? 'bg-violet-200'
+                          : isMoodBoard
+                            ? 'bg-stone-300'
+                            : isRendering
+                              ? 'bg-indigo-400'
                     : 'bg-zinc-100'
                 } ${
                   isSelected
@@ -1293,6 +1307,84 @@ function LibraryPanel({
                       height={50}
                       unoptimized
                       className="absolute left-[67.39%] top-[55.71%] h-auto w-[32.61%]"
+                    />
+                  </>
+                ) : isRelationshipKeywords ? (
+                  <>
+                    <h2 className="absolute left-[5.43%] top-[7.14%] z-10 whitespace-pre-line font-['Inter'] text-[clamp(20px,2.78svh,30px)] font-semibold leading-[1.07] text-black">
+                      Keywords:
+                      <br />
+                      Relationship
+                    </h2>
+                    <Image
+                      src="/assets/icons/chat-badge/keyword-relationship-blue1.svg"
+                      alt=""
+                      width={60}
+                      height={50}
+                      unoptimized
+                      className="absolute left-0 top-[55.71%] h-auto w-[34.24%]"
+                    />
+                    <Image
+                      src="/assets/icons/chat-badge/keyword-relationship-blue2.svg"
+                      alt=""
+                      width={109}
+                      height={50}
+                      unoptimized
+                      className="absolute left-[36.96%] top-[55.71%] h-auto w-[59.24%]"
+                    />
+                  </>
+                ) : isMoodBoard ? (
+                  <>
+                    <h2 className="absolute left-[5.43%] top-[7.14%] z-10 font-['Inter'] text-[clamp(20px,2.78svh,30px)] font-semibold leading-[1.07] text-neutral-800">
+                      Mood Board
+                    </h2>
+                    <Image
+                      src="/assets/icons/chat-badge/moodboard-1.svg"
+                      alt=""
+                      width={13}
+                      height={73}
+                      unoptimized
+                      className="absolute left-[5.43%] top-[37.86%] h-[52.14%] w-auto"
+                    />
+                    <Image
+                      src="/assets/icons/chat-badge/moodboard-2.svg"
+                      alt=""
+                      width={27}
+                      height={73}
+                      unoptimized
+                      className="absolute left-[15.22%] top-[37.86%] h-[52.14%] w-auto"
+                    />
+                    <Image
+                      src="/assets/icons/chat-badge/moodboard-3.svg"
+                      alt=""
+                      width={48}
+                      height={73}
+                      unoptimized
+                      className="absolute left-[32.61%] top-[37.86%] h-[52.14%] w-auto"
+                    />
+                    <Image
+                      src="/assets/icons/chat-badge/moodboard-4.svg"
+                      alt=""
+                      width={71}
+                      height={73}
+                      unoptimized
+                      className="absolute left-[61.41%] top-[37.86%] h-[52.14%] w-auto"
+                    />
+                  </>
+                ) : isRendering ? (
+                  <>
+                    <h2 className="absolute left-[5.43%] top-[7.14%] z-10 whitespace-pre-line font-['Inter'] text-[clamp(20px,2.78svh,30px)] font-semibold leading-[1.07] text-neutral-800">
+                      3D Design:
+                      <br />
+                      Rendering
+                    </h2>
+                    <Image
+                      src="/assets/icons/chat-badge/3d-design-rendering.svg"
+                      alt=""
+                      width={81}
+                      height={90}
+                      unoptimized
+                      className="absolute left-[58.52%] top-[27.78%] h-auto w-[44.02%]"
                     />
                   </>
                 ) : index % 3 === 1 ? (
@@ -2139,6 +2231,8 @@ function ChatBubble({
     Record<KeywordArtifactKind, KeywordCardData>
   >
 }) {
+  const [hintModalOpen, setHintModalOpen] = useState(false)
+  const [selectedHintIndex, setSelectedHintIndex] = useState<number | null>(null)
   const isUser = message.role === 'user'
   const rfpBlock = extractRfpJsonBlock(message.content)
   const projectDirection = !isUser
@@ -2186,7 +2280,7 @@ function ChatBubble({
   if (isUser) {
     return (
       <article className="ml-auto flex w-full max-w-[800px] flex-col items-end lg:w-[69.6%]">
-        <div className="w-full rounded-[20px] bg-white px-[clamp(24px,3.33svh,36px)] py-[clamp(20px,2.59svh,28px)] outline outline-[3px] outline-offset-[-3px] outline-zinc-200">
+        <div className="w-full rounded-[20px] bg-white px-[clamp(24px,3.33svh,36px)] py-[clamp(20px,2.59svh,28px)] outline outline-[2px] outline-offset-[-2px] outline-zinc-200">
           <p className="whitespace-pre-wrap font-['Pretendard'] text-[clamp(14px,1.48svh,16px)] font-medium leading-7 text-neutral-900">
             {displayContent}
           </p>
@@ -2213,14 +2307,14 @@ function ChatBubble({
   return (
     <article className="flex w-full max-w-[800px] flex-col items-start gap-3 lg:w-[69.6%]">
       {beforeProjectDirection ? (
-        <div className="w-full rounded-[20px] bg-slate-200 px-[clamp(24px,3.33svh,36px)] py-[clamp(20px,2.59svh,28px)] outline outline-[3px] outline-offset-[-3px] outline-zinc-200">
+        <div className="w-full rounded-[20px] bg-slate-200 px-[clamp(24px,3.33svh,36px)] py-[clamp(20px,2.59svh,28px)] outline outline-[2px] outline-offset-[-2px] outline-zinc-200">
           <MarkdownContent content={beforeProjectDirection} />
         </div>
       ) : null}
 
       {projectDirection ? <ProjectDirectionCard data={projectDirection} /> : null}
       {displayContent || message.generatedImageBlock?.images.length ? (
-        <div className="w-full rounded-[20px] bg-slate-200 px-[clamp(24px,3.33svh,36px)] py-[clamp(20px,2.59svh,28px)] outline outline-[3px] outline-offset-[-3px] outline-zinc-200">
+        <div className="w-full rounded-[20px] bg-slate-200 px-[clamp(24px,3.33svh,36px)] py-[clamp(20px,2.59svh,28px)] outline outline-[2px] outline-offset-[-2px] outline-zinc-200">
           {displayContent ? (
             <MarkdownContent content={displayContent} />
           ) : null}
@@ -2305,6 +2399,22 @@ function ChatBubble({
         />
       ) : null}
 
+      {choices.length > 0 ? (
+        <div className="flex w-full justify-end">
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => {
+              setHintModalOpen(true)
+              setSelectedHintIndex(null)
+            }}
+            className="rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
+          >
+            힌트 보기
+          </button>
+        </div>
+      ) : null}
+
       <div className="flex flex-wrap items-center gap-3">
         {isStageProceedPrompt(displayContent) ? (
           <>
@@ -2327,24 +2437,6 @@ function ChatBubble({
           </>
         ) : null}
 
-        {choices.length > 0 ? (
-          <>
-            <span className="rounded-[30px] bg-[#DDF444] px-[clamp(16px,1.85svh,20px)] py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black">
-              힌트 보기
-            </span>
-            {choices.map((choice) => (
-              <button
-                key={`${message.id}-${choice.key}`}
-                type="button"
-                disabled={disabled}
-                onClick={() => onChoice(choice.value)}
-                className="rounded-[30px] border border-zinc-200 bg-white px-4 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-neutral-700 shadow-sm transition hover:bg-zinc-50 disabled:opacity-50"
-              >
-                {choice.label}
-              </button>
-            ))}
-          </>
-        ) : null}
 
         {rfpBlock.rfp ? (
           <button
@@ -2353,7 +2445,7 @@ function ChatBubble({
             onClick={() => void onDownloadRfp()}
             className="rounded-[30px] bg-blue-600 px-[clamp(16px,1.85svh,20px)] py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-white disabled:opacity-50"
           >
-            RFP 다운로드
+            프로젝트 기획안 다운로드
           </button>
         ) : null}
 
@@ -2394,6 +2486,65 @@ function ChatBubble({
           )
         )}
       </div>
+
+      {hintModalOpen && choices.length > 0 ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center"
+          onClick={() => setHintModalOpen(false)}
+        >
+          <div className="absolute inset-0 bg-black/20" />
+          <div
+            className="relative w-[480px] overflow-hidden rounded-[10px] bg-white shadow-[inset_-2px_2px_4px_1px_rgba(0,0,0,0.15)]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex h-7 items-center justify-end px-6 py-[3px]">
+              <button
+                type="button"
+                onClick={() => setHintModalOpen(false)}
+                className="flex h-5 w-5 items-center justify-center text-neutral-400 transition hover:text-neutral-700"
+              >
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                  <path d="M1 1L11 11M11 1L1 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                </svg>
+              </button>
+            </div>
+            <div>
+              {choices.map((choice, index) => (
+                <button
+                  key={choice.key}
+                  type="button"
+                  onClick={() => setSelectedHintIndex(index)}
+                  className={`flex w-full items-center gap-10 border-t border-gray-200 py-3 pl-6 pr-9 text-left transition ${
+                    selectedHintIndex === index ? 'bg-zinc-100 shadow-[0px_2px_2px_0px_rgba(0,0,0,0.10)]' : 'hover:bg-zinc-50'
+                  }`}
+                >
+                  <span className="w-10 text-center font-['Inter'] text-base font-semibold leading-6 text-neutral-900">
+                    {choice.key}
+                  </span>
+                  <span className="flex-1 font-['Pretendard'] text-sm font-semibold leading-6 text-[#1B2561]">
+                    {choice.label}
+                  </span>
+                </button>
+              ))}
+            </div>
+            <div className="flex h-12 items-center justify-end border-t border-gray-200 px-6">
+              <button
+                type="button"
+                disabled={selectedHintIndex === null || disabled}
+                onClick={() => {
+                  if (selectedHintIndex !== null) {
+                    onChoice(choices[selectedHintIndex]!.value)
+                    setHintModalOpen(false)
+                  }
+                }}
+                className="rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-40"
+              >
+                선택하기
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </article>
   )
 }

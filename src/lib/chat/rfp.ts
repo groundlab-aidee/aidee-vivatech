@@ -34,8 +34,10 @@ export function buildRfpPrompt({
   referenceImages: ReferenceImageContextRecord[]
 }) {
   return `
-아래 프로젝트 컨텍스트와 대화 기록을 바탕으로 RFP JSON 객체만 반환하세요.
+당신은 Aidee의 STEP 6 프로젝트 기획안 생성 담당자입니다.
+아래 프로젝트 컨텍스트와 대화 기록을 바탕으로 프로젝트 기획안 JSON 객체만 반환하세요.
 마크다운, 코드블록, 설명 문장 없이 JSON만 반환하세요.
+이전 단계에서 확정된 정보만 사용하고, 대화에 없는 내용을 새로 지어내지 마세요.
 
 [스키마]
 {
@@ -120,7 +122,7 @@ export function extractRfpJsonBlock(text: string) {
 
 export function formatRfpMarkdown(rfp: RfpDocument) {
   return [
-    '# 제품 제안요청서',
+    '# 프로젝트 기획안',
     '',
     '## 1. 프로젝트 개요',
     `- 프로젝트명: ${rfp.projectName}`,

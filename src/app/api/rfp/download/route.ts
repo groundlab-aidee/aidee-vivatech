@@ -65,11 +65,16 @@ export async function POST(request: Request) {
       .find(Boolean)
 
     if (!rfp) {
-      return NextResponse.json({ error: 'RFP document not found' }, { status: 404 })
+      return NextResponse.json(
+        { error: 'Project plan document not found' },
+        { status: 404 }
+      )
     }
 
     const markdown = formatRfpMarkdown(rfp)
-    const fileName = sanitizeFileName(`${project.title || 'aidee-rfp'}.md`)
+    const fileName = sanitizeFileName(
+      `${project.title || 'aidee-project-plan'}.md`
+    )
 
     return new Response(markdown, {
       headers: {
@@ -78,9 +83,14 @@ export async function POST(request: Request) {
       },
     })
   } catch (error) {
-    console.error('RFP download error:', error)
+    console.error('Project plan download error:', error)
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'RFP download error' },
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : 'Project plan download error',
+      },
       { status: 500 }
     )
   }

@@ -117,7 +117,7 @@ function isPersonaCardConfirmRequest(text: string) {
 
 function buildStage3TransitionPrompt() {
   return [
-    '다음으로 STEP 3. 디자인/개발 방향성 도출 단계로 넘어가겠습니다.',
+    '다음으로 STEP 3. 개발 방향성 도출 단계로 넘어가겠습니다.',
     '이 단계에서는 시장 규모, 소비 트렌드, 경쟁사 리서치를 통해 제품의 방향성을 정리합니다.',
     '진행할까요?',
   ].join('\n')
@@ -151,7 +151,7 @@ function hasAllKeywordResults(
   )
 }
 
-function hasAllDirectionResearch(
+function hasDirectionResearch(
   messages: Array<{ content: string }>,
   additionalContent = ''
 ) {
@@ -159,10 +159,10 @@ function hasAllDirectionResearch(
     .join('\n')
 
   return [
-    /#{1,3}\s*시장\s*규모\s*리서치/i,
-    /#{1,3}\s*소비\s*트렌드\s*리서치/i,
-    /#{1,3}\s*경쟁사\s*리서치/i,
-  ].every((pattern) => pattern.test(content))
+    /#{1,3}\s*(?:시장\s*규모\s*리서치|Tam\s*Sam\s*Som)/i,
+    /#{1,3}\s*(?:소비\s*트렌드\s*리서치|Keywords:\s*Consumption)/i,
+    /#{1,3}\s*(?:경쟁사\s*리서치|Positioning\s*Map:\s*Brand)/i,
+  ].some((pattern) => pattern.test(content))
 }
 
 function appendDirectionCompletionPrompt(text: string) {
@@ -173,8 +173,8 @@ function appendDirectionCompletionPrompt(text: string) {
   return [
     text,
     '',
-    '세 가지 리서치가 모두 완료되었습니다.',
-    '다음 STEP 4. 스타일 컨셉 도출 단계로 진행할까요?',
+    '선택한 리서치가 완료되었습니다.',
+    '다른 개발 방향성 리서치도 확인할 수 있습니다. 현재 정보가 충분하다면 다음 STEP 4. 스타일 컨셉 도출 단계로 진행할까요?',
   ].join('\n')
 }
 
@@ -522,20 +522,20 @@ async function generateRfp({
   const parsed = parseRfpDocument(JSON.parse(stripCodeFence(rfpJsonText)))
 
   if (!parsed) {
-    throw new Error('Gemini returned invalid RFP JSON')
+    throw new Error('Gemini returned invalid project plan JSON')
   }
 
   return appendRfpJsonBlock({
     rfp: parsed,
     text: [
-      '# 제품 제안요청서',
+      '# 프로젝트 기획안',
       '',
       `프로젝트명: ${parsed.projectName}`,
       `한 줄 정의: ${parsed.oneLineDefinition}`,
       `프로젝트 목표: ${parsed.projectGoal}`,
       '',
-      'RFP 문서 데이터가 생성되었습니다.',
-      '다음 STEP 7. 협력업체 연결 단계로 진행할까요?',
+      '프로젝트 기획안 데이터가 생성되었습니다.',
+      '다음 STEP 7. 협력 파트너 매칭 단계로 진행할까요?',
     ].join('\n'),
   })
 }
@@ -594,7 +594,7 @@ export async function POST(request: Request) {
 
     const currentStageKey = resolveIntentStageKey({
       currentStageKey: requestedStageKey,
-      hasCompletedDirectionResearch: hasAllDirectionResearch(existingMessages),
+      hasCompletedDirectionResearch: hasDirectionResearch(existingMessages),
       hasCompletedStep2Research: hasAllKeywordResults(existingMessages),
       lastUserMessage: messageForModel,
     })
@@ -733,7 +733,7 @@ export async function POST(request: Request) {
         } else if (shouldGenerateDesignImages) {
           imageBlock = await generateGeminiImages({
             apiKey: requiredApiKey,
-            count: body.forceImageGeneration === 'design_revision' ? 1 : 3,
+            count: body.forceImageGeneration === 'design_revision' ? 1 : 4,
             prompt: buildDesignImagePrompt({
               conversation,
               projectTitle: project.title || 'Untitled project',
@@ -751,7 +751,7 @@ export async function POST(request: Request) {
         })
         const completedDirectionResearch =
           currentStageKey === 'step_3_direction' &&
-          hasAllDirectionResearch(conversationMessages, text)
+          hasDirectionResearch(conversationMessages, text)
         const responseText = completedDirectionResearch
           ? appendDirectionCompletionPrompt(text)
           : text

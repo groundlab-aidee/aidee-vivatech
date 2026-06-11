@@ -125,19 +125,19 @@ export function resolveIntentStageKey({
     return 'step_6_rfp'
   }
 
-  if (/협력\s*업체|업체\s*추천|파트너|vendor|company/i.test(lastUserMessage)) {
+  if (/협력\s*(?:업체|파트너)|업체\s*추천|파트너|vendor|company/i.test(lastUserMessage)) {
     return canRequestCompanyStage(currentStageKey)
       ? 'step_6_company'
       : currentStageKey
   }
 
-  if (/rfp|제안\s*요청서|문서\s*생성|pdf/i.test(lastUserMessage)) {
+  if (/rfp|제안\s*요청서|프로젝트\s*기획안|기획안\s*생성|문서\s*생성|pdf/i.test(lastUserMessage)) {
     return canRequestRfpStage(currentStageKey) ? 'step_6_rfp' : currentStageKey
   }
 
   if (
     currentStageKey === 'step_6_rfp' &&
-    /다음\s*(?:단계|STEP)|STEP\s*7|협력\s*업체|파트너|넘어가|진행/i.test(
+    /다음\s*(?:단계|STEP)|STEP\s*7|협력\s*(?:업체|파트너)|파트너|넘어가|진행/i.test(
       lastUserMessage
     )
   ) {
