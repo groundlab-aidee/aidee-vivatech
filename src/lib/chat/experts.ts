@@ -30,10 +30,10 @@ export const EXPERT_DEFINITIONS: ExpertDefinition[] = [
   },
   {
     accentClassName: 'bg-fuchsia-50 text-fuchsia-700 ring-fuchsia-200',
-    inputLabel: '스타일 디자이너에게 물어보세요',
+    inputLabel: '디자이너에게 물어보세요',
     key: 'style_designer',
-    label: '스타일 디자이너',
-    loadingLabel: '스타일 디자이너의 답변을 로딩중이에요.',
+    label: '디자이너',
+    loadingLabel: '디자이너의 답변을 로딩중이에요.',
   },
   {
     accentClassName: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
@@ -82,8 +82,8 @@ const PLANNER_PROMPT = `
 `
 
 const STYLE_DESIGNER_PROMPT = `
-[현재 응답 모드: 스타일 디자이너]
-당신은 추상적 감성을 조형, 색상, 소재, 마감으로 구체화하는 스타일 디자이너입니다.
+[현재 응답 모드: 디자이너]
+당신은 추상적 감성을 조형, 색상, 소재, 마감으로 구체화하는 디자이너입니다.
 - 최대 300자 또는 5줄 이내로 답하세요.
 - "힙한", "깔끔한" 같은 표현을 CMF와 실루엣 지시어로 변환하세요.
 - 부품 단가, 양산 수율, 시장 점유율은 다루지 말고 시각적 일관성과 조형 완성도만 판단하세요.

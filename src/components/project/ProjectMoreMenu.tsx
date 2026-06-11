@@ -4,18 +4,23 @@ import Image from 'next/image'
 import { useRouter } from 'next/navigation'
 import { useEffect, useRef, useState } from 'react'
 
+import { useAppLanguage } from '@/components/i18n/AppLanguageContext'
+
 const menuItems = [
   {
     icon: '/assets/icons/chat/share.svg',
-    label: '공유',
+    id: 'share',
+    label: { ENG: 'Share', KOR: '공유' },
   },
   {
     icon: '/assets/icons/chat/add-member.svg',
-    label: '멤버 추가',
+    id: 'add-member',
+    label: { ENG: 'Add member', KOR: '멤버 추가' },
   },
   {
     icon: '/assets/icons/chat/delete.svg',
-    label: '삭제',
+    id: 'delete',
+    label: { ENG: 'Delete', KOR: '삭제' },
   },
 ] as const
 
@@ -23,6 +28,8 @@ const BLUE_ICON_FILTER =
   'brightness(0) saturate(100%) invert(33%) sepia(94%) saturate(2916%) hue-rotate(224deg) brightness(101%) contrast(101%)'
 const GRAY_ICON_FILTER =
   'brightness(0) saturate(100%) invert(40%) sepia(8%) saturate(393%) hue-rotate(202deg) brightness(91%) contrast(85%)'
+const RED_ICON_FILTER =
+  'brightness(0) saturate(100%) invert(36%) sepia(93%) saturate(1736%) hue-rotate(337deg) brightness(99%) contrast(89%)'
 
 type ProjectMoreMenuProps = {
   align?: 'left' | 'right'
@@ -42,6 +49,7 @@ export function ProjectMoreMenu({
   triggerClassName = '',
 }: ProjectMoreMenuProps) {
   const router = useRouter()
+  const { language } = useAppLanguage()
   const [isOpen, setIsOpen] = useState(false)
   const [hoveredItem, setHoveredItem] = useState<string | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
@@ -154,17 +162,17 @@ export function ProjectMoreMenu({
         >
           {menuItems.map((item) => (
             <button
-              key={item.label}
+              key={item.id}
               type="button"
               onBlur={() => setHoveredItem(null)}
-              onFocus={() => setHoveredItem(item.label)}
-              onMouseEnter={() => setHoveredItem(item.label)}
+              onFocus={() => setHoveredItem(item.id)}
+              onMouseEnter={() => setHoveredItem(item.id)}
               onMouseLeave={() => setHoveredItem(null)}
               onClick={(event) => {
                 event.preventDefault()
                 event.stopPropagation()
                 setIsOpen(false)
-                if (item.label === '삭제') {
+                if (item.id === 'delete') {
                   void deleteProject()
                 }
               }}
@@ -179,16 +187,23 @@ export function ProjectMoreMenu({
                 unoptimized
                 className="h-6 w-6 object-contain transition"
                 style={{
-                  filter:
-                    hoveredItem === item.label ? BLUE_ICON_FILTER : GRAY_ICON_FILTER,
+                  filter: item.id === 'delete'
+                    ? RED_ICON_FILTER
+                    : hoveredItem === item.id
+                      ? BLUE_ICON_FILTER
+                      : GRAY_ICON_FILTER,
                 }}
               />
               <span
                 className={`min-w-0 flex-1 font-['Inter'] text-sm font-semibold leading-6 transition ${
-                  hoveredItem === item.label ? 'text-blue-600' : 'text-zinc-500'
+                  item.id === 'delete'
+                    ? 'text-red-500'
+                    : hoveredItem === item.id
+                      ? 'text-blue-600'
+                      : 'text-zinc-500'
                 }`}
               >
-                {item.label}
+                {item.label[language]}
               </span>
             </button>
           ))}

@@ -5,6 +5,10 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 
 import { useProjectChatSidebar } from '@/components/app-shell/ProjectChatSidebarContext'
+import {
+  useAppLanguage,
+  type AppLanguage,
+} from '@/components/i18n/AppLanguageContext'
 import type { ExpertKey } from '@/lib/chat/experts'
 import { getProcessStepIndex, type StageKey } from '@/lib/chat/stages'
 
@@ -40,7 +44,7 @@ const expertItems: Array<{
   {
     icon: '/assets/icons/chat/designer.svg',
     key: 'style_designer',
-    label: '스타일디자이너',
+    label: '디자이너',
   },
   {
     icon: '/assets/icons/chat/engineer.svg',
@@ -96,6 +100,31 @@ const processSteps: Array<{
   },
 ]
 
+const navLabels: Record<string, Record<AppLanguage, string>> = {
+  '/workspace': { ENG: 'Workspace', KOR: '내 작업실' },
+  '/chat': { ENG: 'Chat', KOR: '채팅' },
+  '/dashboard': { ENG: 'Dashboard', KOR: '대시보드' },
+  '/settings': { ENG: 'Setting', KOR: '설정' },
+}
+
+const expertLabels: Record<ExpertKey, Record<AppLanguage, string>> = {
+  aidee: { ENG: 'Aidee', KOR: 'Aidee' },
+  planner: { ENG: 'Strategist', KOR: '기획전략가' },
+  style_designer: { ENG: 'Designer', KOR: '디자이너' },
+  engineer: { ENG: 'Engineer', KOR: '엔지니어' },
+  marketer: { ENG: 'Marketer', KOR: '마케터' },
+}
+
+const processStepLabels: Record<number, Record<AppLanguage, string>> = {
+  1: { ENG: 'Define Requirements', KOR: '제품 아이디어 & 개발 조건 정리' },
+  2: { ENG: 'Identify Users', KOR: '사용자 명확화' },
+  3: { ENG: 'Set Development Direction', KOR: '디자인 개발 방향성 도출' },
+  4: { ENG: 'Establish Style Concept', KOR: '스타일 컨셉 도출' },
+  5: { ENG: 'Finalize Design Drafts', KOR: '디자인 제안' },
+  6: { ENG: 'Generate Project Proposal', KOR: '평가 및 RFP 문서 생성' },
+  7: { ENG: 'Partner Matching', KOR: '협력업체 연결' },
+}
+
 function isActivePath(pathname: string, href: string) {
   if (pathname.startsWith('/workspace/project/')) {
     return href === '/chat'
@@ -107,6 +136,7 @@ function isActivePath(pathname: string, href: string) {
 export function AppSidebar() {
   const pathname = usePathname()
   const { sidebarState } = useProjectChatSidebar()
+  const { language } = useAppLanguage()
 
   if (
     pathname.startsWith('/workspace/project/') &&
@@ -117,6 +147,7 @@ export function AppSidebar() {
         activeExpert={sidebarState.activeExpert}
         activeExperts={sidebarState.activeExperts}
         activeStageKey={sidebarState.activeStageKey}
+        language={language}
         pathname={pathname}
       />
     )
@@ -162,7 +193,7 @@ export function AppSidebar() {
                   unoptimized
                   className="h-[clamp(20px,2.73svh,28px)] w-[clamp(20px,2.73svh,28px)] shrink-0 object-contain"
                 />
-                <span>{item.label}</span>
+                <span>{navLabels[item.href][language]}</span>
               </Link>
             )
           })}
@@ -194,11 +225,13 @@ function ProjectProgressSidebar({
   activeExpert,
   activeExperts,
   activeStageKey,
+  language,
   pathname,
 }: {
   activeExpert: ExpertKey
   activeExperts: ExpertKey[]
   activeStageKey: StageKey
+  language: AppLanguage
   pathname: string
 }) {
   const activeStepIndex = getProcessStepIndex(activeStageKey)
@@ -207,7 +240,7 @@ function ProjectProgressSidebar({
     <aside className="hidden w-[clamp(220px,31.25svh,320px)] shrink-0 flex-col overflow-hidden bg-neutral-900 lg:flex">
       <SidebarLogo />
 
-      <SidebarNav pathname={pathname} />
+      <SidebarNav language={language} pathname={pathname} />
 
       <section className="border-b border-neutral-800 px-[clamp(12px,1.56svh,16px)] py-[clamp(10px,1.56svh,16px)]">
         <div className="flex flex-col gap-[3px]">
@@ -237,7 +270,7 @@ function ProjectProgressSidebar({
                   }`}
                 />
                 <span className="font-['Inter'] text-[clamp(13px,1.56svh,16px)] font-semibold leading-6">
-                  {expert.label}
+                  {expertLabels[expert.key][language]}
                 </span>
               </div>
             )
@@ -292,7 +325,7 @@ function ProjectProgressSidebar({
                           }`
                     }`}
                   >
-                    {step.label}
+                    {processStepLabels[step.index][language]}
                   </span>
                 </div>
               </div>
@@ -304,7 +337,13 @@ function ProjectProgressSidebar({
   )
 }
 
-function SidebarNav({ pathname }: { pathname: string }) {
+function SidebarNav({
+  language,
+  pathname,
+}: {
+  language: AppLanguage
+  pathname: string
+}) {
   return (
     <nav className="border-b border-neutral-800 px-[clamp(12px,1.56svh,16px)] pb-[clamp(10px,1.56svh,16px)] pt-[clamp(10px,1.56svh,16px)]">
       <div className="flex w-full flex-col items-start">
@@ -330,7 +369,7 @@ function SidebarNav({ pathname }: { pathname: string }) {
                 unoptimized
                 className="h-[clamp(20px,2.73svh,28px)] w-[clamp(20px,2.73svh,28px)] shrink-0 object-contain"
               />
-              <span>{item.label}</span>
+              <span>{navLabels[item.href][language]}</span>
             </Link>
           )
         })}

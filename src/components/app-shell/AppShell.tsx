@@ -16,6 +16,11 @@ import {
   ProjectChatSidebarProvider,
   type ProjectChatSidebarState,
 } from '@/components/app-shell/ProjectChatSidebarContext'
+import {
+  AppLanguageProvider,
+  useAppLanguage,
+  type AppLanguage,
+} from '@/components/i18n/AppLanguageContext'
 
 type AppShellProps = {
   children: ReactNode
@@ -27,16 +32,14 @@ type AppShellProps = {
   }
 }
 
-type Language = 'ENG' | 'KOR'
-
-const languages: Array<{ label: string; value: Language }> = [
+const languages: Array<{ label: string; value: AppLanguage }> = [
   { label: 'English', value: 'ENG' },
   { label: '한국어', value: 'KOR' },
 ]
 
 function LanguageDropdown() {
   const [isOpen, setIsOpen] = useState(false)
-  const [language, setLanguage] = useState<Language>('KOR')
+  const { language, setLanguage } = useAppLanguage()
   const [menuPosition, setMenuPosition] = useState({ left: 0, top: 0 })
   const containerRef = useRef<HTMLDivElement | null>(null)
   const buttonRef = useRef<HTMLButtonElement | null>(null)
@@ -92,7 +95,7 @@ function LanguageDropdown() {
       <button
         ref={buttonRef}
         type="button"
-        aria-label="언어 선택"
+        aria-label={language === 'ENG' ? 'Select language' : '언어 선택'}
         aria-haspopup="menu"
         aria-expanded={isOpen}
         onClick={() => setIsOpen((current) => !current)}
@@ -114,7 +117,7 @@ function LanguageDropdown() {
       {isOpen ? (
         <div
           role="menu"
-          aria-label="언어 선택"
+          aria-label={language === 'ENG' ? 'Select language' : '언어 선택'}
           className="fixed z-50 flex w-44 flex-col overflow-hidden rounded-[20px] bg-white shadow-[0px_3px_4px_0px_rgba(0,0,0,0.10)] outline outline-[3px] outline-offset-[-3px] outline-gray-100"
           style={menuPosition}
         >
@@ -152,6 +155,7 @@ export function AppShell({ children, user }: AppShellProps) {
   const isDashboard = pathname.startsWith('/dashboard')
 
   return (
+    <AppLanguageProvider>
     <AppShellHeaderProvider value={{ header, setHeader }}>
       <ProjectChatSidebarProvider
         value={{
@@ -249,5 +253,6 @@ export function AppShell({ children, user }: AppShellProps) {
         </main>
       </ProjectChatSidebarProvider>
     </AppShellHeaderProvider>
+    </AppLanguageProvider>
   )
 }

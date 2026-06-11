@@ -15,6 +15,7 @@ import {
   defaultProjectChatSidebarState,
   useProjectChatSidebar,
 } from '@/components/app-shell/ProjectChatSidebarContext'
+import { useAppLanguage } from '@/components/i18n/AppLanguageContext'
 import { ProjectFavoriteButton } from '@/components/project/ProjectFavoriteButton'
 import { ProjectMoreMenu } from '@/components/project/ProjectMoreMenu'
 import {
@@ -119,27 +120,27 @@ function getImageArtifactKind(purpose?: GeneratedImagePurpose): LibraryArtifactK
 const EXPERT_MENU_ITEMS: Array<{
   icon: string
   key: Exclude<ExpertKey, 'aidee'>
-  label: string
+  label: { ENG: string; KOR: string }
 }> = [
   {
     icon: '/assets/icons/chat/strategist.svg',
     key: 'planner',
-    label: '기획전략가',
+    label: { ENG: 'Strategist', KOR: '기획전략가' },
   },
   {
     icon: '/assets/icons/chat/designer.svg',
     key: 'style_designer',
-    label: '스타일디자이너',
+    label: { ENG: 'Designer', KOR: '디자이너' },
   },
   {
     icon: '/assets/icons/chat/engineer.svg',
     key: 'engineer',
-    label: '엔지니어',
+    label: { ENG: 'Engineer', KOR: '엔지니어' },
   },
   {
     icon: '/assets/icons/chat/marketer.svg',
     key: 'marketer',
-    label: '마케터',
+    label: { ENG: 'Marketer', KOR: '마케터' },
   },
 ]
 
@@ -501,6 +502,7 @@ export function ProjectChatContainer({
   userPlanLabel = 'Free',
   userTokenCount = 28,
 }: ProjectChatContainerProps) {
+  const { language } = useAppLanguage()
   const { setSidebarState } = useProjectChatSidebar()
   const didRequestInitialResponseRef = useRef(false)
   const expertMenuRef = useRef<HTMLDivElement | null>(null)
@@ -985,7 +987,7 @@ export function ProjectChatContainer({
               <div className="absolute bottom-[calc(100%+12px)] left-0 z-30 w-48 overflow-hidden rounded-[20px] border-[3px] border-gray-100 bg-white py-1 shadow-[2px_2px_8px_1px_rgba(0,0,0,0.25)]">
                 <div className="flex h-10 items-center px-5">
                   <p className="font-['Inter'] text-xs font-medium leading-6 text-zinc-400">
-                    AI 전문가 선택
+                    {language === 'ENG' ? 'Select AI Mentor' : 'AI 전문가 선택'}
                   </p>
                 </div>
                 <div className="flex flex-col">
@@ -1011,14 +1013,14 @@ export function ProjectChatContainer({
                           width={28}
                           height={28}
                           unoptimized
-                          className={`h-7 w-7 shrink-0 object-contain transition duration-150 group-hover:brightness-100 group-hover:grayscale-0 ${
+                          className={`h-7 w-7 shrink-0 object-contain transition duration-150 group-hover:brightness-100 group-hover:grayscale-0 group-hover:opacity-100 ${
                             isActive
                               ? 'brightness-100 grayscale-0'
                               : 'brightness-0 grayscale opacity-60'
                           }`}
                         />
                         <span className="min-w-0 flex-1 font-['Inter'] text-sm font-semibold leading-6">
-                          {expert.label}
+                          {expert.label[language]}
                         </span>
                       </button>
                     )
@@ -1038,7 +1040,9 @@ export function ProjectChatContainer({
                 type="button"
                 disabled={isPending}
                 aria-expanded={isExpertMenuOpen}
-                aria-label="AI 전문가 선택"
+                aria-label={
+                  language === 'ENG' ? 'Select AI Mentor' : 'AI 전문가 선택'
+                }
                 onClick={() => setIsExpertMenuOpen((open) => !open)}
                 className="mb-1 flex h-[clamp(20px,2.22svh,24px)] w-[clamp(20px,2.22svh,24px)] shrink-0 items-center justify-center rounded-full bg-blue-600 transition hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-300 disabled:cursor-not-allowed disabled:opacity-50"
               >

@@ -8,6 +8,10 @@ import { useEffect, useRef, useState } from 'react'
 import { ProjectFavoriteButton } from '@/components/project/ProjectFavoriteButton'
 import { ProjectMoreMenu } from '@/components/project/ProjectMoreMenu'
 import { ProjectSurveyModal } from '@/components/workspace/ProjectSurveyModal'
+import {
+  useAppLanguage,
+  type AppLanguage,
+} from '@/components/i18n/AppLanguageContext'
 
 const MAX_REFERENCE_FILES = 4
 const MAX_REFERENCE_FILE_SIZE = 10 * 1024 * 1024
@@ -31,14 +35,51 @@ type WorkspaceHomeProps = {
   projects: WorkspaceProject[]
 }
 
-function formatProjectDate(value: string) {
+const workspaceCopy = {
+  ENG: {
+    addFiles: 'Add attachments',
+    dragFiles: 'Drag image files here or click to upload.',
+    dropFiles: 'Drop files here to add them',
+    emptyProjects: 'No projects have been created yet.',
+    fileHelp: 'Up to 4 files · 10MB per file · PNG, JPG, JPEG, WEBP',
+    fileLimitError: 'You can add up to 4 PNG, JPG, JPEG, or WEBP images under 10MB.',
+    headline: 'Start with a simple idea.',
+    ideaError: 'Please enter a product idea first.',
+    ideaLabel: 'Product idea',
+    placeholder: 'What would you like to build?',
+    recentProjects: 'Recent Projects',
+    removeImage: 'Remove image',
+    send: 'Send',
+    subtitle: "Tell us who it's for, its purpose, and what you want to create.",
+    uploadReference: 'Upload reference images if you have any',
+  },
+  KOR: {
+    addFiles: '첨부 파일 추가',
+    dragFiles: '이미지 파일을 드래그 하거나 클릭해서 추가해주세요.',
+    dropFiles: '추가하려면 여기에 파일을 드롭하세요',
+    emptyProjects: '아직 생성된 프로젝트가 없습니다.',
+    fileHelp: '최대 4개 · 파일당 최대 용량 10MB · PNG, JPG, JPEG, WEBP',
+    fileLimitError: 'PNG, JPG, JPEG, WEBP 형식의 10MB 이하 이미지를 최대 4개까지 추가할 수 있습니다.',
+    headline: '간단한 아이디어로 시작해 보세요.',
+    ideaError: '제품 아이디어를 먼저 입력해주세요.',
+    ideaLabel: '제품 아이디어 입력',
+    placeholder: '어떤 제품을 만들고 싶은가요?',
+    recentProjects: '최신 프로젝트',
+    removeImage: '이미지 제거',
+    send: '전송',
+    subtitle: '누구를 위해, 어떤 목적으로, 무엇을 만들고 싶은지 적어주세요.',
+    uploadReference: '참고 이미지가 있다면 업로드해주세요',
+  },
+} satisfies Record<AppLanguage, Record<string, string>>
+
+function formatProjectDate(value: string, language: AppLanguage) {
   const date = new Date(value)
 
   if (Number.isNaN(date.getTime())) {
     return ''
   }
 
-  return new Intl.DateTimeFormat('ko-KR', {
+  return new Intl.DateTimeFormat(language === 'ENG' ? 'en-US' : 'ko-KR', {
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',
@@ -107,6 +148,8 @@ function getStageLabel(stage?: string) {
 }
 
 export function WorkspaceHome({ projects }: WorkspaceHomeProps) {
+  const { language } = useAppLanguage()
+  const copy = workspaceCopy[language]
   const [deletedProjectIds, setDeletedProjectIds] = useState<Set<string>>(
     () => new Set()
   )
@@ -140,7 +183,7 @@ export function WorkspaceHome({ projects }: WorkspaceHomeProps) {
     const filesToAdd = validFiles.slice(0, Math.max(remainingSlots, 0))
 
     if (filesToAdd.length === 0) {
-      setUploadError('PNG, JPG, JPEG, WEBP 형식의 10MB 이하 이미지를 최대 4개까지 추가할 수 있습니다.')
+      setUploadError(copy.fileLimitError)
       return
     }
 
@@ -243,9 +286,9 @@ export function WorkspaceHome({ projects }: WorkspaceHomeProps) {
       onDrop={handleDrop}
     >
       <h1 className="w-full max-w-[1498px] text-center text-3xl font-bold leading-[48px] text-neutral-900 sm:text-4xl sm:leading-[64px]">
-        간단한 아이디어로 시작해 보세요.
+        {copy.headline}
       </h1>
-      <div className="justify-start text-neutral-400 text-lg font-medium font-['Pretendard'] leading-[80px]">누구를 위해, 어떤 목적으로, 무엇을 만들고 싶은지 적어주세요.</div>
+      <div className="justify-start text-neutral-400 text-lg font-medium font-['Pretendard'] leading-[80px]">{copy.subtitle}</div>
 
       <div className="mt-12 flex w-full flex-col lg:w-[calc(100%-clamp(320px,36.04%,568px))]">
         {isUploadOpen ? (
@@ -272,11 +315,10 @@ export function WorkspaceHome({ projects }: WorkspaceHomeProps) {
               />
               <div className="flex flex-col gap-[3px]">
                 <span className="text-sm font-bold leading-6 text-zinc-500">
-                  이미지 파일을 드래그 하거나 클릭해서 추가해주세요.
+                  {copy.dragFiles}
                 </span>
                 <span className="text-xs font-bold leading-6 text-neutral-400">
-                  최대 4개&nbsp;&nbsp;&nbsp;파일당 최대 용량
-                  10MB&nbsp;&nbsp;&nbsp;지원 형식: PNG, JPG, JPEG, WEBP
+                  {copy.fileHelp}
                 </span>
               </div>
             </div>
@@ -313,7 +355,7 @@ export function WorkspaceHome({ projects }: WorkspaceHomeProps) {
                 />
                 <button
                   type="button"
-                  aria-label="이미지 제거"
+                  aria-label={copy.removeImage}
                   onClick={() => removeReferenceImage(index)}
                   className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-black/60 text-[10px] font-bold text-white opacity-0 transition group-hover:opacity-100"
                 >
@@ -329,7 +371,7 @@ export function WorkspaceHome({ projects }: WorkspaceHomeProps) {
           onSubmit={(event) => {
             event.preventDefault()
             if (!prompt.trim()) {
-              setUploadError('제품 아이디어를 먼저 입력해주세요.')
+              setUploadError(copy.ideaError)
               return
             }
 
@@ -345,7 +387,7 @@ export function WorkspaceHome({ projects }: WorkspaceHomeProps) {
           <div className="flex min-w-0 flex-1 items-center gap-3">
             <button
               type="button"
-              aria-label="첨부 파일 추가"
+              aria-label={copy.addFiles}
               aria-expanded={isUploadOpen}
               onClick={() => setIsUploadOpen((current) => !current)}
               className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-neutral-500 transition hover:bg-gray-100"
@@ -360,7 +402,7 @@ export function WorkspaceHome({ projects }: WorkspaceHomeProps) {
               />
             </button>
             <label className="sr-only" htmlFor="workspace-prompt">
-              제품 아이디어 입력
+              {copy.ideaLabel}
             </label>
             <textarea
               ref={promptInputRef}
@@ -369,13 +411,13 @@ export function WorkspaceHome({ projects }: WorkspaceHomeProps) {
               value={prompt}
               onChange={(event) => setPrompt(event.target.value)}
               onKeyDown={handlePromptKeyDown}
-              placeholder="어떤 제품을 만들고 싶은가요?"
+              placeholder={copy.placeholder}
               className="max-h-[120px] flex-1 resize-none border-0 bg-transparent py-1 text-[16px] font-medium leading-6 text-neutral-900 outline-none placeholder:text-neutral-400 sm:text-[18px]"
             />
           </div>
           <button
             type="submit"
-            aria-label="전송"
+            aria-label={copy.send}
             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-blue-600 transition hover:bg-blue-50"
           >
             <Image
@@ -392,7 +434,7 @@ export function WorkspaceHome({ projects }: WorkspaceHomeProps) {
 
       <section className="mt-[clamp(96px,18.333svh,198px)] w-full max-w-[1285px] lg:w-[82.3%]">
         <h2 className="font-['Inter'] text-xl font-semibold leading-[56px] text-neutral-900 sm:text-2xl">
-          최신 프로젝트
+          {copy.recentProjects}
         </h2>
         {visibleProjects.length > 0 ? (
           <div className="grid grid-cols-1 gap-x-2.5 gap-y-[clamp(32px,4.444svh,48px)] sm:grid-cols-2 lg:grid-cols-4">
@@ -410,7 +452,7 @@ export function WorkspaceHome({ projects }: WorkspaceHomeProps) {
           </div>
         ) : (
           <p className="mt-4 rounded-xl border border-gray-200 bg-gray-50 px-5 py-6 text-sm font-medium text-zinc-500">
-            아직 생성된 프로젝트가 없습니다.
+            {copy.emptyProjects}
           </p>
         )}
       </section>
@@ -427,14 +469,13 @@ export function WorkspaceHome({ projects }: WorkspaceHomeProps) {
               className="h-24 w-24 object-contain"
             />
             <p className="mt-8 text-xl font-bold leading-6 text-blue-600">
-              참고 이미지가 있다면 업로드해주세요
+              {copy.uploadReference}
             </p>
             <p className="mt-4 text-sm font-medium leading-4 text-zinc-500">
-              최대 4개&nbsp;&nbsp;파일당 최대 용량 10MB&nbsp;&nbsp;지원 형식:
-              PNG, JPG, JPEG, WEBP
+              {copy.fileHelp}
             </p>
             <p className="mt-14 text-xs font-medium leading-6 text-neutral-700">
-              추가하려면 여기에 파일을 드롭하세요
+              {copy.dropFiles}
             </p>
           </div>
         </div>
@@ -459,6 +500,8 @@ function ProjectCard({
   onDeleted: (projectId: string) => void
   project: WorkspaceProject
 }) {
+  const { language } = useAppLanguage()
+
   return (
     <article className="group relative min-w-0 rounded-xl bg-white outline-none">
       <Link
@@ -477,7 +520,7 @@ function ProjectCard({
             </div>
 
             <div className="flex min-h-0 items-start gap-[7.5%] px-[3.75%] py-[1.25%] font-['Pretendard'] text-xs font-medium leading-5 text-stone-300 2xl:text-sm">
-              <span>{formatProjectDate(project.createdAt)}</span>
+              <span>{formatProjectDate(project.createdAt, language)}</span>
               <span>{getStageLabel(project.recommendedStage)}</span>
             </div>
           </div>
