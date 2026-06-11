@@ -145,7 +145,7 @@ function LanguageDropdown() {
 export function AppShell({ children, user }: AppShellProps) {
   const pathname = usePathname()
   const initial = user.displayName.trim().charAt(0).toUpperCase() || 'A'
-  const tokenCount = user.tokenCount ?? 28
+  const tokenCount = user.tokenCount ?? 400
   const [header, setHeader] = useState<AppShellHeaderState>(
     defaultAppShellHeader
   )

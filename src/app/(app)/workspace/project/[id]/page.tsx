@@ -84,7 +84,7 @@ export default async function WorkspaceProjectPage({
         profileAvatarUrl: profile?.avatar_url,
       })}
       userPlanLabel={formatPlan(profile?.plan)}
-      userTokenCount={28}
+      userTokenCount={400}
     />
   )
 }

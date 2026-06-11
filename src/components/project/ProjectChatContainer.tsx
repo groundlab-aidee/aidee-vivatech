@@ -500,7 +500,7 @@ export function ProjectChatContainer({
   initialIsFavorite = false,
   userAvatarUrl,
   userPlanLabel = 'Free',
-  userTokenCount = 28,
+  userTokenCount = 400,
 }: ProjectChatContainerProps) {
   const { language } = useAppLanguage()
   const { setSidebarState } = useProjectChatSidebar()

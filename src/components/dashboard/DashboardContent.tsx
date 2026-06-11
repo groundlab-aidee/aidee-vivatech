@@ -1,7 +1,7 @@
 'use client'
 
 import Image from 'next/image'
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 
 import {
   DashboardSegmentedControl,
@@ -23,6 +23,7 @@ const tokenBalance = {
 const dashboardCopy = {
   ENG: {
     dashboard: 'Dashboard',
+    emptyFavorites: 'No favorite partners yet.',
     favoritePartner: 'Add to favorite partners',
     feedback: 'Feedbacks from Mentors',
     metrics: ['Questions', 'Answers', 'Design Generated'],
@@ -35,6 +36,7 @@ const dashboardCopy = {
   },
   KOR: {
     dashboard: '대시보드',
+    emptyFavorites: '관심 파트너가 없습니다.',
     favoritePartner: '관심 파트너 등록',
     feedback: '전문가 피드백',
     metrics: ['총 질문', '총 답변', '총 디자인 생성'],
@@ -75,42 +77,74 @@ const expertFeedback = [
 const partners = [
   {
     accent: 'from-blue-100 to-indigo-200',
+    image: '/assets/images/partner1png.png',
     names: { ENG: 'ProtoLabs Korea', KOR: '프로토랩스 코리아' },
     rating: '4.8',
   },
   {
     accent: 'from-cyan-100 to-sky-200',
+    image: '/assets/images/partner2.png',
     names: { ENG: 'Techwin Solution', KOR: '(주)테크윈 솔루션' },
     rating: '4.6',
   },
   {
     accent: 'from-violet-100 to-fuchsia-200',
+    image: '/assets/images/partner3.png',
     names: { ENG: 'Lineworks Direction', KOR: '라인웍스 디렉션' },
     rating: '4.7',
   },
   {
     accent: 'from-[#DDF444]/30 to-[#DDF444]/70',
+    image: '/assets/images/partner4.png',
     names: { ENG: 'Pixel to Product', KOR: '픽셀 투 프로덕트' },
     rating: '4.5',
   },
   {
     accent: 'from-emerald-100 to-teal-200',
+    image: '/assets/images/partner5.png',
     names: { ENG: 'Object Lab', KOR: '오브젝트 랩' },
     rating: '4.9',
   },
   {
     accent: 'from-rose-100 to-pink-200',
+    image: '/assets/images/partner6.png',
     names: { ENG: 'Bold & Brave', KOR: '볼드앤브레이브' },
     rating: '4.4',
   },
   {
     accent: 'from-slate-100 to-slate-300',
+    image: '/assets/images/partner7.png',
     names: { ENG: 'Mindbridge Consulting', KOR: '마인드브릿지 컨설팅' },
     rating: '4.7',
   },
   {
     accent: 'from-[#DDF444]/30 to-[#DDF444]/70',
+    image: '/assets/images/partner8.png',
     names: { ENG: 'Maxtech', KOR: '(주)맥스텍' },
+    rating: '4.6',
+  },
+  {
+    accent: 'from-orange-100 to-amber-200',
+    image: '/assets/images/partner9.png',
+    names: { ENG: 'Partner 9', KOR: '협력 파트너 9' },
+    rating: '4.8',
+  },
+  {
+    accent: 'from-zinc-100 to-zinc-200',
+    image: '/assets/images/partner10.png',
+    names: { ENG: 'Partner 10', KOR: '협력 파트너 10' },
+    rating: '4.5',
+  },
+  {
+    accent: 'from-slate-100 to-gray-200',
+    image: '/assets/images/partner11.png',
+    names: { ENG: 'Partner 11', KOR: '협력 파트너 11' },
+    rating: '4.7',
+  },
+  {
+    accent: 'from-stone-100 to-neutral-200',
+    image: '/assets/images/partner12.png',
+    names: { ENG: 'Partner 12', KOR: '협력 파트너 12' },
     rating: '4.6',
   },
 ] as const
@@ -212,6 +246,37 @@ function FeedbackCard({ language }: { language: AppLanguage }) {
 
 function PartnersCard({ language }: { language: AppLanguage }) {
   const currentCopy = dashboardCopy[language]
+  const [partnerFilter, setPartnerFilter] = useState<'all' | 'favorites'>('all')
+  const [favoritePartners, setFavoritePartners] = useState<Set<string>>(
+    () => new Set([partners[1].names.ENG])
+  )
+  const visiblePartners =
+    partnerFilter === 'favorites'
+      ? partners.filter((partner) =>
+          favoritePartners.has(partner.names.ENG)
+        )
+      : partners
+  const partnerFilterItems: Array<{
+    label: string
+    value: 'all' | 'favorites'
+  }> = currentCopy.partnerFilters.map((label, index) => ({
+    label,
+    value: index === 0 ? 'all' : 'favorites',
+  }))
+
+  function toggleFavorite(partnerId: string) {
+    setFavoritePartners((current) => {
+      const next = new Set(current)
+
+      if (next.has(partnerId)) {
+        next.delete(partnerId)
+      } else {
+        next.add(partnerId)
+      }
+
+      return next
+    })
+  }
 
   return (
     <section className="dashboard-detail-card flex min-h-0 flex-col overflow-hidden rounded-2xl bg-zinc-200 p-[clamp(12px,1.042vw,20px)]">
@@ -220,61 +285,122 @@ function PartnersCard({ language }: { language: AppLanguage }) {
         <div className="w-full sm:w-56">
           <DashboardSegmentedControl
             ariaLabel={currentCopy.partners}
-            items={currentCopy.partnerFilters.map((label, index) => ({
-              label,
-              value: String(index),
-            }))}
-            onChange={() => undefined}
-            value="0"
+            items={partnerFilterItems}
+            onChange={setPartnerFilter}
+            value={partnerFilter}
           />
         </div>
       </div>
       <div className="dashboard-inner-scroll mt-5 min-h-0 flex-1 overflow-y-auto pr-2">
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">
-          {partners.map((partner, index) => {
+        <div className="grid grid-cols-4 gap-2">
+          {visiblePartners.map((partner) => {
             const name = partner.names[language]
+            const partnerId = partner.names.ENG
+            const isFavorite = favoritePartners.has(partnerId)
+            const filledStars = Math.round(Number(partner.rating))
 
             return (
               <article
-                key={partner.names.ENG}
-                className="group overflow-hidden rounded-xl border border-zinc-200 bg-white transition hover:-translate-y-0.5 hover:shadow-md"
+                key={partnerId}
+                className="relative mx-auto aspect-[3/4] w-full max-w-36 min-w-0 overflow-hidden rounded-[clamp(6px,6.944cqw,10px)] bg-white transition [container-type:inline-size] hover:-translate-y-0.5 hover:shadow-md"
               >
                 <div
-                  className={`relative flex h-24 items-center justify-center bg-gradient-to-br ${partner.accent}`}
+                  className={`relative h-[58.333%] overflow-hidden rounded-t-[clamp(6px,6.944cqw,10px)] rounded-b-[clamp(12px,13.889cqw,20px)] border-[clamp(2px,2.083cqw,3px)] border-zinc-200 bg-gradient-to-br ${partner.accent}`}
                 >
-                  <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/80 font-['Inter'] text-lg font-bold text-zinc-700 shadow-sm backdrop-blur">
-                    {String(index + 1).padStart(2, '0')}
-                  </div>
+                  <Image
+                    src={partner.image}
+                    alt=""
+                    fill
+                    sizes="144px"
+                    unoptimized
+                    className="object-cover object-center"
+                  />
                   <button
                     type="button"
                     aria-label={`${name} ${currentCopy.favoritePartner}`}
-                    className="absolute right-3 top-3 text-lg text-white drop-shadow hover:text-rose-500"
+                    aria-pressed={isFavorite}
+                    onClick={() => toggleFavorite(partnerId)}
+                    className="absolute right-[7%] top-[8%] flex h-[clamp(14px,13.889cqw,20px)] w-[clamp(14px,13.889cqw,20px)] items-center justify-center rounded transition hover:bg-black/10"
                   >
-                    ♡
+                    <Image
+                      src={
+                        isFavorite
+                          ? '/assets/icons/dashboard/favorite-filled.svg'
+                          : '/assets/icons/dashboard/favorite-blank.svg'
+                      }
+                      alt=""
+                      width={12}
+                      height={17}
+                      unoptimized
+                      className="h-[clamp(11px,11.111cqw,16px)] w-auto object-contain"
+                    />
                   </button>
                 </div>
-                <div className="p-3">
-                  <h3 className="truncate text-sm font-medium leading-6 text-zinc-700">
+                <div className="absolute inset-x-0 bottom-0 h-[55.208%] rounded-b-[clamp(6px,6.944cqw,10px)] bg-white px-[8.333%] pb-[8.333%] pt-[4.167%]">
+                  <h3 className="truncate font-['Inter'] text-[clamp(9px,9.722cqw,14px)] font-medium leading-[clamp(16px,16.667cqw,24px)] text-zinc-700">
                     {name}
                   </h3>
-                  <div className="mt-1 flex items-center gap-1 text-xs">
-                    <span className="tracking-wider text-amber-400">★★★★★</span>
-                    <span className="font-medium text-zinc-400">
+                  <div className="mt-[1%] flex h-[clamp(8px,8.333cqw,12px)] min-w-0 items-center gap-[clamp(2px,2.778cqw,4px)]">
+                    <div className="flex items-center gap-[1px]">
+                      {Array.from({ length: 5 }, (_, index) => (
+                        <Image
+                          key={index}
+                          src={
+                            index < filledStars
+                              ? '/assets/icons/dashboard/star-filled.svg'
+                              : '/assets/icons/dashboard/star-blank.svg'
+                          }
+                          alt=""
+                          width={14}
+                          height={13}
+                          unoptimized
+                          className="h-[clamp(8px,8.333cqw,12px)] w-[clamp(9px,9.722cqw,14px)] object-contain"
+                        />
+                      ))}
+                    </div>
+                    <span className="font-['Inter'] text-[clamp(8px,6.944cqw,10px)] font-medium leading-none text-zinc-500">
                       {partner.rating}
                     </span>
                   </div>
-                  <div className="mt-3 flex gap-2">
-                    <span className="rounded-md bg-blue-50 px-2 py-1 text-[11px] font-medium text-blue-600">
-                      {currentCopy.productDesign}
-                    </span>
-                    <span className="rounded-md bg-zinc-100 px-2 py-1 text-[11px] font-medium text-zinc-500">
-                      {currentCopy.development}
-                    </span>
+                  <div className="mt-[11%] flex items-center gap-[clamp(8px,9.722cqw,14px)]">
+                    <button
+                      type="button"
+                      aria-label={`${name} homepage`}
+                      className="flex h-[clamp(11px,11.111cqw,16px)] w-[clamp(11px,11.111cqw,16px)] items-center justify-center"
+                    >
+                      <Image
+                        src="/assets/icons/dashboard/homepage.svg"
+                        alt=""
+                        width={20}
+                        height={20}
+                        unoptimized
+                        className="h-full w-full object-contain"
+                      />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`${name} contact`}
+                      className="flex h-[clamp(11px,11.111cqw,16px)] w-[clamp(11px,11.111cqw,16px)] items-center justify-center"
+                    >
+                      <Image
+                        src="/assets/icons/dashboard/contact.svg"
+                        alt=""
+                        width={18}
+                        height={18}
+                        unoptimized
+                        className="h-full w-full object-contain"
+                      />
+                    </button>
                   </div>
                 </div>
               </article>
             )
           })}
+          {visiblePartners.length === 0 ? (
+            <div className="col-span-4 flex min-h-40 items-center justify-center rounded-xl bg-white text-center text-sm font-medium text-zinc-400">
+              {currentCopy.emptyFavorites}
+            </div>
+          ) : null}
         </div>
       </div>
     </section>
