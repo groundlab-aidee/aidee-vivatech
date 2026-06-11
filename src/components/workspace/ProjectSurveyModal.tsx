@@ -4,6 +4,11 @@ import { useRouter } from 'next/navigation'
 import type { ReactNode } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
+import {
+  useAppLanguage,
+  type AppLanguage,
+} from '@/components/i18n/AppLanguageContext'
+
 type ProjectSurveyModalProps = {
   initialIdea: string
   initialReferenceImages: File[]
@@ -26,25 +31,73 @@ type SurveyData = {
   usage: string
 }
 
-const categoryOptions = [
-  '조명',
-  '인테리어 소품',
-  '가구',
-  '패션·악세서리',
-  '디지털 기기',
-  '기타 (직접 입력)',
+type SurveyOption = {
+  label: Record<AppLanguage, string>
+  value: string
+}
+
+const categoryOptions: SurveyOption[] = [
+  { label: { ENG: 'Lighting', KOR: '조명' }, value: '조명' },
+  { label: { ENG: 'Home decor', KOR: '인테리어 소품' }, value: '인테리어 소품' },
+  { label: { ENG: 'Furniture', KOR: '가구' }, value: '가구' },
+  { label: { ENG: 'Fashion & accessories', KOR: '패션·악세서리' }, value: '패션·악세서리' },
+  { label: { ENG: 'Digital devices', KOR: '디지털 기기' }, value: '디지털 기기' },
+  { label: { ENG: 'Other (please specify)', KOR: '기타 (직접 입력)' }, value: '기타 (직접 입력)' },
 ]
 
-const featureOptions = [
-  '단순 구조물',
-  '빛·색 변화',
-  '센서 감지',
-  '조립·분해 가능',
-  'IoT / 스마트 기능',
-  '기타 (직접 입력)',
+const featureOptions: SurveyOption[] = [
+  { label: { ENG: 'Simple structure', KOR: '단순 구조물' }, value: '단순 구조물' },
+  { label: { ENG: 'Light or color changes', KOR: '빛·색 변화' }, value: '빛·색 변화' },
+  { label: { ENG: 'Sensor detection', KOR: '센서 감지' }, value: '센서 감지' },
+  { label: { ENG: 'Easy assembly and disassembly', KOR: '조립·분해 가능' }, value: '조립·분해 가능' },
+  { label: { ENG: 'IoT / smart features', KOR: 'IoT / 스마트 기능' }, value: 'IoT / 스마트 기능' },
+  { label: { ENG: 'Other (please specify)', KOR: '기타 (직접 입력)' }, value: '기타 (직접 입력)' },
 ]
 
-const durationOptions = ['1주', '2주', '1개월', '3개월', '6개월', '1년', '1년 +']
+const durationOptions: SurveyOption[] = [
+  { label: { ENG: '1 week', KOR: '1주' }, value: '1주' },
+  { label: { ENG: '2 weeks', KOR: '2주' }, value: '2주' },
+  { label: { ENG: '1 month', KOR: '1개월' }, value: '1개월' },
+  { label: { ENG: '3 months', KOR: '3개월' }, value: '3개월' },
+  { label: { ENG: '6 months', KOR: '6개월' }, value: '6개월' },
+  { label: { ENG: '1 year', KOR: '1년' }, value: '1년' },
+  { label: { ENG: 'More than 1 year', KOR: '1년 +' }, value: '1년 +' },
+]
+
+const surveyCopy = {
+  ENG: {
+    back: 'Back',
+    cancel: 'Cancel',
+    categoryPlaceholder: 'Please enter a product category.',
+    close: 'Close project survey',
+    create: 'Create project',
+    creating: 'Creating...',
+    createError: 'Failed to create the project.',
+    createdProjectIdError: 'The newly created project ID could not be found.',
+    featurePlaceholder: 'Please enter the features you need.',
+    max: 'Max',
+    min: 'Min',
+    next: 'Next',
+    subtitle: 'Your answers will be saved as the project requirements.',
+    title: 'Set Project Goals',
+  },
+  KOR: {
+    back: '이전',
+    cancel: '취소',
+    categoryPlaceholder: '카테고리를 입력해주세요.',
+    close: '프로젝트 생성 닫기',
+    create: '프로젝트 생성',
+    creating: '생성 중...',
+    createError: '프로젝트 생성에 실패했습니다.',
+    createdProjectIdError: '생성된 프로젝트 ID를 확인할 수 없습니다.',
+    featurePlaceholder: '필요한 기능을 입력해주세요.',
+    max: '최대',
+    min: '최소',
+    next: '다음',
+    subtitle: '답변은 프로젝트 requirements로 저장됩니다.',
+    title: '프로젝트 목표 설정',
+  },
+} as const
 
 const maxReferenceFiles = 4
 const totalMaxBudget = 10000
@@ -55,6 +108,8 @@ export function ProjectSurveyModal({
   onClose,
   onCreated,
 }: ProjectSurveyModalProps) {
+  const { language } = useAppLanguage()
+  const copy = surveyCopy[language]
   const router = useRouter()
   const scrollContainerRef = useRef<HTMLDivElement | null>(null)
   const [step, setStep] = useState(1)
@@ -142,13 +197,13 @@ export function ProjectSurveyModal({
       }
 
       if (!response.ok) {
-        throw new Error(result.error || '프로젝트 생성에 실패했습니다.')
+        throw new Error(result.error || copy.createError)
       }
 
       const projectId = result.project?.id
 
       if (!projectId) {
-        throw new Error('생성된 프로젝트 ID를 확인할 수 없습니다.')
+        throw new Error(copy.createdProjectIdError)
       }
 
       onCreated?.()
@@ -157,7 +212,7 @@ export function ProjectSurveyModal({
       onClose()
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : '프로젝트 생성에 실패했습니다.'
+        error instanceof Error ? error.message : copy.createError
       setErrorMessage(message)
     } finally {
       setIsSubmitting(false)
@@ -181,16 +236,16 @@ export function ProjectSurveyModal({
     <div className="fixed inset-0 z-[80] flex items-center justify-center px-4">
       <button
         type="button"
-        aria-label="프로젝트 생성 닫기"
+        aria-label={copy.close}
         className="absolute inset-0 bg-black/40 backdrop-blur-sm"
         onClick={onClose}
       />
       <section className="relative flex max-h-[86svh] w-full max-w-[560px] flex-col overflow-hidden rounded-[28px] bg-white shadow-2xl">
         <header className="flex shrink-0 items-center justify-between border-b border-zinc-100 px-6 py-5">
           <div>
-            <h2 className="text-xl font-bold text-zinc-800">프로젝트 목표 설정</h2>
+            <h2 className="text-xl font-bold text-zinc-800">{copy.title}</h2>
             <p className="mt-1 text-sm font-medium text-zinc-400">
-              답변은 프로젝트 requirements로 저장됩니다.
+              {copy.subtitle}
             </p>
           </div>
           <div className="text-sm font-semibold">
@@ -203,6 +258,7 @@ export function ProjectSurveyModal({
           {step === 1 ? (
             <StepOne
               data={data}
+              language={language}
               onChange={updateData}
               onToggleCategory={(value) => toggleListValue('categories', value)}
             />
@@ -210,6 +266,7 @@ export function ProjectSurveyModal({
           {step === 2 ? (
             <StepTwo
               data={data}
+              language={language}
               onChange={updateData}
               onToggleFeature={(value) => toggleListValue('features', value)}
             />
@@ -235,7 +292,7 @@ export function ProjectSurveyModal({
               }}
               className="flex-1 rounded-full bg-zinc-50 py-4 text-sm font-bold text-zinc-400 transition hover:bg-zinc-100"
             >
-              {step === 1 ? '취소' : '이전'}
+              {step === 1 ? copy.cancel : copy.back}
             </button>
             <button
               type="button"
@@ -247,7 +304,7 @@ export function ProjectSurveyModal({
                   : 'cursor-not-allowed bg-blue-100 text-white'
               }`}
             >
-              {isSubmitting ? '생성 중...' : step === 2 ? '프로젝트 생성' : '다음'}
+              {isSubmitting ? copy.creating : step === 2 ? copy.create : copy.next}
             </button>
           </div>
         </footer>
@@ -258,25 +315,47 @@ export function ProjectSurveyModal({
 
 function StepOne({
   data,
+  language,
   onChange,
   onToggleCategory,
 }: {
   data: SurveyData
+  language: AppLanguage
   onChange: (next: Partial<SurveyData>) => void
   onToggleCategory: (value: string) => void
 }) {
+  const copy = surveyCopy[language]
+
   return (
     <div className="flex flex-col gap-8">
-      <SurveyField label="1. 제품 개발의 어느 단계까지 목표로 하고 계신가요?">
+      <SurveyField
+        label={
+          language === 'ENG'
+            ? '1. How far would you like to take the product development process?'
+            : '1. 제품 개발의 어느 단계까지 목표로 하고 계신가요?'
+        }
+      >
         <RadioGroup
+          language={language}
           name="goal"
           onChange={(value) => onChange({ goal: value })}
-          options={['아이디어 구체화', '2D·3D 시각화', '시제품 제작 및 사업화']}
+          options={[
+            { label: { ENG: 'Refine the idea', KOR: '아이디어 구체화' }, value: '아이디어 구체화' },
+            { label: { ENG: '2D / 3D visualization', KOR: '2D·3D 시각화' }, value: '2D·3D 시각화' },
+            { label: { ENG: 'Prototype development and commercialization', KOR: '시제품 제작 및 사업화' }, value: '시제품 제작 및 사업화' },
+          ]}
           value={data.goal}
         />
       </SurveyField>
-      <SurveyField label="2. 어떤 카테고리의 제품인가요?">
+      <SurveyField
+        label={
+          language === 'ENG'
+            ? '2. What product category does your idea belong to?'
+            : '2. 어떤 카테고리의 제품인가요?'
+        }
+      >
         <CheckboxGroup
+          language={language}
           options={categoryOptions}
           selected={data.categories}
           onToggle={onToggleCategory}
@@ -285,12 +364,15 @@ function StepOne({
           <TextInput
             value={data.otherCategory}
             onChange={(value) => onChange({ otherCategory: value })}
-            placeholder="카테고리를 입력해주세요."
+            placeholder={copy.categoryPlaceholder}
           />
         ) : null}
       </SurveyField>
-      <SurveyField label="3. 예상 예산 범위">
+      <SurveyField
+        label={language === 'ENG' ? '3. Estimated budget range' : '3. 예상 예산 범위'}
+      >
         <BudgetRangeSlider
+          language={language}
           maxBudget={data.maxBudget}
           minBudget={data.minBudget}
           onChange={onChange}
@@ -302,25 +384,46 @@ function StepOne({
 
 function StepTwo({
   data,
+  language,
   onChange,
   onToggleFeature,
 }: {
   data: SurveyData
+  language: AppLanguage
   onChange: (next: Partial<SurveyData>) => void
   onToggleFeature: (value: string) => void
 }) {
   return (
     <div className="flex flex-col gap-8">
-      <SurveyField label="4. 제품의 대략적인 크기는 어느 정도인가요?">
+      <SurveyField
+        label={
+          language === 'ENG'
+            ? '4. Approximately how large will the product be?'
+            : '4. 제품의 대략적인 크기는 어느 정도인가요?'
+        }
+      >
         <RadioGroup
+          language={language}
           name="size"
           onChange={(value) => onChange({ size: value })}
-          options={['손바닥 크기', '책상 위 소형 제품', '가구/설비 크기', '아직 미정']}
+          options={[
+            { label: { ENG: 'Palm-sized', KOR: '손바닥 크기' }, value: '손바닥 크기' },
+            { label: { ENG: 'Small desktop product', KOR: '책상 위 소형 제품' }, value: '책상 위 소형 제품' },
+            { label: { ENG: 'Furniture or equipment-sized', KOR: '가구/설비 크기' }, value: '가구/설비 크기' },
+            { label: { ENG: 'Not decided yet', KOR: '아직 미정' }, value: '아직 미정' },
+          ]}
           value={data.size}
         />
       </SurveyField>
-      <SurveyField label="5. 중요하게 생각하는 기능을 선택해주세요.">
+      <SurveyField
+        label={
+          language === 'ENG'
+            ? '5. Select the features that are important to you.'
+            : '5. 중요하게 생각하는 기능을 선택해주세요.'
+        }
+      >
         <CheckboxGroup
+          language={language}
           options={featureOptions}
           selected={data.features}
           onToggle={onToggleFeature}
@@ -329,25 +432,39 @@ function StepTwo({
           <TextInput
             value={data.otherFeature}
             onChange={(value) => onChange({ otherFeature: value })}
-            placeholder="필요한 기능을 입력해주세요."
+            placeholder={surveyCopy[language].featurePlaceholder}
           />
         ) : null}
       </SurveyField>
-      <SurveyField label="6. 희망 개발 기간은 어느 정도인가요?">
+      <SurveyField
+        label={
+          language === 'ENG'
+            ? '6. What is your preferred development timeline?'
+            : '6. 희망 개발 기간은 어느 정도인가요?'
+        }
+      >
         <DurationSelector
+          language={language}
           onChange={(value) => onChange({ duration: value })}
           value={data.duration}
         />
       </SurveyField>
-      <SurveyField label="7. 사용 용도가 어떻게 되시나요?">
+      <SurveyField
+        label={
+          language === 'ENG'
+            ? '7. How do you plan to use the product?'
+            : '7. 사용 용도가 어떻게 되시나요?'
+        }
+      >
         <RadioGroup
+          language={language}
           name="usage"
           onChange={(value) => onChange({ usage: value })}
           options={[
-            '개인 소장 및 전시용',
-            '대량 판매',
-            '크라우드 펀딩',
-            '브랜드 런칭',
+            { label: { ENG: 'Personal use or display', KOR: '개인 소장 및 전시용' }, value: '개인 소장 및 전시용' },
+            { label: { ENG: 'Mass-market sales', KOR: '대량 판매' }, value: '대량 판매' },
+            { label: { ENG: 'Crowdfunding', KOR: '크라우드 펀딩' }, value: '크라우드 펀딩' },
+            { label: { ENG: 'Brand launch', KOR: '브랜드 런칭' }, value: '브랜드 런칭' },
           ]}
           value={data.usage}
         />
@@ -356,18 +473,22 @@ function StepTwo({
   )
 }
 
-function formatBudget(value: number) {
+function formatBudget(value: number, language: AppLanguage) {
   if (value >= totalMaxBudget) {
-    return '1억 원'
+    return language === 'ENG' ? '₩100M+' : '1억 원'
   }
 
-  return `${value.toLocaleString()} 만 원`
+  return language === 'ENG'
+    ? `₩${value / 100}M`
+    : `${value.toLocaleString()} 만 원`
 }
 
 function DurationSelector({
+  language,
   onChange,
   value,
 }: {
+  language: AppLanguage
   onChange: (value: string) => void
   value: string
 }) {
@@ -375,16 +496,16 @@ function DurationSelector({
     <div className="flex flex-wrap gap-1.5">
       {durationOptions.map((duration) => (
         <button
-          key={duration}
+          key={duration.value}
           type="button"
-          onClick={() => onChange(duration)}
+          onClick={() => onChange(duration.value)}
           className={`rounded-full px-3.5 py-1.5 text-xs font-semibold transition-all ${
-            value === duration
+            value === duration.value
               ? 'bg-blue-100 text-blue-600 outline outline-1 outline-blue-600'
               : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
           }`}
         >
-          {duration}
+          {duration.label[language]}
         </button>
       ))}
     </div>
@@ -392,10 +513,12 @@ function DurationSelector({
 }
 
 function BudgetRangeSlider({
+  language,
   maxBudget,
   minBudget,
   onChange,
 }: {
+  language: AppLanguage
   maxBudget: number
   minBudget: number
   onChange: (next: Partial<SurveyData>) => void
@@ -440,8 +563,16 @@ function BudgetRangeSlider({
         />
       </div>
       <div className="flex items-center justify-between gap-3">
-        <BudgetValue label="최소" value={minBudget} />
-        <BudgetValue label="최대" value={maxBudget} />
+        <BudgetValue
+          label={surveyCopy[language].min}
+          language={language}
+          value={minBudget}
+        />
+        <BudgetValue
+          label={surveyCopy[language].max}
+          language={language}
+          value={maxBudget}
+        />
       </div>
       <style jsx>{`
         .custom-slider-handle::-webkit-slider-thumb {
@@ -470,7 +601,15 @@ function BudgetRangeSlider({
   )
 }
 
-function BudgetValue({ label, value }: { label: string; value: number }) {
+function BudgetValue({
+  label,
+  language,
+  value,
+}: {
+  label: string
+  language: AppLanguage
+  value: number
+}) {
   return (
     <div className="flex min-w-0 items-center gap-2">
       <span className="text-[10px] font-medium leading-4 text-zinc-400">
@@ -478,7 +617,7 @@ function BudgetValue({ label, value }: { label: string; value: number }) {
       </span>
       <div className="rounded-lg border border-gray-100 bg-white px-3 py-1.5 shadow-sm">
         <span className="whitespace-nowrap text-sm font-medium text-neutral-900">
-          {formatBudget(value)}
+          {formatBudget(value, language)}
         </span>
       </div>
     </div>
@@ -501,31 +640,35 @@ function SurveyField({
 }
 
 function RadioGroup({
+  language,
   name,
   onChange,
   options,
   value,
 }: {
+  language: AppLanguage
   name: string
   onChange: (value: string) => void
-  options: string[]
+  options: SurveyOption[]
   value: string
 }) {
   return (
     <div className="flex flex-col gap-2">
       {options.map((option) => (
         <label
-          key={option}
+          key={option.value}
           className="flex cursor-pointer items-center gap-3 rounded-xl px-3 py-2 transition hover:bg-zinc-50"
         >
           <input
             type="radio"
             name={name}
-            checked={value === option}
-            onChange={() => onChange(option)}
+            checked={value === option.value}
+            onChange={() => onChange(option.value)}
             className="h-4 w-4 accent-blue-600"
           />
-          <span className="text-sm font-medium text-zinc-600">{option}</span>
+          <span className="text-sm font-medium text-zinc-600">
+            {option.label[language]}
+          </span>
         </label>
       ))}
     </div>
@@ -533,28 +676,32 @@ function RadioGroup({
 }
 
 function CheckboxGroup({
+  language,
   onToggle,
   options,
   selected,
 }: {
+  language: AppLanguage
   onToggle: (value: string) => void
-  options: string[]
+  options: SurveyOption[]
   selected: string[]
 }) {
   return (
     <div className="grid gap-2 sm:grid-cols-2">
       {options.map((option) => (
         <label
-          key={option}
+          key={option.value}
           className="flex cursor-pointer items-center gap-3 rounded-xl px-3 py-2 transition hover:bg-zinc-50"
         >
           <input
             type="checkbox"
-            checked={selected.includes(option)}
-            onChange={() => onToggle(option)}
+            checked={selected.includes(option.value)}
+            onChange={() => onToggle(option.value)}
             className="h-4 w-4 accent-blue-600"
           />
-          <span className="text-sm font-medium text-zinc-600">{option}</span>
+          <span className="text-sm font-medium text-zinc-600">
+            {option.label[language]}
+          </span>
         </label>
       ))}
     </div>
