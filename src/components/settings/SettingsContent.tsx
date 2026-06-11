@@ -66,7 +66,7 @@ const plans: Record<SettingsPlanId, { ENG: PlanCopy; KOR: PlanCopy }> = {
     },
     KOR: {
       buttonLabel: '플랜 업그레이드 하기',
-      description: '첫 제품 아이디어를 가병게 정리하는 플랜',
+      description: '첫 제품 아이디어를 가볍게 정리하는 플랜',
       features: [
         '매월 3,000 토큰 지급',
         '제품디자인 개발 기획안 3~4개 생성 가능',
