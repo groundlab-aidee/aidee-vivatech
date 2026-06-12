@@ -21,6 +21,8 @@
   --color-foreground: var(--foreground);
   --font-sans: "Geist", "Geist Fallback", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "Geist Mono", "Geist Mono Fallback", ui-monospace, monospace;
+  --font-inter: var(--font-inter), "Inter", sans-serif;
+  --font-pretendard: "Pretendard", sans-serif;
 }
 
 @media (prefers-color-scheme: dark) {

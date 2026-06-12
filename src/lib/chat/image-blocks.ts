@@ -1,8 +1,18 @@
 export type GeneratedImagePurpose =
   | 'persona'
   | 'style_reference'
+  | 'moodboard_candidate'
   | 'design'
   | 'thumbnail'
+
+export type UnsplashImageMeta = {
+  id: string
+  url: string
+  thumb_url: string
+  photographer_name: string
+  photographer_url: string
+  unsplash_page_url: string
+}
 
 export type GeneratedImageBlock = {
   images: string[]
@@ -10,6 +20,7 @@ export type GeneratedImageBlock = {
   prompt: string
   purpose?: GeneratedImagePurpose
   selectedImageIndex?: number | null
+  unsplashMeta?: UnsplashImageMeta[]
 }
 
 export function appendGeneratedImagesBlock({
@@ -76,6 +87,9 @@ export function extractGeneratedImagesBlock(text: string) {
           typeof parsed.selectedImageIndex === 'number'
             ? parsed.selectedImageIndex
             : null,
+        unsplashMeta: Array.isArray(parsed.unsplashMeta)
+          ? (parsed.unsplashMeta as UnsplashImageMeta[])
+          : undefined,
       } satisfies GeneratedImageBlock,
     }
   } catch {

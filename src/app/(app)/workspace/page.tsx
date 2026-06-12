@@ -39,6 +39,7 @@ function mapProject(row: ProjectRow): WorkspaceProject {
       'recommendedStage',
     ]),
     summary: getStringFromPath(row.requirements, ['generated', 'summary']),
+    thumbnailUrl: getStringFromPath(row.requirements, ['thumbnail_image_url']),
     title,
   }
 }

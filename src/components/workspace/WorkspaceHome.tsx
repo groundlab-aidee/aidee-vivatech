@@ -28,6 +28,7 @@ export type WorkspaceProject = {
   isFavorite?: boolean
   recommendedStage?: string
   summary?: string
+  thumbnailUrl?: string
   title: string
 }
 
@@ -508,7 +509,17 @@ function ProjectCard({
         href={`/workspace/project/${project.id}`}
         className="block rounded-xl outline-none"
       >
-        <div className="relative aspect-[320/208] overflow-hidden rounded-xl border-2 border-gray-200 bg-gray-200 shadow-[0px_8px_24px_6px_rgba(0,0,0,0.12)] transition group-hover:-translate-y-0.5 group-hover:shadow-[0px_10px_28px_8px_rgba(0,0,0,0.14)]" />
+        <div className="relative aspect-[320/208] overflow-hidden rounded-xl border-2 border-gray-200 bg-gray-200 shadow-[0px_8px_24px_6px_rgba(0,0,0,0.12)] transition group-hover:-translate-y-0.5 group-hover:shadow-[0px_10px_28px_8px_rgba(0,0,0,0.14)]">
+          {project.thumbnailUrl && (
+            <Image
+              src={project.thumbnailUrl}
+              alt={project.title}
+              fill
+              className="object-cover"
+              sizes="(max-width: 768px) 50vw, 25vw"
+            />
+          )}
+        </div>
 
         <div className="relative aspect-[320/64] overflow-hidden rounded-xl bg-white">
           <div className="grid h-full grid-rows-[56.25%_43.75%]">

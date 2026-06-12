@@ -128,7 +128,7 @@ async function generateProjectInfo(survey: SurveyData) {
     '반환 스키마:',
     '{',
     '  "title": "프로젝트 제목 20자 이내",',
-    '  "summary": "한 줄 요약",',
+    '  "summary": "사용자의 아이디어를 제품 개발 관점의 자연스럽고 공식적인 한 문장으로 정리. 반드시 ~ 개발이 목표입니다. 형태로 작성",',
     '  "goal": "프로젝트 목표",',
     '  "keyRequirements": ["주요 요구사항"],',
     '  "recommendedStage": "추천 진행 단계",',

@@ -206,16 +206,18 @@ export function AppSidebar() {
 function SidebarLogo() {
   return (
     <div className="flex h-[clamp(76px,10.94svh,112px)] w-full items-center justify-between px-[clamp(24px,3.9svh,40px)] pb-[clamp(22px,3.9svh,40px)] pt-[clamp(30px,4.69svh,48px)]">
-      <Image
-        src="/assets/logos/aidee-logo-blue.svg"
-        alt="Aidee"
-        width={115}
-        height={40}
-        priority
-        unoptimized
-        className="h-[clamp(40px,6.25svh,64px)] w-auto object-contain"
-        style={{ width: 'auto' }}
-      />
+      <Link href="/workspace">
+        <Image
+          src="/assets/logos/aidee-logo-blue.svg"
+          alt="Aidee"
+          width={115}
+          height={40}
+          priority
+          unoptimized
+          className="h-[clamp(40px,6.25svh,64px)] w-auto object-contain"
+          style={{ width: 'auto' }}
+        />
+      </Link>
       <div className="h-[clamp(30px,3.9svh,40px)] w-[clamp(30px,3.9svh,40px)]" />
     </div>
   )

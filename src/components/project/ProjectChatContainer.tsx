@@ -22,10 +22,13 @@ import {
   getExpertDefinition,
   type ExpertKey,
 } from '@/lib/chat/experts'
-import type { GeneratedImagePurpose } from '@/lib/chat/image-blocks'
+import type { GeneratedImagePurpose, UnsplashImageMeta } from '@/lib/chat/image-blocks'
 import type { PersonaCardData } from '@/lib/chat/persona-card'
-import { extractRfpJsonBlock } from '@/lib/chat/rfp'
-import type { StageKey } from '@/lib/chat/stages'
+import { MoodboardCandidates } from '@/components/chat/MoodboardCandidates'
+import { MoodboardGrid, type MoodboardGridImage } from '@/components/chat/MoodboardGrid'
+import { MoodboardModal } from '@/components/moodboard/MoodboardModal'
+import { extractRfpJsonBlock, type RfpDocument } from '@/lib/chat/rfp'
+import { inferStageMetaFromText, type StageKey } from '@/lib/chat/stages'
 
 type ProjectChatContainerProps = {
   initialMessages: ChatMessageRecord[]
@@ -57,6 +60,26 @@ type DirectionArtifactKind =
   | 'consumption_keywords'
   | 'market_size'
 
+type MarketSizingData = {
+  description: string
+  forecasts: Array<{ label: string; value: number }>
+  goal: string
+  goalDescription: string
+  markets: Array<{
+    code: 'TAM' | 'SAM' | 'SOM'
+    description: string
+    label: string
+    value: string
+  }>
+  summary: string
+}
+
+type ConsumptionKeywordData = {
+  description: string
+  keywords: string[]
+  summary: string
+}
+
 type KeywordArtifactKind = 'experience_keywords' | 'relationship_keywords'
 
 type KeywordCardData = {
@@ -64,6 +87,12 @@ type KeywordCardData = {
   keywords: string[]
   kind: KeywordArtifactKind
   title: string
+}
+
+type ProblemStatementsData = {
+  situation: string
+  pain: string
+  need: string
 }
 
 type ChatChoice = {
@@ -158,13 +187,13 @@ const STAGE_EXPERTS: Record<StageKey, ExpertKey[]> = {
 
 const LIBRARY_ARTIFACTS: LibraryArtifact[] = [
   { kind: 'project_direction', title: 'Project Direction' },
-  { kind: 'persona', title: 'Persona' },
+  { kind: 'problem_statements', title: 'Problem Statements' },
   { kind: 'experience_keywords', title: 'Keywords: Experience' },
   { kind: 'relationship_keywords', title: 'Keywords: Relationship' },
-  { kind: 'problem_statements', title: 'Problem Statements' },
+  { kind: 'persona', title: 'Persona' },
   { kind: 'market_sizing', title: 'TAM SAM SOM' },
-  { kind: 'brand_positioning', title: 'Positioning Map: Brand' },
   { kind: 'consumption_keywords', title: 'Keywords: Consumption' },
+  { kind: 'brand_positioning', title: 'Positioning Map: Brand' },
   { kind: 'mood_board', title: 'Mood Board' },
   { kind: 'rendering', title: '3D Design: Rendering' },
   { kind: 'modeling', title: '3D Design: Modeling' },
@@ -293,7 +322,13 @@ function stripInternalBlocksForDisplay(text: string) {
       /\n?#\s*Project\s*(?:Card|Direction)\s*[\s\S]*?(?=\n\s*제품의\s*구체적인\s*모습|\n\s*형태,\s*색감|\s*$)/gi,
       ''
     )
+    .replace(/\n?<CLICK_BUTTON[^>]*>/gi, '')
+    .replace(/\n?<\[BUTTON[^\]]*\][^>]*>/gi, '')
     .replace(/\n?\[시스템\s*참고:[\s\S]*?\]/gi, '')
+    .replace(
+      /<<\s*\/?\s*AIDEE(?:[-_ ][A-Z0-9_-]+)*(?:\s*:[^>]*)?\s*>>/gi,
+      ''
+    )
     .replace(/\n{3,}/g, '\n\n')
     .trim()
 }
@@ -304,10 +339,276 @@ function hasDirectionWidgets(content: string) {
   )
 }
 
+function getDirectionArtifactKind(content: string): DirectionArtifactKind | null {
+  const normalized = stripInternalBlocksForDisplay(content)
+  const normalizedLines = normalized
+    .split('\n')
+    .map((line) =>
+      line
+        .trim()
+        .replace(/^#{1,6}\s*/, '')
+        .replace(/^\*{1,2}|\*{1,2}$/g, '')
+        .replace(/^_{1,2}|_{1,2}$/g, '')
+        .trim()
+    )
+
+  if (normalizedLines.some((line) => /^Tam\s+Sam\s+Som\b/i.test(line))) {
+    return 'market_size'
+  }
+
+  if (
+    normalizedLines.some((line) =>
+      /^(?:Keywords?\s*[:：]\s*Consumption|소비\s*트렌드(?:\s*(?:리서치|분석|키워드))?)\b/i.test(
+        line
+      )
+    )
+  ) {
+    return 'consumption_keywords'
+  }
+
+  if (
+    normalizedLines.some((line) =>
+      /^Positioning\s+Map\s*[:：]\s*Brand\b/i.test(line)
+    )
+  ) {
+    return 'brand_positioning'
+  }
+
+  return null
+}
+
+function extractConsumptionKeywordData(
+  content: string,
+  { force = false } = {}
+): ConsumptionKeywordData | null {
+  if (!force && getDirectionArtifactKind(content) !== 'consumption_keywords') {
+    return null
+  }
+
+  const cleaned = stripInternalBlocksForDisplay(content)
+    .replace(
+      /^\s*(?:#{1,6}\s*)?(?:\*{1,2}|_{1,2})?(?:Keywords?\s*[:：]\s*Consumption|소비\s*트렌드(?:\s*(?:리서치|분석|키워드))?)(?:\*{1,2}|_{1,2})?\s*/im,
+      ''
+    )
+    .trim()
+  const lines = cleaned
+    .split('\n')
+    .map((line) =>
+      line
+        .replace(/^[-*•]\s*/, '')
+        .replace(/\*\*/g, '')
+        .trim()
+    )
+    .filter(Boolean)
+  const stripLabel = (line: string) =>
+    line
+      .replace(
+        /^(?:한\s*줄\s*요약|요약|설명(?:글)?|소비\s*트렌드|키워드(?:\s*\d+개)?)\s*[:：-]\s*/i,
+        ''
+      )
+      .trim()
+  const summaryLine =
+    lines.find((line) => /^(?:한\s*줄\s*요약|요약|소비\s*트렌드)\s*[:：-]/i.test(line)) ??
+    lines.find((line) => line.length >= 15 && line.length <= 90) ??
+    ''
+  const descriptiveLines = lines
+    .filter(
+      (line) =>
+        line !== summaryLine &&
+        line.length >= 20 &&
+        !/^(?:키워드|keywords?)\s*[:：-]?/i.test(line)
+    )
+    .map(stripLabel)
+  const keywordCandidates = lines
+    .flatMap((line) => {
+      const withoutLabel = line.replace(/^(?:키워드|keywords?)(?:\s*\d+개)?\s*[:：-]?\s*/i, '')
+      const parts = withoutLabel.split(/[,/·#|]|\s{2,}/)
+
+      if (parts.length === 1 && withoutLabel.length > 20) {
+        return []
+      }
+
+      return parts
+    })
+    .map((item) => item.replace(/^\d+[.)]\s*/, '').replace(/[.!?。！？]+$/g, '').trim())
+    .filter(
+      (item) =>
+        item.length >= 2 &&
+        item.length <= 20 &&
+        !/^(?:요약|설명|키워드|소비\s*트렌드|keywords?|consumption)$/i.test(item)
+    )
+  const keywords = Array.from(new Set(keywordCandidates)).slice(0, 30)
+
+  return {
+    description:
+      descriptiveLines.slice(0, 4).join(' ') ||
+      '사용자의 구매 동기와 선택 기준을 바탕으로 제품이 제공해야 할 소비 경험과 시장 방향을 정리했습니다.',
+    keywords:
+      keywords.length > 0
+        ? keywords
+        : [
+            '직관적 선택',
+            '신뢰성',
+            '편리한 사용',
+            '가치 소비',
+            '개인화',
+            '지속가능성',
+            '품질 중심',
+            '효율성',
+            '브랜드 경험',
+          ],
+    summary:
+      stripLabel(summaryLine) ||
+      '명확한 가치와 신뢰를 바탕으로 지속 가능한 소비 경험을 제공하는 제품',
+  }
+}
+
+function getDirectionArtifactLabel(kind: DirectionArtifactKind) {
+  const labels: Record<DirectionArtifactKind, string> = {
+    brand_positioning: '경쟁사 리서치',
+    consumption_keywords: '소비 트렌드 리서치',
+    market_size: '시장 규모 리서치',
+  }
+
+  return labels[kind]
+}
+
+function extractMarketSizingData(content: string): MarketSizingData | null {
+  if (getDirectionArtifactKind(content) !== 'market_size') {
+    return null
+  }
+
+  const cleaned = stripInternalBlocksForDisplay(content)
+    .replace(/^#{1,3}\s*Tam\s+Sam\s+Som\s*/im, '')
+    .trim()
+  const lines = cleaned
+    .split('\n')
+    .map((line) => line.replace(/^[-*•]\s*/, '').replace(/\*\*/g, '').trim())
+    .filter(Boolean)
+  const findLine = (pattern: RegExp) => lines.find((line) => pattern.test(line)) ?? ''
+  const extractValue = (line: string) =>
+    line
+      .replace(/^.*?(?:TAM|SAM|SOM|전체시장|유효시장|자사목표시장)\s*[:：-]?\s*/i, '')
+      .split(/\s{2,}|[|]/)[0]
+      .trim()
+  const marketDefinitions = [
+    {
+      code: 'TAM' as const,
+      fallback: '279.0억 달러',
+      label: '전체시장',
+      pattern: /(?:^|\b)TAM\b|전체시장/i,
+    },
+    {
+      code: 'SAM' as const,
+      fallback: '173.8억 달러',
+      label: '유효시장',
+      pattern: /(?:^|\b)SAM\b|유효시장/i,
+    },
+    {
+      code: 'SOM' as const,
+      fallback: '17.4억 달러',
+      label: '자사목표시장',
+      pattern: /(?:^|\b)SOM\b|자사목표시장/i,
+    },
+  ]
+  const markets = marketDefinitions.map((definition) => {
+    const line = findLine(definition.pattern)
+    const followingLine = lines[lines.indexOf(line) + 1] ?? ''
+
+    return {
+      code: definition.code,
+      description:
+        followingLine && !/(?:TAM|SAM|SOM|PROJECT GOAL)/i.test(followingLine)
+          ? followingLine
+          : '서비스가 진입하고 확장할 수 있는 시장 범위와 수요를 나타냅니다.',
+      label: definition.label,
+      value: extractValue(line) || definition.fallback,
+    }
+  })
+  const forecastMatches = Array.from(
+    cleaned.matchAll(/(20\d{2}|현재|향후\s*\d+년)[^\d]{0,15}([\d,.]+)\s*(억\s*달러|달러|조|억)?/g)
+  ).slice(0, 6)
+  const fallbackForecasts = [119.6, 180.9, 210.4, 244.3, 273.8, 279.8]
+  const forecasts = Array.from({ length: 6 }, (_, index) => ({
+    label: forecastMatches[index]?.[1] ?? `${2025 + index * 5}`,
+    value: Number(forecastMatches[index]?.[2]?.replace(/,/g, '')) || fallbackForecasts[index],
+  }))
+  const goalLine = findLine(/PROJECT GOAL|프로젝트 목표/i)
+  const descriptiveLines = lines.filter(
+    (line) =>
+      line.length >= 20 &&
+      !/(?:TAM|SAM|SOM|PROJECT GOAL|전체시장|유효시장|자사목표시장)/i.test(line)
+  )
+
+  return {
+    description:
+      descriptiveLines.slice(1, 3).join(' ') ||
+      '시장 성장성과 수요를 바탕으로 제품이 진입할 수 있는 시장 범위를 분석했습니다.',
+    forecasts,
+    goal:
+      goalLine.replace(/^.*?PROJECT GOAL\s*[:：-]?\s*/i, '').trim() ||
+      '시장 기회를 기반으로 지속 가능한 제품 성장을 만드는 것',
+    goalDescription:
+      descriptiveLines.slice(-2).join(' ') ||
+      '핵심 시장의 성장성과 사용자 수요를 기반으로 현실적인 진입 목표를 설정합니다.',
+    markets,
+    summary:
+      descriptiveLines[0] ||
+      '시장 성장 흐름과 제품의 진입 가능성을 함께 분석한 결과입니다.',
+  }
+}
+
+function getDirectionLibraryKind(
+  kind: DirectionArtifactKind
+): LibraryArtifactKind {
+  const kinds: Record<DirectionArtifactKind, LibraryArtifactKind> = {
+    brand_positioning: 'brand_positioning',
+    consumption_keywords: 'consumption_keywords',
+    market_size: 'market_sizing',
+  }
+
+  return kinds[kind]
+}
+
+function extractProblemStatementsData(content: string): ProblemStatementsData | null {
+  const normalized = stripInternalBlocksForDisplay(content).replace(/\r\n/g, '\n')
+  const hasHeading = /(?:^|\n)\s*(?:#{1,6}\s*)?\[?Problem\s*Statements?\]?/i.test(
+    normalized
+  )
+  const hasFields =
+    /(?:Context|현재\s*상황)\s*[:：]/i.test(normalized) &&
+    /(?:Problem|불편함)\s*[:：]/i.test(normalized) &&
+    /(?:Needs?|근본적\s*니즈)\s*[:：]/i.test(normalized)
+
+  if (!hasHeading && !hasFields) return null
+
+  const extractSection = (label: RegExp, nextLabels: string) => {
+    const match = normalized.match(
+      new RegExp(
+        `(?:^|\\n)\\s*(?:#{1,6}\\s*)?(?:\\*{1,2})?(?:${label.source})(?:\\*{1,2})?\\s*[:：]\\s*([\\s\\S]*?)(?=\\n\\s*(?:#{1,6}\\s*)?(?:\\*{1,2})?(?:${nextLabels})(?:\\*{1,2})?\\s*[:：]|\\n\\s*(?:---+|더\\s*추가할\\s*내용|이\\s*내용이|['\"]?시각화하기|버튼을\\s*눌러)|$)`,
+        'i'
+      )
+    )
+
+    return (match?.[1] ?? '')
+      .replace(/^[-*•]\s*/gm, '')
+      .replace(/\*{1,2}/g, '')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim()
+  }
+  const situation = extractSection(/Context|현재\s*상황/, 'Problem|불편함|Needs?|근본적\\s*니즈')
+  const pain = extractSection(/Problem|불편함/, 'Needs?|근본적\\s*니즈')
+  const need = extractSection(/Needs?|근본적\s*니즈/, '(?!)')
+
+  if (!situation && !pain && !need) return null
+  return { need, pain, situation }
+}
+
 function extractKeywordCardsData(content: string): KeywordCardData[] {
   const normalized = stripInternalBlocksForDisplay(content)
+  // `#` prefix is optional — the AI sometimes outputs plain "Keywords: Experience"
   const matches = normalized.matchAll(
-    /(?:^|\n)#{1,3}\s*Keywords:\s*(Experience|Relationship)\s*\n([\s\S]*?)(?=\n#{1,3}\s|\n\s*다음\s*STEP|\s*$)/gi
+    /(?:^|\n)#{0,3}\s*Keywords:\s*(Experience|Relationship)\s*\n([\s\S]*?)(?=\n#{0,3}\s*Keywords:\s*(?:Experience|Relationship)|\n#{1,3}\s|\n\s*다음\s*STEP|\n이\s+['"]?Keywords|\s*$)/gi
   )
 
   return Array.from(matches, (match) => {
@@ -319,6 +620,8 @@ function extractKeywordCardsData(content: string): KeywordCardData[] {
     const body = match[2]
       .replace(/\*\*/g, '')
       .replace(/\r\n/g, '\n')
+      // strip trailing AI question like "이 '...' 카드 내용으로 확정할까요?"
+      .replace(/\n이\s+[^\n]{0,60}(?:확정|할까요)[^\n]*/gi, '')
       .trim()
     const rawLines = body
       .split('\n')
@@ -331,10 +634,25 @@ function extractKeywordCardsData(content: string): KeywordCardData[] {
       )
       .filter(Boolean)
     const keywordCandidates = rawLines
-      .flatMap((line) => line.split(/,|\/|·|#|  +/))
+      .flatMap((line) => {
+        // "감정: kw1, kw2" or "감정\nkw1, kw2" (category-only line → skip, next line has keywords)
+        const withoutCategory = line.replace(
+          /^(?:감정|행동|공간|관계|사용자|환경|기존\s*도구|시간|방해\s*요소|사용\s*시간|타인)\s*[:：]\s*/i,
+          ''
+        )
+        // if stripping changed nothing and line is a bare category word → skip
+        if (
+          withoutCategory === line &&
+          /^(?:감정|행동|공간|관계|사용자|환경|기존\s*도구|시간|방해\s*요소|사용\s*시간|타인)$/i.test(
+            line
+          )
+        ) {
+          return []
+        }
+        return withoutCategory.split(/[,，]|\/|·|#|  +/)
+      })
       .map((item) =>
         item
-          .replace(/[:：].*$/, '')
           .replace(/[.!?。！？]+$/g, '')
           .trim()
       )
@@ -344,9 +662,9 @@ function extractKeywordCardsData(content: string): KeywordCardData[] {
           item.length <= 18 &&
           !/keywords?|experience|relationship|키워드|요약|설명/i.test(item)
       )
-    const keywords = Array.from(new Set(keywordCandidates)).slice(0, 24)
+    const keywords = Array.from(new Set(keywordCandidates)).slice(0, 30)
     const description = rawLines
-      .filter((line) => line.length > 18)
+      .filter((line) => line.length > 18 && !/확정|할까요/i.test(line))
       .slice(0, 4)
       .join(' ')
       .replace(/\s+/g, ' ')
@@ -483,12 +801,39 @@ function isAssistantQuestion(content: string) {
 
 function isStageProceedPrompt(content: string) {
   const normalized = content.replace(/\s+/g, ' ').trim()
-  const mentionsProceedQuestion = /진행할까요[?？]?/.test(normalized)
+  const mentionsProceedQuestion = /진행할까요[?？]?|시작할까요[?？]?/.test(
+    normalized
+  )
+  const mentionsStageTransition =
+    /다음으로\s*STEP\s*\d+[.\s][\s\S]*?(?:단계로\s*)?(?:넘어가겠습니다|진행하겠습니다|이동하겠습니다|시작하겠습니다)/i.test(
+      normalized
+    ) ||
+    /다음\s*단계로\s*(?:넘어가겠습니다|진행하겠습니다|이동하겠습니다)/i.test(
+      normalized
+    )
   const mentionsNextStage =
+    mentionsStageTransition ||
     /다음(?:으로| 단계| STEP)/i.test(normalized) ||
     /STEP\s*\d+[\s\S]*(?:넘어|진행|이동|들어가|시작)/i.test(normalized)
 
-  return mentionsProceedQuestion && mentionsNextStage
+  return mentionsNextStage && (mentionsProceedQuestion || mentionsStageTransition)
+}
+
+function isProcessCheckPrompt(content: string) {
+  const normalized = content.replace(/\s+/g, ' ').trim()
+
+  return /프로세스/.test(normalized) && /확인하기|확인해\s*볼까요|확인할까요/i.test(normalized)
+}
+
+// STEP 1 진입 요청 (프로세스 소개 후 "STEP 1 시작할까요?" 맥락)
+// STEP 1 완료 후 STEP 2 진행 요청과 구분하기 위해 사용
+function isStep1EntryPrompt(content: string) {
+  const normalized = content.replace(/\s+/g, ' ').trim()
+  return (
+    /STEP\s*1/i.test(normalized) &&
+    /진행할까요|시작할까요|넘어가겠습니다/i.test(normalized) &&
+    !/핵심\s*아이디어와\s*개발\s*조건이\s*정리|STEP\s*2\s*[.로]|사용자\s*명확화/i.test(normalized)
+  )
 }
 
 export function ProjectChatContainer({
@@ -520,15 +865,62 @@ export function ProjectChatContainer({
     useState<PersonaCardData | null>(null)
   const [keywordCardModalData, setKeywordCardModalData] =
     useState<KeywordCardData | null>(null)
+  const [problemStatementsModalData, setProblemStatementsModalData] =
+    useState<ProblemStatementsData | null>(null)
+  const [visualizedProblemStatements, setVisualizedProblemStatements] =
+    useState<ProblemStatementsData | null>(null)
+  const [confirmedProblemStatementsMessageId, setConfirmedProblemStatementsMessageId] =
+    useState<string | null>(null)
   const [visualizedKeywordCards, setVisualizedKeywordCards] = useState<
     Partial<Record<KeywordArtifactKind, KeywordCardData>>
   >({})
+  const [confirmedKeywordArtifacts, setConfirmedKeywordArtifacts] = useState<
+    Partial<Record<KeywordArtifactKind, string>>
+  >({})
+  const [visualizedDirectionArtifacts, setVisualizedDirectionArtifacts] =
+    useState<Partial<Record<DirectionArtifactKind, string>>>({})
+  const [confirmedDirectionArtifacts, setConfirmedDirectionArtifacts] =
+    useState<Partial<Record<DirectionArtifactKind, string>>>({})
+  const [visualizedRfpMessageId, setVisualizedRfpMessageId] = useState<
+    string | null
+  >(null)
+  const [projectReportModalData, setProjectReportModalData] =
+    useState<RfpDocument | null>(null)
+  const [marketSizingModalData, setMarketSizingModalData] =
+    useState<MarketSizingData | null>(null)
+  const [consumptionKeywordModalData, setConsumptionKeywordModalData] =
+    useState<ConsumptionKeywordData | null>(null)
+  const [visualizedConsumptionKeywordData, setVisualizedConsumptionKeywordData] =
+    useState<ConsumptionKeywordData | null>(null)
   const [isPending, setIsPending] = useState(false)
+  const [moodboardModalOpen, setMoodboardModalOpen] = useState(false)
   const activeExpertDefinition = getExpertDefinition(activeExpert)
   const visibleMessages = useMemo(
     () => messages.filter((message) => message.role !== 'system'),
     [messages]
   )
+  const latestAssistantMessage = useMemo(
+    () =>
+      [...visibleMessages]
+        .reverse()
+        .find((message) => message.role === 'assistant') ?? null,
+    [visibleMessages]
+  )
+  const effectiveStageKey = useMemo(() => {
+    if (!latestAssistantMessage || stageKey !== 'step_1_idea') {
+      return stageKey
+    }
+
+    const inferredStage = inferStageMetaFromText({
+      currentStageKey: stageKey,
+      text: latestAssistantMessage.content,
+    })
+
+    return inferredStage.transition &&
+      inferredStage.nextStageKey === 'step_2_persona'
+      ? inferredStage.nextStageKey
+      : stageKey
+  }, [latestAssistantMessage, stageKey])
   const latestProjectDirection = useMemo(() => {
     for (const message of [...visibleMessages].reverse()) {
       if (message.role !== 'assistant') {
@@ -553,11 +945,207 @@ export function ProjectChatContainer({
 
     return null
   }, [visibleMessages])
+  const latestEditablePersonaMessage = useMemo(() => {
+    for (const message of [...visibleMessages].reverse()) {
+      if (message.personaCardBlock && !message.personaCardBlock.imageUrl) {
+        return message
+      }
+    }
+
+    return null
+  }, [visibleMessages])
+  const hasConfirmedLatestPersona = useMemo(() => {
+    if (!latestEditablePersonaMessage) {
+      return false
+    }
+
+    return visibleMessages.some(
+      (message) =>
+        message.role === 'user' &&
+        message.seq_order > latestEditablePersonaMessage.seq_order &&
+        /페르소나\s*카드.*확정|persona\s*card.*confirm/i.test(
+          message.content
+        )
+    )
+  }, [latestEditablePersonaMessage, visibleMessages])
+  const latestProblemStatementsMessageId = useMemo(() => {
+    for (const message of [...visibleMessages].reverse()) {
+      if (message.role !== 'assistant') continue
+      if (extractProblemStatementsData(message.content)) return message.id
+    }
+    return null
+  }, [visibleMessages])
+  const isProblemStatementsConfirmed = Boolean(
+    latestProblemStatementsMessageId &&
+      confirmedProblemStatementsMessageId === latestProblemStatementsMessageId
+  )
+  const latestKeywordMessageIds = useMemo(() => {
+    const latest: Partial<Record<KeywordArtifactKind, string>> = {}
+
+    for (const message of [...visibleMessages].reverse()) {
+      if (message.role !== 'assistant') {
+        continue
+      }
+
+      for (const keywordCard of extractKeywordCardsData(message.content)) {
+        if (!latest[keywordCard.kind]) {
+          latest[keywordCard.kind] = message.id
+        }
+      }
+    }
+
+    return latest
+  }, [visibleMessages])
+  const confirmedKeywordKinds = useMemo(() => {
+    const confirmed = new Set<KeywordArtifactKind>()
+
+    for (const kind of ['experience_keywords', 'relationship_keywords'] as const) {
+      const messageId = latestKeywordMessageIds[kind]
+
+      if (messageId && confirmedKeywordArtifacts[kind] === messageId) {
+        confirmed.add(kind)
+        continue
+      }
+
+      const sourceMessage = visibleMessages.find((message) => message.id === messageId)
+
+      if (!sourceMessage) {
+        continue
+      }
+
+      const confirmationPattern =
+        kind === 'experience_keywords'
+          ? /Keywords:\s*Experience\s*확정|Experience\s*키워드.*확정/i
+          : /Keywords:\s*Relationship\s*확정|Relationship\s*키워드.*확정/i
+
+      if (
+        visibleMessages.some(
+          (message) =>
+            message.role === 'user' &&
+            message.seq_order > sourceMessage.seq_order &&
+            confirmationPattern.test(message.content)
+        )
+      ) {
+        confirmed.add(kind)
+      }
+    }
+
+    return confirmed
+  }, [confirmedKeywordArtifacts, latestKeywordMessageIds, visibleMessages])
+  const directionKindsByMessageId = useMemo(() => {
+    const kinds = new Map<string, DirectionArtifactKind>()
+    let requestedKind: DirectionArtifactKind | null = null
+
+    for (const message of visibleMessages) {
+      if (message.role === 'user') {
+        if (
+          /소비\s*트렌드\s*리서치\s*(?:보기|다시\s*생성하기)/i.test(
+            message.content
+          )
+        ) {
+          requestedKind = 'consumption_keywords'
+        } else if (
+          /시장\s*규모\s*리서치\s*(?:보기|다시\s*생성하기)/i.test(
+            message.content
+          )
+        ) {
+          requestedKind = 'market_size'
+        } else if (
+          /경쟁사\s*리서치\s*(?:보기|다시\s*생성하기)/i.test(
+            message.content
+          )
+        ) {
+          requestedKind = 'brand_positioning'
+        }
+
+        continue
+      }
+
+      if (message.role !== 'assistant') {
+        continue
+      }
+
+      const explicitKind = getDirectionArtifactKind(message.content)
+      const kind = explicitKind ?? requestedKind
+
+      if (kind) {
+        kinds.set(message.id, kind)
+      }
+
+      requestedKind = null
+    }
+
+    return kinds
+  }, [visibleMessages])
+  const latestDirectionMessageIds = useMemo(() => {
+    const latest: Partial<Record<DirectionArtifactKind, string>> = {}
+
+    for (const message of [...visibleMessages].reverse()) {
+      if (message.role !== 'assistant') {
+        continue
+      }
+
+      const kind = directionKindsByMessageId.get(message.id)
+      if (kind && !latest[kind]) {
+        latest[kind] = message.id
+      }
+    }
+
+    return latest
+  }, [directionKindsByMessageId, visibleMessages])
+  const confirmedDirectionKinds = useMemo(
+    () =>
+      new Set(
+        (['market_size', 'consumption_keywords', 'brand_positioning'] as const).filter(
+          (kind) =>
+            Boolean(latestDirectionMessageIds[kind]) &&
+            confirmedDirectionArtifacts[kind] === latestDirectionMessageIds[kind]
+        )
+      ),
+    [confirmedDirectionArtifacts, latestDirectionMessageIds]
+  )
+  const latestRfpMessage = useMemo(() => {
+    for (const message of [...visibleMessages].reverse()) {
+      if (message.role === 'assistant' && extractRfpJsonBlock(message.content).rfp) {
+        return message
+      }
+    }
+
+    return null
+  }, [visibleMessages])
+  const latestRfp = useMemo(
+    () =>
+      latestRfpMessage
+        ? extractRfpJsonBlock(latestRfpMessage.content).rfp
+        : null,
+    [latestRfpMessage]
+  )
+  const hasConfirmedLatestRfp = useMemo(() => {
+    if (!latestRfpMessage) {
+      return false
+    }
+
+    return visibleMessages.some(
+      (message) =>
+        message.role === 'user' &&
+        message.seq_order > latestRfpMessage.seq_order &&
+        /(?:프로젝트\s*)?기획안.*확정|project\s*(?:plan|report).*confirm/i.test(
+          message.content
+        )
+    )
+  }, [latestRfpMessage, visibleMessages])
+  const hasVisualizedLatestRfp = Boolean(
+    latestRfpMessage && visualizedRfpMessageId === latestRfpMessage.id
+  )
   const availableArtifacts = useMemo(() => {
     const availableKinds = new Set<LibraryArtifactKind>()
 
     if (latestProjectDirection) {
       availableKinds.add('project_direction')
+    }
+
+    if (visualizedProblemStatements) {
+      availableKinds.add('problem_statements')
     }
 
     if (visualizedKeywordCards.experience_keywords) {
@@ -566,6 +1154,19 @@ export function ProjectChatContainer({
 
     if (visualizedKeywordCards.relationship_keywords) {
       availableKinds.add('relationship_keywords')
+    }
+
+    for (const kind of [
+      'market_size',
+      'consumption_keywords',
+      'brand_positioning',
+    ] as const) {
+      if (
+        visualizedDirectionArtifacts[kind] &&
+        visualizedDirectionArtifacts[kind] === latestDirectionMessageIds[kind]
+      ) {
+        availableKinds.add(getDirectionLibraryKind(kind))
+      }
     }
 
     for (const message of visibleMessages) {
@@ -581,15 +1182,25 @@ export function ProjectChatContainer({
         availableKinds.add(imageArtifactKind)
       }
 
-      if (extractRfpJsonBlock(message.content).rfp) {
-        availableKinds.add('project_report')
-      }
+    }
+
+    if (latestRfp && hasVisualizedLatestRfp) {
+      availableKinds.add('project_report')
     }
 
     return LIBRARY_ARTIFACTS.filter((artifact) =>
       availableKinds.has(artifact.kind)
     )
-  }, [latestProjectDirection, visibleMessages, visualizedKeywordCards])
+  }, [
+    hasVisualizedLatestRfp,
+    latestProjectDirection,
+    latestRfp,
+    latestDirectionMessageIds,
+    visibleMessages,
+    visualizedDirectionArtifacts,
+    visualizedKeywordCards,
+    visualizedProblemStatements,
+  ])
   const selectedArtifact = useMemo(
     () =>
       availableArtifacts.find(
@@ -625,6 +1236,121 @@ export function ProjectChatContainer({
         } catch {
           // Ignore unavailable browser storage.
         }
+      }
+    }, 0)
+
+    return () => window.clearTimeout(restoreTimer)
+  }, [projectId])
+
+  useEffect(() => {
+    const storageKey = `aidee:confirmed-keyword-artifacts:${projectId}`
+    const restoreTimer = window.setTimeout(() => {
+      try {
+        const saved = window.localStorage.getItem(storageKey)
+        setConfirmedKeywordArtifacts(
+          saved
+            ? (JSON.parse(saved) as Partial<
+                Record<KeywordArtifactKind, string>
+              >)
+            : {}
+        )
+      } catch {
+        setConfirmedKeywordArtifacts({})
+      }
+    }, 0)
+
+    return () => window.clearTimeout(restoreTimer)
+  }, [projectId])
+
+  useEffect(() => {
+    const storageKey = `aidee:visualized-problem-statements:${projectId}`
+    const restoreTimer = window.setTimeout(() => {
+      try {
+        const saved = window.localStorage.getItem(storageKey)
+        if (saved) setVisualizedProblemStatements(JSON.parse(saved) as ProblemStatementsData)
+      } catch {}
+    }, 0)
+    return () => window.clearTimeout(restoreTimer)
+  }, [projectId])
+
+  useEffect(() => {
+    const storageKey = `aidee:confirmed-problem-statements:${projectId}`
+    const restoreTimer = window.setTimeout(() => {
+      try {
+        setConfirmedProblemStatementsMessageId(
+          window.localStorage.getItem(storageKey)
+        )
+      } catch {
+        setConfirmedProblemStatementsMessageId(null)
+      }
+    }, 0)
+
+    return () => window.clearTimeout(restoreTimer)
+  }, [projectId])
+
+  useEffect(() => {
+    const storageKey = `aidee:visualized-consumption-keywords:${projectId}`
+    const restoreTimer = window.setTimeout(() => {
+      try {
+        const saved = window.localStorage.getItem(storageKey)
+        setVisualizedConsumptionKeywordData(
+          saved ? (JSON.parse(saved) as ConsumptionKeywordData) : null
+        )
+      } catch {
+        setVisualizedConsumptionKeywordData(null)
+      }
+    }, 0)
+
+    return () => window.clearTimeout(restoreTimer)
+  }, [projectId])
+
+  useEffect(() => {
+    const storageKey = `aidee:visualized-project-report:${projectId}`
+    const restoreTimer = window.setTimeout(() => {
+      try {
+        setVisualizedRfpMessageId(window.localStorage.getItem(storageKey))
+      } catch {
+        setVisualizedRfpMessageId(null)
+      }
+    }, 0)
+
+    return () => window.clearTimeout(restoreTimer)
+  }, [projectId])
+
+  useEffect(() => {
+    const storageKey = `aidee:visualized-direction-artifacts:${projectId}`
+    const restoreTimer = window.setTimeout(() => {
+      try {
+        const saved = window.localStorage.getItem(storageKey)
+        setVisualizedDirectionArtifacts(
+          saved
+            ? (JSON.parse(saved) as Partial<
+                Record<DirectionArtifactKind, string>
+              >)
+            : {}
+        )
+      } catch {
+        setVisualizedDirectionArtifacts({})
+      }
+    }, 0)
+
+    return () => window.clearTimeout(restoreTimer)
+  }, [projectId])
+
+  useEffect(() => {
+    const storageKey = `aidee:confirmed-direction-artifacts:${projectId}`
+    const restoreTimer = window.setTimeout(() => {
+      try {
+        const saved = window.localStorage.getItem(storageKey)
+        setConfirmedDirectionArtifacts(
+          saved
+            ? (JSON.parse(saved) as Partial<
+                Record<DirectionArtifactKind, string>
+              >)
+            : {}
+        )
+      } catch {
+        setConfirmedDirectionArtifacts({})
       }
     }, 0)
 
@@ -689,7 +1415,7 @@ export function ProjectChatContainer({
                 Math.max(maxSeq, currentMessage.seq_order),
               -1
             ) + 1,
-          stageKey,
+          stageKey: effectiveStageKey,
         }
       : null
 
@@ -705,7 +1431,7 @@ export function ProjectChatContainer({
       const response = await fetch('/api/chat', {
         body: JSON.stringify({
           activeExpert,
-          currentStageKey: stageKey,
+          currentStageKey: effectiveStageKey,
           forceImageGeneration,
           message: trimmed,
           projectId,
@@ -752,7 +1478,7 @@ export function ProjectChatContainer({
 
         return nextMessages
       })
-      setStageKey(result.nextStageKey ?? stageKey)
+      setStageKey(result.nextStageKey ?? effectiveStageKey)
       return assistantMessage
     } catch (error) {
       if (optimisticUserMessage) {
@@ -771,7 +1497,7 @@ export function ProjectChatContainer({
     } finally {
       setIsPending(false)
     }
-  }, [activeExpert, isPending, messages, projectId, stageKey])
+  }, [activeExpert, effectiveStageKey, isPending, messages, projectId])
 
   async function submitMessage(
     message: string,
@@ -781,14 +1507,10 @@ export function ProjectChatContainer({
       return
     }
 
-    const assistantMessage = await requestAssistantResponse({
+    await requestAssistantResponse({
       forceImageGeneration,
       message,
     })
-
-    if (assistantMessage?.personaCardBlock?.imageUrl) {
-      setPersonaCardModalData(assistantMessage.personaCardBlock)
-    }
   }
 
   async function visualizePersonaCard(personaCard?: PersonaCardData | null) {
@@ -812,6 +1534,30 @@ export function ProjectChatContainer({
     }
   }
 
+  function visualizeProblemStatements(data: ProblemStatementsData) {
+    setVisualizedProblemStatements(data)
+    try {
+      window.localStorage.setItem(
+        `aidee:visualized-problem-statements:${projectId}`,
+        JSON.stringify(data)
+      )
+    } catch {}
+    setProblemStatementsModalData(data)
+  }
+
+  function confirmProblemStatements(messageId: string) {
+    setConfirmedProblemStatementsMessageId(messageId)
+
+    try {
+      window.localStorage.setItem(
+        `aidee:confirmed-problem-statements:${projectId}`,
+        messageId
+      )
+    } catch {
+      // The confirmation remains available for the current session.
+    }
+  }
+
   function visualizeKeywordCard(data: KeywordCardData) {
     setVisualizedKeywordCards((current) => {
       const nextCards = {
@@ -831,6 +1577,106 @@ export function ProjectChatContainer({
       return nextCards
     })
     setKeywordCardModalData(data)
+  }
+
+  function confirmKeywordCard(
+    kind: KeywordArtifactKind,
+    messageId: string
+  ) {
+    setConfirmedKeywordArtifacts((current) => {
+      const next = { ...current, [kind]: messageId }
+
+      try {
+        window.localStorage.setItem(
+          `aidee:confirmed-keyword-artifacts:${projectId}`,
+          JSON.stringify(next)
+        )
+      } catch {
+        // The confirmation remains available for the current session.
+      }
+
+      return next
+    })
+  }
+
+  function visualizeProjectReport(messageId: string, rfp: RfpDocument) {
+    setVisualizedRfpMessageId(messageId)
+    setProjectReportModalData(rfp)
+
+    try {
+      window.localStorage.setItem(
+        `aidee:visualized-project-report:${projectId}`,
+        messageId
+      )
+    } catch {
+      // The visualization remains available for the current session.
+    }
+  }
+
+  function visualizeDirectionArtifact(
+    kind: DirectionArtifactKind,
+    messageId: string,
+    content: string
+  ) {
+    setVisualizedDirectionArtifacts((current) => {
+      const next = { ...current, [kind]: messageId }
+
+      try {
+        window.localStorage.setItem(
+          `aidee:visualized-direction-artifacts:${projectId}`,
+          JSON.stringify(next)
+        )
+      } catch {
+        // The visualization remains available for the current session.
+      }
+
+      return next
+    })
+
+    if (kind === 'market_size') {
+      setMarketSizingModalData(extractMarketSizingData(content))
+      return
+    }
+
+    if (kind === 'consumption_keywords') {
+      const data = extractConsumptionKeywordData(content, { force: true })
+      setVisualizedConsumptionKeywordData(data)
+      setConsumptionKeywordModalData(data)
+
+      if (data) {
+        try {
+          window.localStorage.setItem(
+            `aidee:visualized-consumption-keywords:${projectId}`,
+            JSON.stringify(data)
+          )
+        } catch {
+          // The visualization remains available for the current session.
+        }
+      }
+      return
+    }
+
+    setSelectedArtifactKind(getDirectionLibraryKind(kind))
+  }
+
+  function confirmDirectionArtifact(
+    kind: DirectionArtifactKind,
+    messageId: string
+  ) {
+    setConfirmedDirectionArtifacts((current) => {
+      const next = { ...current, [kind]: messageId }
+
+      try {
+        window.localStorage.setItem(
+          `aidee:confirmed-direction-artifacts:${projectId}`,
+          JSON.stringify(next)
+        )
+      } catch {
+        // The confirmation remains available for the current session.
+      }
+
+      return next
+    })
   }
 
   function resizeComposer() {
@@ -877,19 +1723,20 @@ export function ProjectChatContainer({
   }, [input])
 
   useEffect(() => {
-    const hasAssistantMessage = visibleMessages.some(
-      (message) => message.role === 'assistant'
+    const hasConfirmedProcess = visibleMessages.some(
+      (message) =>
+        message.role === 'user' && /프로세스\s*확인하기/.test(message.content)
     )
 
     setSidebarState({
       activeExpert,
-      activeExperts: STAGE_EXPERTS[stageKey],
-      activeStageKey: stageKey,
-      showProgress: hasAssistantMessage,
+      activeExperts: STAGE_EXPERTS[effectiveStageKey],
+      activeStageKey: effectiveStageKey,
+      showProgress: hasConfirmedProcess || effectiveStageKey !== 'step_0_start',
     })
 
     return () => setSidebarState(defaultProjectChatSidebarState)
-  }, [activeExpert, setSidebarState, stageKey, visibleMessages])
+  }, [activeExpert, effectiveStageKey, setSidebarState, visibleMessages])
 
   async function downloadRfp() {
     try {
@@ -958,13 +1805,39 @@ export function ProjectChatContainer({
                   key={message.id}
                   message={message}
                   disabled={isPending}
+                  hasConfirmedPersona={hasConfirmedLatestPersona}
                   hasVisualizedPersona={Boolean(latestVisualizedPersonaCard)}
+                  hasConfirmedRfp={hasConfirmedLatestRfp}
+                  hasVisualizedRfp={hasVisualizedLatestRfp}
+                  confirmedDirectionKinds={confirmedDirectionKinds}
+                  confirmedKeywordKinds={confirmedKeywordKinds}
+                  isProblemStatementsConfirmed={isProblemStatementsConfirmed}
+                  isLatestEditablePersona={
+                    message.id === latestEditablePersonaMessage?.id
+                  }
+                  latestKeywordMessageIds={latestKeywordMessageIds}
+                  latestProblemStatementsMessageId={latestProblemStatementsMessageId}
+                  latestDirectionMessageIds={latestDirectionMessageIds}
+                  directionArtifactKindOverride={
+                    directionKindsByMessageId.get(message.id) ?? null
+                  }
+                  latestRfpMessageId={latestRfpMessage?.id ?? null}
                   onChoice={(value) => submitMessage(value)}
+                  onConfirmKeyword={confirmKeywordCard}
                   onDownloadRfp={downloadRfp}
+                  onOpenMoodboardModal={() => setMoodboardModalOpen(true)}
                   onVisualizeKeyword={visualizeKeywordCard}
+                  onVisualizeProblemStatements={visualizeProblemStatements}
+                  onConfirmProblemStatements={confirmProblemStatements}
                   onVisualizePersona={visualizePersonaCard}
+                  onVisualizeDirection={visualizeDirectionArtifact}
+                  onConfirmDirection={confirmDirectionArtifact}
+                  onVisualizeRfp={visualizeProjectReport}
+                  projectId={projectId}
                   userAvatarUrl={userAvatarUrl}
                   visualizedKeywordCards={visualizedKeywordCards}
+                  visualizedDirectionArtifacts={visualizedDirectionArtifacts}
+                  visualizedProblemStatements={visualizedProblemStatements}
                 />
               ))
             ) : (
@@ -1096,6 +1969,11 @@ export function ProjectChatContainer({
             return
           }
 
+          if (kind === 'problem_statements' && visualizedProblemStatements) {
+            setProblemStatementsModalData(visualizedProblemStatements)
+            return
+          }
+
           if (kind === 'persona' && latestVisualizedPersonaCard) {
             setPersonaCardModalData(latestVisualizedPersonaCard)
             return
@@ -1107,6 +1985,39 @@ export function ProjectChatContainer({
             visualizedKeywordCards[kind]
           ) {
             setKeywordCardModalData(visualizedKeywordCards[kind])
+            return
+          }
+
+          if (kind === 'project_report' && latestRfp) {
+            setProjectReportModalData(latestRfp)
+            return
+          }
+
+          if (kind === 'market_sizing') {
+            const sourceMessage = visibleMessages.find(
+              (message) => message.id === latestDirectionMessageIds.market_size
+            )
+            setMarketSizingModalData(
+              sourceMessage ? extractMarketSizingData(sourceMessage.content) : null
+            )
+            return
+          }
+
+          if (kind === 'consumption_keywords') {
+            if (visualizedConsumptionKeywordData) {
+              setConsumptionKeywordModalData(visualizedConsumptionKeywordData)
+              return
+            }
+
+            const sourceMessage = visibleMessages.find(
+              (message) =>
+                message.id === latestDirectionMessageIds.consumption_keywords
+            )
+            const extracted = sourceMessage
+              ? (extractConsumptionKeywordData(sourceMessage.content) ??
+                 extractConsumptionKeywordData(sourceMessage.content, { force: true }))
+              : null
+            setConsumptionKeywordModalData(extracted)
             return
           }
 
@@ -1129,9 +2040,36 @@ export function ProjectChatContainer({
         onClose={() => setPersonaCardModalData(null)}
       />
 
+      <ProblemStatementsModal
+        data={problemStatementsModalData}
+        onClose={() => setProblemStatementsModalData(null)}
+      />
+
       <KeywordCardModal
         data={keywordCardModalData}
         onClose={() => setKeywordCardModalData(null)}
+      />
+
+      <ProjectReportModal
+        data={projectReportModalData}
+        onClose={() => setProjectReportModalData(null)}
+        onDownload={downloadRfp}
+      />
+
+      <MarketSizingModal
+        data={marketSizingModalData}
+        onClose={() => setMarketSizingModalData(null)}
+      />
+
+      <ConsumptionKeywordModal
+        data={consumptionKeywordModalData}
+        onClose={() => setConsumptionKeywordModalData(null)}
+      />
+
+      <MoodboardModal
+        isOpen={moodboardModalOpen}
+        onClose={() => setMoodboardModalOpen(false)}
+        projectId={projectId}
       />
     </div>
   )
@@ -1200,11 +2138,17 @@ function LibraryPanel({
         <div className="flex flex-col gap-[clamp(10px,1.3svh,14px)]">
           {artifacts.map((artifact, index) => {
             const isProjectDirection = artifact.kind === 'project_direction'
+            const isProblemStatements = artifact.kind === 'problem_statements'
             const isPersona = artifact.kind === 'persona'
             const isExperienceKeywords =
               artifact.kind === 'experience_keywords'
             const isRelationshipKeywords =
               artifact.kind === 'relationship_keywords'
+            const isMarketSizing = artifact.kind === 'market_sizing'
+            const isConsumptionKeywords =
+              artifact.kind === 'consumption_keywords'
+            const isBrandPositioning = artifact.kind === 'brand_positioning'
+            const isProjectReport = artifact.kind === 'project_report'
             const isMoodBoard = artifact.kind === 'mood_board'
             const isRendering = artifact.kind === 'rendering'
             const isSelected = artifact.kind === selectedArtifactKind
@@ -1218,12 +2162,22 @@ function LibraryPanel({
                 className={`relative mx-auto aspect-[184/140] w-[clamp(136px,17.04svh,184px)] max-w-full overflow-hidden rounded-[clamp(15px,1.85svh,20px)] text-left outline-none transition ${
                   isProjectDirection
                     ? 'cursor-default bg-violet-100'
+                    : isProblemStatements
+                      ? 'bg-[#232326]'
                     : isPersona
                       ? 'bg-[#DCD6D8]'
                       : isExperienceKeywords
                         ? 'bg-violet-100'
                         : isRelationshipKeywords
                           ? 'bg-violet-200'
+                          : isMarketSizing
+                            ? 'bg-[#DDF444]'
+                            : isConsumptionKeywords
+                              ? 'bg-[#DDF444]'
+                          : isBrandPositioning
+                            ? 'bg-indigo-200'
+                          : isProjectReport
+                            ? 'bg-[#DDF444]'
                           : isMoodBoard
                             ? 'bg-stone-300'
                             : isRendering
@@ -1239,7 +2193,7 @@ function LibraryPanel({
               >
                 {isProjectDirection ? (
                   <div className="flex h-full flex-col p-[clamp(8px,0.93svh,10px)]">
-                    <h2 className="whitespace-pre-line font-['Inter'] text-[clamp(20px,2.78svh,30px)] font-semibold leading-[1.07] text-black">
+                    <h2 className="whitespace-pre-line font-['Inter'] text-[clamp(20px,2.78svh,30px)] font-medium leading-[1.07] text-black">
                       Project
                       <br />
                       Direction
@@ -1263,9 +2217,25 @@ function LibraryPanel({
                       />
                     </div>
                   </div>
+                ) : isProblemStatements ? (
+                  <>
+                    <Image
+                      src="/assets/icons/chat-badge/problem-statements.svg"
+                      alt=""
+                      width={179}
+                      height={140}
+                      unoptimized
+                      className="absolute left-0 top-0 h-full w-auto max-w-none"
+                    />
+                    <h2 className="absolute left-[5.43%] top-[7.14%] z-10 font-['Inter'] text-[clamp(20px,2.78svh,30px)] font-medium leading-[1.07]">
+                      <span className="text-black">Problem</span>
+                      <br />
+                      <span className="text-neutral-800">Statements</span>
+                    </h2>
+                  </>
                 ) : isPersona ? (
                   <>
-                    <h2 className="absolute left-[5.43%] top-[7.14%] z-10 font-['Inter'] text-[clamp(20px,2.78svh,30px)] font-semibold leading-[1.7] text-[#232323]">
+                    <h2 className="absolute left-[5.43%] top-[7.14%] z-10 font-['Inter'] text-[clamp(20px,2.78svh,30px)] font-medium leading-[1.7] text-[#232323]">
                       Persona
                     </h2>
                     <Image
@@ -1287,7 +2257,7 @@ function LibraryPanel({
                   </>
                 ) : isExperienceKeywords ? (
                   <>
-                    <h2 className="absolute left-[5.43%] top-[7.14%] z-10 whitespace-pre-line font-['Inter'] text-[clamp(20px,2.78svh,30px)] font-semibold leading-[1.07] text-black">
+                    <h2 className="absolute left-[5.43%] top-[7.14%] z-10 whitespace-pre-line font-['Inter'] text-[clamp(20px,2.78svh,30px)] font-medium leading-[1.07] text-black">
                       Keywords:
                       <br />
                       Experience
@@ -1311,7 +2281,7 @@ function LibraryPanel({
                   </>
                 ) : isRelationshipKeywords ? (
                   <>
-                    <h2 className="absolute left-[5.43%] top-[7.14%] z-10 whitespace-pre-line font-['Inter'] text-[clamp(20px,2.78svh,30px)] font-semibold leading-[1.07] text-black">
+                    <h2 className="absolute left-[5.43%] top-[7.14%] z-10 whitespace-pre-line font-['Inter'] text-[clamp(20px,2.78svh,30px)] font-medium leading-[1.07] text-black">
                       Keywords:
                       <br />
                       Relationship
@@ -1335,7 +2305,7 @@ function LibraryPanel({
                   </>
                 ) : isMoodBoard ? (
                   <>
-                    <h2 className="absolute left-[5.43%] top-[7.14%] z-10 font-['Inter'] text-[clamp(20px,2.78svh,30px)] font-semibold leading-[1.07] text-neutral-800">
+                    <h2 className="absolute left-[5.43%] top-[7.14%] z-10 font-['Inter'] text-[clamp(20px,2.78svh,30px)] font-medium leading-[1.07] text-neutral-800">
                       Mood Board
                     </h2>
                     <Image
@@ -1373,7 +2343,7 @@ function LibraryPanel({
                   </>
                 ) : isRendering ? (
                   <>
-                    <h2 className="absolute left-[5.43%] top-[7.14%] z-10 whitespace-pre-line font-['Inter'] text-[clamp(20px,2.78svh,30px)] font-semibold leading-[1.07] text-neutral-800">
+                    <h2 className="absolute left-[5.43%] top-[7.14%] z-10 whitespace-pre-line font-['Inter'] text-[clamp(20px,2.78svh,30px)] font-medium leading-[1.07] text-neutral-800">
                       3D Design:
                       <br />
                       Rendering
@@ -1385,6 +2355,78 @@ function LibraryPanel({
                       height={90}
                       unoptimized
                       className="absolute left-[58.52%] top-[27.78%] h-auto w-[44.02%]"
+                    />
+                  </>
+                ) : isMarketSizing ? (
+                  <>
+                    <h2 className="absolute left-[5.98%] top-[7.14%] whitespace-pre-line font-['Inter'] text-[clamp(20px,2.78svh,30px)] font-medium leading-[1.07] text-neutral-800">
+                      TAM SAM
+                      <br />
+                      SOM
+                    </h2>
+                    <Image
+                      src="/assets/icons/chat-badge/tam-sam-som.svg"
+                      alt=""
+                      width={165}
+                      height={40}
+                      unoptimized
+                      className="absolute bottom-[7.14%] left-[5.43%] h-auto w-[89.67%]"
+                    />
+                  </>
+                ) : isConsumptionKeywords ? (
+                  <>
+                    <h2 className="absolute left-[5.43%] top-[7.14%] z-10 whitespace-pre-line font-['Inter'] text-[clamp(20px,2.78svh,30px)] font-medium leading-[1.07] text-black">
+                      Keywords:
+                      <br />
+                      Consumption
+                    </h2>
+                    <Image
+                      src="/assets/icons/chat-badge/keywords-consumption-white.svg"
+                      alt=""
+                      width={109}
+                      height={50}
+                      unoptimized
+                      className="absolute left-[5.43%] top-[55.71%] h-auto w-[59.24%]"
+                    />
+                    <Image
+                      src="/assets/icons/chat-badge/keywords-consumption-black.svg"
+                      alt=""
+                      width={60}
+                      height={50}
+                      unoptimized
+                      className="absolute left-[67.39%] top-[55.71%] h-auto w-[32.61%]"
+                    />
+                  </>
+                ) : isBrandPositioning ? (
+                  <>
+                    <h2 className="absolute left-[5.43%] top-[7.14%] z-10 whitespace-pre-line font-['Inter'] text-[clamp(20px,2.78svh,30px)] font-medium leading-[1.07] text-neutral-800">
+                      Positioning
+                      <br />
+                      Map: Brand
+                    </h2>
+                    <Image
+                      src="/assets/icons/chat-badge/positioning-map.svg"
+                      alt=""
+                      width={164}
+                      height={111}
+                      unoptimized
+                      className="absolute bottom-[5%] left-[5%] h-auto w-[90%]"
+                    />
+                  </>
+                ) : isProjectReport ? (
+                  <>
+                    <h2 className="absolute left-[5.43%] top-[7.14%] z-10 whitespace-pre-line font-['Inter'] text-[clamp(20px,2.78svh,30px)] font-medium leading-[1.07] text-neutral-800">
+                      Project
+                      <br />
+                      Report
+                    </h2>
+                    <Image
+                      src="/assets/icons/chat-badge/project-report.svg"
+                      alt=""
+                      width={164}
+                      height={51}
+                      unoptimized
+                      className="absolute bottom-0 left-[5%] h-auto w-[90%]"
                     />
                   </>
                 ) : index % 3 === 1 ? (
@@ -1426,99 +2468,190 @@ function getBudgetHeadline(value: string) {
     return 'Scope'
   }
 
-  if (/억/.test(normalized)) {
-    return '$100K+'
+  const dollarBudget = normalized.match(/\$\s*([\d,.]+)\s*([KMB])?/i)
+  if (dollarBudget) {
+    return `$${dollarBudget[1]}${dollarBudget[2]?.toUpperCase() ?? ''}+`
   }
 
-  const firstNumber = normalized.match(/\d[\d,]*/)?.[0]
+  const manwonBudget = normalized.match(/([\d,]+)\s*만\s*원/)
+  if (manwonBudget) {
+    const manwon = Number(manwonBudget[1].replace(/,/g, ''))
+    return `$${Math.max(1, Math.round(manwon / 100))}K+`
+  }
 
-  return firstNumber ? `${firstNumber.replace(/,/g, '')}만+` : 'Scope'
+  const eokBudget = normalized.match(/([\d,.]+)\s*억\s*원/)
+  if (eokBudget) {
+    const eok = Number(eokBudget[1].replace(/,/g, ''))
+    return `$${Math.max(100, Math.round(eok * 100))}K+`
+  }
+
+  return 'Scope'
 }
 
-function getPrimaryFeature(features: string) {
-  const [firstFeature] = features
-    .split(/,|\/|·|\n/)
+function formatDurationEn(raw: string): string {
+  if (!raw) return 'TBD'
+  const match = raw.match(/(\d+)\s*(개월|달|주|년|해)/)
+  if (!match) return raw
+  const num = Number(match[1])
+  const unit = match[2]
+  if (unit === '개월' || unit === '달') return `${num} Month${num !== 1 ? 's' : ''}`
+  if (unit === '주') return `${num} Week${num !== 1 ? 's' : ''}`
+  if (unit === '년' || unit === '해') return `${num} Year${num !== 1 ? 's' : ''}`
+  return raw
+}
+
+function getFeatureSummary(features: string) {
+  const selectedFeatures = features
+    .split(/,|\n/)
     .map((item) => item.trim())
     .filter(Boolean)
 
-  if (!firstFeature || firstFeature === '미정') {
+  if (
+    selectedFeatures.length === 0 ||
+    selectedFeatures.every((feature) => feature === '미정')
+  ) {
     return '핵심 기능 정리 필요'
   }
 
-  return firstFeature.length > 26
-    ? `${firstFeature.slice(0, 26).trim()}...`
-    : firstFeature
+  return selectedFeatures.join(' · ')
+}
+
+function getFeatureTextSize(features: string) {
+  const featureCount = features
+    .split(/,|\n/)
+    .map((item) => item.trim())
+    .filter((item) => item && item !== '미정').length
+
+  if (featureCount >= 5) {
+    return 'text-[clamp(5px,1cqw,8px)] leading-[1.15]'
+  }
+
+  if (featureCount >= 3) {
+    return 'text-[clamp(6px,1.25cqw,10px)] leading-[1.2]'
+  }
+
+  return 'text-[clamp(7px,1.5cqw,12px)] leading-[1.3]'
+}
+
+function formatProjectIdea(ideaSummary: string) {
+  const idea = ideaSummary.replace(/\s+/g, ' ').trim()
+
+  if (!idea || idea === '미정') {
+    return '제품 아이디어를 구체화하는 것이 목표입니다.'
+  }
+
+  if (/개발이\s*목표입니다[.!]?$/.test(idea)) {
+    return `${idea.replace(/[.!?]+$/, '')}.`
+  }
+
+  const conciseIdea = idea
+    .slice(0, 150)
+    .replace(/[.!?]+$/, '')
+    .replace(
+      /(?:을|를)?\s*(?:만들고|제작하고|개발하고)\s*싶(?:어|어요|습니다|다)?$/,
+      ''
+    )
+    .replace(
+      /(?:을|를)?\s*(?:만들|제작하|개발하)(?:려고|고자)\s*(?:해|해요|합니다|한다)?$/,
+      ''
+    )
+    .replace(/(?:을|를)?\s*(?:만들|제작할|개발할)\s*예정(?:입니다)?$/, '')
+    .trim()
+
+  return /개발$/.test(conciseIdea)
+    ? `${conciseIdea}이 목표입니다.`
+    : `${conciseIdea} 개발이 목표입니다.`
 }
 
 function ProjectDirectionCard({ data }: { data: ProjectDirectionData }) {
+  const duration = formatDurationEn(
+    data.budgetAndDuration.split('/')[1]?.trim() ?? ''
+  )
+
   return (
-    <div className="w-full max-w-[800px] overflow-hidden rounded-[20px] bg-white px-[clamp(18px,2.22svh,24px)] py-[clamp(20px,2.59svh,28px)] outline outline-[3px] outline-offset-[-3px] outline-zinc-200">
-      <div className="flex items-center gap-2.5">
-        <div className="flex h-[clamp(240px,29.63svh,320px)] min-w-0 flex-1 flex-col justify-between overflow-hidden">
-          <div className="flex flex-col gap-[clamp(14px,1.85svh,20px)]">
-            <h2 className="font-['Inter'] text-[clamp(28px,3.33svh,36px)] font-medium leading-10 text-black">
+    <section className="w-full max-w-[50rem] [container-type:inline-size] overflow-hidden rounded-[clamp(12px,2.5cqw,20px)] bg-white p-[clamp(12px,3cqw,24px)] outline outline-[3px] outline-offset-[-3px] outline-zinc-200">
+      <div className="grid aspect-[47/20] w-full grid-cols-12 gap-[clamp(4px,1.25cqw,10px)]">
+        <div className="col-span-7 flex min-w-0 flex-col justify-between overflow-hidden pr-[clamp(4px,1cqw,8px)]">
+          <div className="flex flex-col items-start gap-[clamp(10px,2.5cqw,20px)]">
+            <h2 className="font-['Inter'] text-[clamp(20px,4.5cqw,36px)] font-medium leading-[1.1] text-black">
               Project
               <br />
               Direction
             </h2>
-            <div className="flex h-[clamp(32px,3.7svh,40px)] w-[clamp(32px,3.7svh,40px)] flex-col items-start justify-start gap-1.5 overflow-hidden rounded-3xl px-3.5 pb-3 pt-3.5 outline outline-1 outline-offset-[-1px] outline-neutral-400">
-              <div className="h-2.5 w-2.5 origin-top-left -rotate-45 outline outline-1 outline-offset-[-0.5px] outline-neutral-400" />
-              <div className="h-2 w-2 origin-top-left -rotate-45 outline outline-1 outline-offset-[-0.5px] outline-neutral-400" />
-            </div>
+            <Image
+              src="/assets/icons/chat-modal/project-direction-arrow.svg"
+              alt=""
+              width={42}
+              height={42}
+              className="h-[clamp(24px,5.25cqw,42px)] w-[clamp(24px,5.25cqw,42px)]"
+            />
           </div>
-
-          <div className="flex flex-col gap-3 overflow-hidden">
-            <h3 className="font-['Pretendard'] text-[clamp(20px,2.22svh,24px)] font-medium leading-6 text-black">
+          <div className="flex min-w-0 flex-col items-start gap-[clamp(6px,1.5cqw,12px)] overflow-hidden">
+            <h3 className="max-w-full truncate font-['Pretendard'] text-[clamp(15px,3cqw,24px)] font-medium leading-tight text-black">
               {data.category}
             </h3>
-            <p className="max-w-96 font-['Pretendard'] text-[clamp(13px,1.3svh,14px)] font-medium leading-5 text-black">
-              {data.goal !== '미정' ? data.goal : data.ideaSummary}
+            <p className="line-clamp-3 max-w-full font-['Pretendard'] text-[clamp(10px,1.75cqw,14px)] font-medium leading-[1.45] text-black">
+              {formatProjectIdea(data.ideaSummary)}
             </p>
           </div>
         </div>
 
-        <div className="flex h-[clamp(240px,29.63svh,320px)] w-[clamp(240px,29.63svh,320px)] shrink-0 flex-wrap content-center items-center justify-center gap-2 overflow-hidden">
-          <div className="flex w-[clamp(240px,29.63svh,320px)] flex-col items-start justify-start gap-[clamp(14px,1.85svh,20px)] overflow-hidden rounded-[20px] bg-black px-[clamp(18px,2.22svh,24px)] pb-[clamp(18px,2.22svh,24px)] pt-[clamp(20px,2.59svh,28px)]">
-            <h3 className="font-['Inter'] text-[clamp(28px,3.33svh,36px)] font-medium leading-6 text-white">
+        <div className="col-span-5 grid min-w-0 grid-cols-12 grid-rows-[52.5%_45%] gap-[clamp(4px,1cqw,8px)] overflow-hidden">
+          <div className="col-span-12 flex min-w-0 flex-col items-start justify-between overflow-hidden rounded-[clamp(10px,2.5cqw,20px)] bg-black px-[clamp(10px,3cqw,24px)] py-[clamp(10px,3.5cqw,28px)]">
+            <h3 className="font-['Inter'] text-[clamp(17px,4.5cqw,36px)] font-medium leading-none text-white">
               Target Timeline
             </h3>
-            <div className="rounded-[100px] bg-violet-200 px-5 py-2.5">
-              <p className="w-[clamp(112px,13.33svh,144px)] text-center font-['Inter'] text-[clamp(24px,2.78svh,30px)] font-semibold leading-6 text-black">
-                {data.budgetAndDuration.split('/')[1]?.trim() || 'TBD'}
-              </p>
-            </div>
+            {duration === '6 Months' ? (
+              <Image
+                src="/assets/icons/chat-modal/project-direction-timeline.svg"
+                alt="6 Months"
+                width={179}
+                height={44}
+                className="h-auto w-[clamp(90px,22.375cqw,179px)] max-w-full"
+              />
+            ) : (
+              <div className="max-w-full truncate rounded-full bg-violet-200 px-[clamp(8px,2.5cqw,20px)] py-[clamp(5px,1.25cqw,10px)] font-['Inter'] text-[clamp(14px,3.75cqw,30px)] font-semibold leading-none text-black">
+                {duration}
+              </div>
+            )}
           </div>
 
-          <div className="flex h-[clamp(108px,13.33svh,144px)] w-[clamp(132px,16.3svh,176px)] flex-col items-start justify-between overflow-hidden rounded-[20px] bg-violet-200 px-[clamp(15px,1.85svh,20px)] pb-[clamp(11px,1.3svh,14px)] pt-[clamp(15px,1.85svh,20px)]">
-            <p className="font-['Pretendard'] text-[clamp(28px,3.33svh,36px)] font-medium leading-6 text-black">
+          <div className="col-span-7 flex min-w-0 flex-col items-start justify-between overflow-hidden rounded-[clamp(10px,2.5cqw,20px)] bg-violet-200 px-[clamp(8px,2.5cqw,20px)] pb-[clamp(7px,1.75cqw,14px)] pt-[clamp(9px,2.5cqw,20px)]">
+            <div className="font-['Inter'] text-[clamp(17px,4.5cqw,36px)] font-medium leading-none text-black">
               {getBudgetHeadline(data.budgetAndDuration)}
-            </p>
-            <div>
-              <p className="font-['Inter'] text-[clamp(13px,1.3svh,14px)] font-medium leading-6 text-black">
+            </div>
+            <div className="flex w-full min-w-0 flex-col items-start">
+              <div className="font-['Inter'] text-[clamp(9px,1.75cqw,14px)] font-medium leading-tight text-black">
                 Project Scope
-              </p>
-              <p className="font-['Pretendard'] text-xs font-medium leading-6 text-black">
+              </div>
+              <div className="w-full truncate font-['Pretendard'] text-[clamp(8px,1.5cqw,12px)] font-medium leading-tight text-black">
                 {data.budgetAndDuration.split('/')[0]?.trim() || '미정'}
-              </p>
+              </div>
             </div>
           </div>
 
-          <div className="flex h-[clamp(108px,13.33svh,144px)] w-[clamp(96px,11.85svh,128px)] flex-col items-center justify-start gap-[5px] overflow-hidden rounded-[20px] bg-indigo-300 p-[clamp(10px,1.3svh,14px)]">
-            <div className="self-stretch rounded-[100px] bg-white px-2.5 py-[5px] text-center">
-              <span className="font-['Pretendard'] text-[clamp(12px,1.3svh,14px)] font-semibold leading-6 text-black">
-                Key Features
-              </span>
+          <div className="col-span-5 flex min-w-0 flex-col items-center justify-between overflow-hidden rounded-[clamp(10px,2.5cqw,20px)] bg-indigo-300 p-[clamp(6px,1.75cqw,14px)]">
+            <div className="w-full whitespace-nowrap rounded-full bg-white px-[clamp(2px,0.75cqw,6px)] py-[clamp(2px,0.625cqw,5px)] text-center font-['Inter'] text-[clamp(7px,1.5cqw,12px)] font-semibold leading-normal tracking-[-0.02em] text-black">
+              Key features
             </div>
-            <div className="p-2.5">
-              <div className="h-6 w-6 outline outline-2 outline-offset-[-1px] outline-black" />
+            <div className="p-[clamp(2px,0.75cqw,6px)]">
+              <Image
+                src="/assets/icons/chat-modal/project-direction-key.svg"
+                alt=""
+                width={43}
+                height={43}
+                className="h-[clamp(18px,4cqw,32px)] w-[clamp(18px,4cqw,32px)]"
+              />
             </div>
-            <p className="w-20 text-center font-['Pretendard'] text-[clamp(11px,1.11svh,12px)] font-medium leading-4 text-black">
-              {getPrimaryFeature(data.features)}
-            </p>
+            <div
+              className={`w-full break-keep text-center font-['Pretendard'] font-medium text-black ${getFeatureTextSize(data.features)}`}
+            >
+              {getFeatureSummary(data.features)}
+            </div>
           </div>
         </div>
       </div>
-    </div>
+    </section>
   )
 }
 
@@ -1560,7 +2693,7 @@ function LibraryArtifactModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-6"
+      className="absolute inset-0 z-[80] flex items-center justify-center bg-neutral-900/70 p-4 sm:p-6 lg:p-10"
       role="dialog"
       aria-modal="true"
       aria-label={artifact.title}
@@ -1599,6 +2732,372 @@ function LibraryPlaceholderCard({ artifact }: { artifact: LibraryArtifact }) {
   )
 }
 
+function ProjectReportModal({
+  data,
+  onClose,
+  onDownload,
+}: {
+  data: RfpDocument | null
+  onClose: () => void
+  onDownload: () => void
+}) {
+  useDismissModalOnEscape(Boolean(data), onClose)
+
+  if (!data) {
+    return null
+  }
+
+  return (
+    <div
+      className="absolute inset-0 z-[80] flex items-center justify-center bg-neutral-900/70 p-4 sm:p-6 lg:p-10"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Project Report"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose()
+        }
+      }}
+    >
+      <article className="flex max-h-[calc(100svh-32px)] w-full max-w-[1000px] flex-col overflow-hidden rounded-[24px] bg-[#f5f3ff] shadow-[0px_24px_60px_rgba(0,0,0,0.24)] sm:max-h-[calc(100svh-48px)]">
+        <header className="flex shrink-0 items-center justify-between gap-4 bg-neutral-900 px-5 py-4 text-white sm:px-8">
+          <div className="min-w-0">
+            <p className="font-['Inter'] text-xs font-semibold uppercase tracking-[0.18em] text-violet-300">
+              Project Report
+            </p>
+            <h2 className="truncate font-['Pretendard'] text-xl font-bold sm:text-2xl">
+              {data.projectName}
+            </h2>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void onDownload()}
+              className="rounded-lg bg-blue-600 px-3 py-2 font-['Pretendard'] text-xs font-semibold text-white transition hover:bg-blue-700"
+            >
+              다운로드
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="닫기"
+              className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/20 text-xl text-white transition hover:bg-white/10"
+            >
+              ×
+            </button>
+          </div>
+        </header>
+
+        <div className="app-content-scrollbar min-h-0 overflow-y-auto p-4 sm:p-8">
+          <div className="grid gap-4 lg:grid-cols-12">
+            <section className="rounded-[20px] bg-white p-5 shadow-sm lg:col-span-8 sm:p-7">
+              <p className="font-['Inter'] text-sm font-semibold text-blue-600">
+                Product Definition
+              </p>
+              <p className="mt-3 font-['Pretendard'] text-xl font-bold leading-8 text-neutral-900 sm:text-2xl">
+                {data.oneLineDefinition}
+              </p>
+              <dl className="mt-6 grid gap-4 sm:grid-cols-2">
+                <ReportDefinition label="프로젝트 목표" value={data.projectGoal} />
+                <ReportDefinition label="최종 활용 목적" value={data.finalPurpose} />
+              </dl>
+            </section>
+
+            <section className="rounded-[20px] bg-violet-200 p-5 lg:col-span-4 sm:p-7">
+              <p className="font-['Inter'] text-sm font-semibold text-neutral-700">
+                Project Scope
+              </p>
+              <p className="mt-5 font-['Pretendard'] text-2xl font-bold text-neutral-900">
+                {data.budgetRange}
+              </p>
+              <p className="mt-2 font-['Inter'] text-lg font-semibold text-neutral-700">
+                {data.timeline}
+              </p>
+              <p className="mt-5 font-['Pretendard'] text-sm leading-6 text-neutral-700">
+                {data.sizeOrForm}
+              </p>
+            </section>
+
+            <ReportSection number="02" title="페르소나" className="lg:col-span-6">
+              <ReportDefinition label="메인 타겟" value={data.mainTarget} />
+              <ReportDefinition label="사용 상황(TPO)" value={data.usageContext} />
+              <ReportDefinition label="핵심 니즈 / 문제" value={data.coreNeeds} />
+            </ReportSection>
+
+            <ReportSection number="03" title="제품 방향" className="lg:col-span-6">
+              <ReportDefinition label="핵심 가치" value={data.coreValue} />
+              <ReportTags label="스타일 키워드" items={data.styleKeywords} />
+              <ReportList label="피해야 하는 방향" items={data.avoidDirections} />
+            </ReportSection>
+
+            <ReportSection number="04" title="기능 요구사항" className="lg:col-span-7">
+              <ReportList label="반드시 포함할 핵심 기능" items={data.mustHaveFeatures} />
+              <ReportList label="있으면 좋은 기능" items={data.niceToHaveFeatures} />
+            </ReportSection>
+
+            <ReportSection number="05" title="구현 및 제작 조건" className="lg:col-span-5">
+              <ReportList label="구현 시 주의할 점" items={data.implementationNotes} />
+            </ReportSection>
+
+            <ReportSection number="06" title="레퍼런스 및 시장 인사이트" className="lg:col-span-12">
+              <ReportDefinition label="참고 이미지 / 레퍼런스" value={data.referenceSummary} />
+              <ReportList label="리서치 핵심 인사이트" items={data.researchInsights} columns />
+            </ReportSection>
+
+            <ReportSection number="07" title="성공 기준" className="lg:col-span-6">
+              <ReportList label="Success Criteria" items={data.successCriteria} />
+            </ReportSection>
+
+            <ReportSection number="08" title="다음 액션" className="bg-neutral-900 text-white lg:col-span-6">
+              <ReportList label="Next Actions" items={data.nextActions} inverted />
+            </ReportSection>
+          </div>
+        </div>
+      </article>
+    </div>
+  )
+}
+
+function MarketSizingModal({
+  data,
+  onClose,
+}: {
+  data: MarketSizingData | null
+  onClose: () => void
+}) {
+  useDismissModalOnEscape(Boolean(data), onClose)
+
+  if (!data) {
+    return null
+  }
+
+  return (
+    <div
+      className="absolute inset-0 z-[80] flex items-center justify-center bg-neutral-900/70 p-4 sm:p-6 lg:p-10"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Tam Sam Som"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose()
+        }
+      }}
+    >
+      <article className="relative aspect-[1176/780] w-[min(1176px,calc(100%_-_80px),calc((100svh_-_80px)*1.5077))] overflow-hidden rounded-[20px] bg-neutral-800 p-[4.7%] text-white shadow-[0px_24px_60px_rgba(0,0,0,0.20)] [container-type:inline-size]">
+        <h2 className="absolute left-[4.7%] top-[3.5%] font-['Inter'] text-[clamp(24px,3.06cqw,36px)] font-medium leading-10">
+          <span className="text-[#DDF444]">T</span>am Sam Som
+        </h2>
+        <p className="absolute left-[4.7%] top-[11.5%] max-w-[52%] font-['Pretendard'] text-[clamp(9px,1.02cqw,12px)] font-medium leading-5 text-white">
+          {data.summary}
+        </p>
+
+        <Image
+          src="/assets/icons/chat-modal/tamsamsom-contents.svg"
+          alt="TAM SAM SOM 시장 규모 분석"
+          width={1066}
+          height={558}
+          unoptimized
+          className="absolute bottom-[3.7%] left-[5.7%] h-auto w-[88.6%]"
+        />
+      </article>
+    </div>
+  )
+}
+
+function ConsumptionKeywordModal({
+  data,
+  onClose,
+}: {
+  data: ConsumptionKeywordData | null
+  onClose: () => void
+}) {
+  useDismissModalOnEscape(Boolean(data), onClose)
+
+  if (!data) {
+    return null
+  }
+
+  const keywords = data.keywords.slice(0, 30)
+  const keywordRows = distributeKeywords(keywords)
+  const featuredKeywords = new Set(
+    keywords.filter((_, index) => index % 3 === 1 || index % 5 === 0).slice(0, 12)
+  )
+
+  return (
+    <div
+      className="absolute inset-0 z-[80] flex items-center justify-center bg-neutral-900/70 p-4 sm:p-6 lg:p-10"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Keywords: Consumption"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose()
+        }
+      }}
+    >
+      <article className="relative aspect-[1176/780] w-[min(1176px,calc(100%_-_80px),calc((100svh_-_80px)*1.5077))] overflow-hidden rounded-[20px] bg-[#232326] text-white shadow-[0px_24px_60px_rgba(0,0,0,0.20)] [container-type:inline-size]">
+        <h2 className="absolute left-[4.7%] top-[5.1%] whitespace-pre-line font-['Inter'] text-[clamp(24px,3.06cqw,36px)] font-medium leading-[1.1]">
+          <span className="text-[#DDF444]">K</span>eywords:{'\n'}Consumption
+        </h2>
+
+        <div className="absolute left-[4.7%] top-[23.7%] w-[55%]">
+          <p className="mb-[clamp(12px,1.9cqw,22px)] font-['Pretendard'] text-[clamp(14px,1.7cqw,20px)] font-bold leading-6 text-[#DDF444]">
+            {data.summary}
+          </p>
+          <p className="font-['Pretendard'] text-[clamp(11px,1.19cqw,14px)] font-medium leading-[clamp(17px,2.04cqw,24px)] text-white">
+            {data.description}
+          </p>
+        </div>
+
+        <div className="absolute inset-x-0 bottom-0 h-[41%] overflow-hidden bg-[#8B8B8B]/40 px-[4.4%] pb-[3%] pt-[4.5%]">
+          <span className="absolute left-[4.7%] top-[4.2%] h-[5.5%] w-0 border-l-2 border-[#DDF444]" />
+          <p className="absolute left-[5.4%] top-[3.7%] font-['Pretendard'] text-[clamp(11px,1.36cqw,16px)] font-semibold leading-6 text-white">
+            <span className="text-[#DDF444]">K</span>eywords
+          </p>
+
+          <div className="flex h-full min-w-0 -translate-y-[15%] flex-col justify-center gap-[clamp(6px,0.75cqw,10px)] px-[1%] pt-[5%]">
+            <div className="flex min-w-0 items-center justify-start gap-x-[clamp(6px,0.85cqw,10px)]">
+              <p className="mr-[1%] shrink-0 -translate-y-[8%] font-['Inter'] text-[clamp(18px,2.55cqw,30px)] font-semibold leading-8 text-white/80">
+                Define
+              </p>
+              {keywordRows[0].map((keyword, index) => (
+                <ConsumptionKeywordChip
+                  key={`consumption-first-${keyword}-${index}`}
+                  featured={featuredKeywords.has(keyword)}
+                  label={keyword}
+                />
+              ))}
+            </div>
+            <div className="flex min-w-0 items-center justify-center gap-x-[clamp(6px,0.85cqw,10px)]">
+              {keywordRows[1].map((keyword, index) => (
+                <ConsumptionKeywordChip
+                  key={`consumption-second-${keyword}-${index}`}
+                  featured={featuredKeywords.has(keyword)}
+                  label={keyword}
+                />
+              ))}
+            </div>
+            <div className="flex min-w-0 items-center justify-end gap-x-[clamp(6px,0.85cqw,10px)]">
+              {keywordRows[2].map((keyword, index) => (
+                <ConsumptionKeywordChip
+                  key={`consumption-third-${keyword}-${index}`}
+                  featured={featuredKeywords.has(keyword)}
+                  label={keyword}
+                />
+              ))}
+              <p className="ml-[1%] shrink-0 -translate-y-[8%] font-['Inter'] text-[clamp(18px,2.55cqw,30px)] font-semibold leading-8 text-white/80">
+                Your Consumption
+              </p>
+            </div>
+          </div>
+        </div>
+      </article>
+    </div>
+  )
+}
+
+function ConsumptionKeywordChip({
+  featured,
+  label,
+}: {
+  featured: boolean
+  label: string
+}) {
+  return (
+    <span
+      className={`inline-flex h-9 w-fit max-w-full shrink-0 items-center justify-center whitespace-nowrap rounded-[100px] px-[clamp(9px,1.45cqw,17px)] py-3.5 font-['Pretendard'] text-[clamp(9px,1.19cqw,14px)] font-medium leading-6 outline outline-[0.52px] outline-offset-[-0.52px] outline-[#6C6C6C] ${
+        featured
+          ? 'bg-[#DDF444] text-[#232326] shadow-[0px_4px_4px_rgba(0,0,0,0.25)]'
+          : 'bg-[#232326]/60 text-[#DDF444]'
+      }`}
+    >
+      {label}
+    </span>
+  )
+}
+
+function ReportSection({
+  children,
+  className = '',
+  number,
+  title,
+}: {
+  children: ReactNode
+  className?: string
+  number: string
+  title: string
+}) {
+  return (
+    <section className={`rounded-[20px] bg-white p-5 shadow-sm sm:p-7 ${className}`}>
+      <div className="mb-5 flex items-center gap-3">
+        <span className="font-['Inter'] text-xs font-bold text-blue-600">{number}</span>
+        <h3 className="font-['Pretendard'] text-lg font-bold">{title}</h3>
+      </div>
+      <div className="flex flex-col gap-5">{children}</div>
+    </section>
+  )
+}
+
+function ReportDefinition({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt className="font-['Pretendard'] text-xs font-bold text-zinc-500">{label}</dt>
+      <dd className="mt-1 whitespace-pre-wrap font-['Pretendard'] text-sm font-medium leading-6 text-inherit">
+        {value || '정리된 정보 없음'}
+      </dd>
+    </div>
+  )
+}
+
+function ReportList({
+  columns = false,
+  inverted = false,
+  items,
+  label,
+}: {
+  columns?: boolean
+  inverted?: boolean
+  items: string[]
+  label: string
+}) {
+  return (
+    <div>
+      <p className={`font-['Pretendard'] text-xs font-bold ${inverted ? 'text-violet-300' : 'text-zinc-500'}`}>
+        {label}
+      </p>
+      <ul className={`mt-2 grid gap-2 ${columns ? 'md:grid-cols-2' : ''}`}>
+        {(items.length > 0 ? items : ['정리된 정보 없음']).map((item, index) => (
+          <li
+            key={`${label}-${index}`}
+            className="flex gap-2 font-['Pretendard'] text-sm font-medium leading-6"
+          >
+            <span className={inverted ? 'text-violet-300' : 'text-blue-600'}>•</span>
+            <span>{item}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+function ReportTags({ label, items }: { label: string; items: string[] }) {
+  return (
+    <div>
+      <p className="font-['Pretendard'] text-xs font-bold text-zinc-500">{label}</p>
+      <div className="mt-2 flex flex-wrap gap-2">
+        {(items.length > 0 ? items : ['정리된 정보 없음']).map((item) => (
+          <span
+            key={item}
+            className="rounded-full bg-violet-100 px-3 py-1 font-['Pretendard'] text-xs font-semibold text-neutral-800"
+          >
+            {item}
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function PersonaCardModal({
   data,
   onClose,
@@ -1614,7 +3113,7 @@ function PersonaCardModal({
 
   return (
     <div
-      className="absolute inset-0 z-[70] flex items-center justify-center bg-neutral-900/70 p-6"
+      className="absolute inset-0 z-[80] flex items-center justify-center bg-neutral-900/70 p-4 sm:p-6 lg:p-10"
       role="dialog"
       aria-modal="true"
       aria-label="Persona Card"
@@ -1794,6 +3293,139 @@ function PersonaBulletList({ items }: { items: string[] }) {
   )
 }
 
+function splitProblemStatementSection(value: string, fallbackTitle: string) {
+  const lines = value
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+
+  if (lines.length >= 2) {
+    return {
+      body: lines.slice(1).join(' '),
+      title: lines[0],
+    }
+  }
+
+  const normalized = value.replace(/\s+/g, ' ').trim()
+  const firstSentence = normalized.match(/^(.{8,52}?[.!?。！？])\s+(.+)$/)
+
+  if (firstSentence) {
+    return {
+      body: firstSentence[2],
+      title: firstSentence[1].replace(/[.!?。！？]+$/, ''),
+    }
+  }
+
+  return {
+    body: normalized,
+    title: normalized || fallbackTitle,
+  }
+}
+
+function ProblemStatementsModal({
+  data,
+  onClose,
+}: {
+  data: ProblemStatementsData | null
+  onClose: () => void
+}) {
+  useDismissModalOnEscape(Boolean(data), onClose)
+
+  if (!data) return null
+
+  const cards = [
+    {
+      body: splitProblemStatementSection(data.situation, '사용 환경과 맥락').body,
+      icon: '/assets/icons/chat-modal/problem-statements-context.svg',
+      label: 'Context',
+      number: '01',
+      title: splitProblemStatementSection(data.situation, '사용 환경과 맥락').title,
+    },
+    {
+      body: splitProblemStatementSection(data.pain, '반복되는 핵심 문제').body,
+      icon: '/assets/icons/chat-modal/problem-statements-problems.svg',
+      label: 'Problems',
+      number: '02',
+      title: splitProblemStatementSection(data.pain, '반복되는 핵심 문제').title,
+    },
+    {
+      body: splitProblemStatementSection(data.need, '필요한 변화와 경험').body,
+      icon: '/assets/icons/chat-modal/problem-statements-needs.svg',
+      label: 'Needs',
+      number: '03',
+      title: splitProblemStatementSection(data.need, '필요한 변화와 경험').title,
+    },
+  ]
+
+  return (
+    <div
+      className="absolute inset-0 z-[80] flex items-center justify-center bg-neutral-900/70 p-4 sm:p-6 lg:p-10"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Problem Statements"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose()
+        }
+      }}
+    >
+      <article className="relative aspect-[1176/780] w-[min(1176px,calc(100%_-_80px),calc((100svh_-_80px)*1.5077))] overflow-hidden rounded-[20px] bg-white shadow-[0px_24px_60px_rgba(0,0,0,0.20)] [container-type:inline-size]">
+        <div className="relative h-[47.7%] w-full overflow-hidden bg-[#232326]">
+          <Image
+            src="/assets/icons/chat-modal/problem-statements-background1.svg"
+            alt=""
+            width={1176}
+            height={372}
+            unoptimized
+            className="absolute inset-0 h-full w-full object-cover"
+          />
+          <h2 className="absolute left-[8.5%] top-[10.2%] font-['Inter'] text-[clamp(24px,3.06cqw,36px)] font-medium leading-[1.1] text-white">
+            <span className="text-[#DDF444]">P</span>roblem
+            <br />
+            Statements
+          </h2>
+        </div>
+
+        <div className="relative h-[52.3%] bg-white px-[8.5%] pb-[2.7%] pt-[2.55%] shadow-[0px_-4px_15px_4px_rgba(0,0,0,0.25)]">
+          <div className="grid h-full grid-cols-3 gap-[1.1%]">
+            {cards.map((card) => (
+              <section
+                key={card.number}
+                className="flex min-w-0 flex-col items-center overflow-hidden rounded-[20px] bg-white px-[5.3%] pb-[5%] pt-[1.9%] text-center shadow-[0px_0px_12px_rgba(0,0,0,0.25)]"
+              >
+                <div className="flex h-[10%] items-center justify-center font-['Inter'] text-[clamp(9px,1.19cqw,14px)] font-semibold leading-8 text-blue-600">
+                  <span>{card.number}</span>
+                  <span className="mx-[0.55cqw] h-[clamp(7px,0.85cqw,10px)] w-px bg-blue-600" />
+                  <span>{card.label}</span>
+                </div>
+
+                <div className="flex h-[31%] items-center justify-center">
+                  <Image
+                    src={card.icon}
+                    alt=""
+                    width={53}
+                    height={48}
+                    unoptimized
+                    className="h-[clamp(30px,4.08cqw,48px)] w-auto"
+                  />
+                </div>
+
+                <div className="h-px w-[80%] bg-indigo-200" />
+                <h3 className="mt-[4%] line-clamp-2 min-h-[12%] font-['Pretendard'] text-[clamp(11px,1.36cqw,16px)] font-semibold leading-[1.35] text-black">
+                  {card.title}
+                </h3>
+                <p className="mt-[2.8%] line-clamp-9 font-['Pretendard'] text-[clamp(8px,1.02cqw,12px)] font-normal leading-[1.65] text-black">
+                  {card.body}
+                </p>
+              </section>
+            ))}
+          </div>
+        </div>
+      </article>
+    </div>
+  )
+}
+
 function KeywordCardModal({
   data,
   onClose,
@@ -1809,7 +3441,7 @@ function KeywordCardModal({
 
   return (
     <div
-      className="absolute inset-0 z-[70] flex items-center justify-center bg-neutral-900/70 p-6"
+      className="absolute inset-0 z-[80] flex items-center justify-center bg-neutral-900/70 p-4 sm:p-6 lg:p-10"
       role="dialog"
       aria-modal="true"
       aria-label={data.title}
@@ -1837,91 +3469,150 @@ function getKeywordCardSubtitle(data: KeywordCardData) {
 }
 
 function KeywordCard({ data }: { data: KeywordCardData }) {
-  const keywords = data.keywords.slice(0, 28)
+  const keywords = data.keywords.slice(0, 30)
   const featuredKeywords = new Set(
     keywords.filter((_, index) => index % 3 === 1 || index % 5 === 0).slice(0, 12)
   )
-  const keywordRows = [
-    keywords.slice(0, 7),
-    keywords.slice(7, 15),
-    keywords.slice(15, 22),
-    keywords.slice(22, 28),
-  ]
 
   return (
-    <div className="relative aspect-[1176/780] max-h-[calc(100svh-48px)] w-full max-w-[1176px] overflow-hidden rounded-[20px] bg-white shadow-[0px_24px_60px_0px_rgba(0,0,0,0.10)]">
-      <div className="absolute inset-x-0 top-[58.8%] h-[41.2%] bg-zinc-300/40" />
+    <StructuredKeywordCard
+      data={data}
+      featuredKeywords={featuredKeywords}
+      keywords={keywords}
+      lowerBackground={
+        data.kind === 'experience_keywords'
+          ? 'bg-[rgba(217,217,217,0.4)]'
+          : 'bg-[rgba(153,170,244,0.4)]'
+      }
+      suffix={
+        data.kind === 'experience_keywords' ? 'Experience' : 'Relationship'
+      }
+    />
+  )
+}
 
-      <div className="absolute left-[4.7%] top-[5.1%]">
-        <h2 className="whitespace-pre-line font-['Inter'] text-[clamp(24px,3.7svh,36px)] font-medium leading-[1.1] text-black">
-          <span className="text-blue-600">K</span>
-          {data.title.replace(/^K/i, '').replace(': ', ':\n')}
-        </h2>
-      </div>
+function StructuredKeywordCard({
+  data,
+  featuredKeywords,
+  keywords,
+  lowerBackground,
+  suffix,
+}: {
+  data: KeywordCardData
+  featuredKeywords: Set<string>
+  keywords: string[]
+  lowerBackground: string
+  suffix: 'Experience' | 'Relationship'
+}) {
+  const keywordRows = distributeKeywords(keywords)
+
+  return (
+    <div className="relative aspect-[1176/780] w-[min(1176px,calc(100%_-_80px),calc((100svh_-_80px)*1.5077))] overflow-hidden rounded-[20px] bg-blue-50 shadow-[0px_24px_60px_0px_rgba(0,0,0,0.10)] [container-type:inline-size]">
+
+      <h2 className="absolute left-[4.7%] top-[5.1%] whitespace-pre-line font-['Inter'] text-[clamp(24px,3.06cqw,36px)] font-medium leading-[1.1] text-black">
+        <span className="text-blue-600">K</span>eywords:{'\n'}{suffix}
+      </h2>
 
       <div className="absolute left-[4.7%] top-[23.7%] w-[55%]">
-        <p className="mb-[clamp(12px,2.04svh,22px)] font-['Pretendard'] text-[clamp(14px,2.04svh,20px)] font-bold leading-6 text-blue-600">
+        <p className="mb-[clamp(12px,1.9cqw,22px)] font-['Pretendard'] text-[clamp(14px,1.7cqw,20px)] font-bold leading-6 text-blue-600">
           {getKeywordCardSubtitle(data)}
         </p>
-        <p className="font-['Pretendard'] text-[clamp(11px,1.3svh,14px)] font-medium leading-[clamp(17px,2.22svh,24px)] text-black">
+        <p className="font-['Pretendard'] text-[clamp(11px,1.19cqw,14px)] font-medium leading-[clamp(17px,2.04cqw,24px)] text-black">
           {data.description}
         </p>
       </div>
 
-      <span className="absolute left-[4.7%] top-[62.6%] h-[1.8%] w-0 border-l-2 border-blue-600" />
-
-      <div className="absolute bottom-[5%] left-0 right-0 h-[32.8%] overflow-hidden rounded-[20px] shadow-[0px_4px_4px_0px_rgba(0,0,0,0.25)]">
-        <p className="absolute left-[5.4%] top-0 font-['Pretendard'] text-[clamp(11px,1.48svh,16px)] font-semibold leading-6 text-black">
+      <div className={`absolute inset-x-0 bottom-0 h-[41%] overflow-hidden px-[4.4%] pb-[3%] pt-[4.5%] ${lowerBackground}`}>
+        <span className="absolute left-[4.7%] top-[4.2%] h-[5.5%] w-0 border-l-2 border-blue-600" />
+        <p className="absolute left-[5.4%] top-[3.7%] font-['Pretendard'] text-[clamp(11px,1.36cqw,16px)] font-semibold leading-6 text-black">
           <span className="text-blue-600">K</span>eywords
         </p>
 
-        <div className="flex h-full flex-col justify-center gap-[clamp(6px,1.02svh,11px)] px-[4.4%] pt-[1.6%]">
-          <div className="flex min-w-0 items-center gap-[clamp(6px,1.02svh,11px)] pl-[9.5%]">
-            <p className="mr-[2%] shrink-0 font-['Inter'] text-[clamp(18px,2.78svh,30px)] font-semibold leading-8 text-black/80">
+        <div className="flex h-full min-w-0 -translate-y-[15%] flex-col justify-center gap-[clamp(6px,0.75cqw,10px)] px-[1%] pt-[5%]">
+          <div className="flex min-w-0 items-center justify-start gap-x-[clamp(8px,1cqw,12px)]">
+            <p className="mr-[1%] shrink-0 -translate-y-[8%] font-['Inter'] text-[clamp(18px,2.55cqw,30px)] font-semibold leading-8 text-black/80">
               Define
             </p>
             {keywordRows[0].map((keyword, index) => (
               <KeywordChip
-                key={`top-${keyword}-${index}`}
+                key={`${suffix}-first-${keyword}-${index}`}
                 featured={featuredKeywords.has(keyword)}
                 label={keyword}
               />
             ))}
           </div>
-          <div className="flex min-w-0 items-center gap-[clamp(6px,1.02svh,11px)]">
+          <div className="flex min-w-0 items-center justify-center gap-x-[clamp(8px,1cqw,12px)]">
             {keywordRows[1].map((keyword, index) => (
               <KeywordChip
-                key={`second-${keyword}-${index}`}
+                key={`${suffix}-second-${keyword}-${index}`}
                 featured={featuredKeywords.has(keyword)}
                 label={keyword}
               />
             ))}
           </div>
-          <div className="flex min-w-0 items-center gap-[clamp(6px,1.02svh,11px)] pl-[9.5%]">
+          <div className="flex min-w-0 items-center justify-end gap-x-[clamp(8px,1cqw,12px)]">
             {keywordRows[2].map((keyword, index) => (
               <KeywordChip
-                key={`third-${keyword}-${index}`}
+                key={`${suffix}-third-${keyword}-${index}`}
                 featured={featuredKeywords.has(keyword)}
                 label={keyword}
               />
             ))}
-          </div>
-          <div className="flex min-w-0 items-center gap-[clamp(6px,1.02svh,11px)]">
-            {keywordRows[3].map((keyword, index) => (
-              <KeywordChip
-                key={`bottom-${keyword}-${index}`}
-                featured={featuredKeywords.has(keyword)}
-                label={keyword}
-              />
-            ))}
-            <p className="ml-auto shrink-0 font-['Inter'] text-[clamp(18px,2.78svh,30px)] font-semibold leading-8 text-black/80">
-              Your {data.kind === 'experience_keywords' ? 'Experience' : 'Relationship'}
+            <p className="ml-[1%] shrink-0 -translate-y-[8%] font-['Inter'] text-[clamp(18px,2.55cqw,30px)] font-semibold leading-8 text-black/80">
+              Your {suffix}
             </p>
           </div>
         </div>
       </div>
     </div>
   )
+}
+
+function estimateKeywordChipWidth(keyword: string) {
+  const textWidth = Array.from(keyword).reduce(
+    (width, character) =>
+      width + (/[ㄱ-힝]/.test(character) ? 16 : 9),
+    0
+  )
+
+  return textWidth + 40
+}
+
+function distributeKeywords(keywords: string[]) {
+  const rows: string[][] = [[], [], []]
+  const rowWidths = [0, 0, 0]
+  const rowCapacities = [880, 1060, 790]
+  let rowIndex = 0
+
+  for (const keyword of keywords) {
+    const keywordWidth = estimateKeywordChipWidth(keyword)
+    let targetRow = rowIndex
+
+    while (targetRow < rows.length) {
+      const gapWidth = rows[targetRow].length > 0 ? 12 : 0
+      const fitsRow =
+        rowWidths[targetRow] + gapWidth + keywordWidth <=
+        rowCapacities[targetRow]
+
+      if (fitsRow) {
+        break
+      }
+
+      targetRow += 1
+    }
+
+    // Do not render chips that would escape the third row's available width.
+    if (targetRow >= rows.length) {
+      continue
+    }
+
+    rowIndex = targetRow
+    rows[rowIndex].push(keyword)
+    rowWidths[rowIndex] +=
+      (rows[rowIndex].length > 1 ? 12 : 0) + keywordWidth
+  }
+
+  return rows
 }
 
 function KeywordChip({
@@ -1933,7 +3624,7 @@ function KeywordChip({
 }) {
   return (
     <span
-      className={`inline-flex h-[clamp(26px,3.33svh,36px)] min-w-0 shrink items-center justify-center truncate rounded-[100px] px-[clamp(10px,1.85svh,20px)] font-['Pretendard'] text-[clamp(10px,1.48svh,16px)] font-medium leading-6 outline outline-[0.52px] outline-offset-[-0.52px] outline-neutral-500 ${
+      className={`inline-flex h-9 w-fit max-w-full shrink-0 items-center justify-center gap-2.5 whitespace-nowrap rounded-[100px] px-[clamp(10px,1.7cqw,20px)] py-3.5 font-['Pretendard'] text-[clamp(10px,1.36cqw,16px)] font-medium leading-6 outline outline-[0.52px] outline-offset-[-0.52px] outline-neutral-500 ${
         featured
           ? 'bg-blue-600 text-white shadow-[0px_4px_4px_0px_rgba(0,0,0,0.25)]'
           : 'bg-white/60 text-blue-600'
@@ -2209,30 +3900,95 @@ function MarkdownContent({ content }: { content: string }) {
 }
 
 function ChatBubble({
+  confirmedDirectionKinds,
+  confirmedKeywordKinds,
+  directionArtifactKindOverride,
   disabled,
+  hasConfirmedPersona,
+  hasConfirmedRfp,
   hasVisualizedPersona,
+  hasVisualizedRfp,
+  isProblemStatementsConfirmed,
+  isLatestEditablePersona,
+  latestKeywordMessageIds,
+  latestProblemStatementsMessageId,
+  latestDirectionMessageIds,
+  latestRfpMessageId,
   message,
   onChoice,
+  onConfirmKeyword,
+  onConfirmProblemStatements,
   onDownloadRfp,
+  onConfirmDirection,
+  onOpenMoodboardModal,
   onVisualizeKeyword,
+  onVisualizeDirection,
+  onVisualizeProblemStatements,
   onVisualizePersona,
+  onVisualizeRfp,
+  projectId,
   userAvatarUrl,
   visualizedKeywordCards,
+  visualizedDirectionArtifacts,
+  visualizedProblemStatements,
 }: {
+  confirmedDirectionKinds: Set<DirectionArtifactKind>
+  confirmedKeywordKinds: Set<KeywordArtifactKind>
+  directionArtifactKindOverride: DirectionArtifactKind | null
   disabled: boolean
+  hasConfirmedPersona: boolean
+  hasConfirmedRfp: boolean
   hasVisualizedPersona: boolean
+  hasVisualizedRfp: boolean
+  isProblemStatementsConfirmed: boolean
+  isLatestEditablePersona: boolean
+  latestKeywordMessageIds: Partial<Record<KeywordArtifactKind, string>>
+  latestProblemStatementsMessageId: string | null
+  latestDirectionMessageIds: Partial<Record<DirectionArtifactKind, string>>
+  latestRfpMessageId: string | null
   message: ChatMessageRecord
   onChoice: (value: string) => void
+  onConfirmKeyword: (
+    kind: KeywordArtifactKind,
+    messageId: string
+  ) => void
+  onConfirmProblemStatements: (messageId: string) => void
   onDownloadRfp: () => void
+  onConfirmDirection: (
+    kind: DirectionArtifactKind,
+    messageId: string
+  ) => void
+  onOpenMoodboardModal: () => void
   onVisualizeKeyword: (data: KeywordCardData) => void
+  onVisualizeDirection: (
+    kind: DirectionArtifactKind,
+    messageId: string,
+    content: string
+  ) => void
+  onVisualizeProblemStatements: (data: ProblemStatementsData) => void
   onVisualizePersona: (personaCard?: PersonaCardData | null) => void
+  onVisualizeRfp: (messageId: string, rfp: RfpDocument) => void
+  projectId: string
   userAvatarUrl?: string | null
   visualizedKeywordCards: Partial<
     Record<KeywordArtifactKind, KeywordCardData>
   >
+  visualizedDirectionArtifacts: Partial<
+    Record<DirectionArtifactKind, string>
+  >
+  visualizedProblemStatements: ProblemStatementsData | null
 }) {
   const [hintModalOpen, setHintModalOpen] = useState(false)
   const [selectedHintIndex, setSelectedHintIndex] = useState<number | null>(null)
+  const [selectedDesignIndex, setSelectedDesignIndex] = useState<number | null>(null)
+  const [confirmedThumbnailUrl, setConfirmedThumbnailUrl] = useState<string | null>(null)
+  const [meshyTaskId, setMeshyTaskId] = useState<string | null>(null)
+  const [meshyStatus, setMeshyStatus] = useState<
+    'idle' | 'uploading' | 'PENDING' | 'IN_PROGRESS' | 'SUCCEEDED' | 'FAILED'
+  >('idle')
+  const [meshyThumbnail, setMeshyThumbnail] = useState<string | null>(null)
+  const [meshyError, setMeshyError] = useState<string | null>(null)
+  const [moodboardImages, setMoodboardImages] = useState<MoodboardGridImage[] | null>(null)
   const isUser = message.role === 'user'
   const rfpBlock = extractRfpJsonBlock(message.content)
   const projectDirection = !isUser
@@ -2242,9 +3998,18 @@ function ChatBubble({
     ? splitProjectDirectionContent(rfpBlock.cleanedText)
     : null
   const directionWidgets = !isUser && hasDirectionWidgets(rfpBlock.cleanedText)
+  const problemStatements = !isUser
+    ? extractProblemStatementsData(rfpBlock.cleanedText)
+    : null
+  const directionArtifactKind = !isUser
+    ? directionArtifactKindOverride ?? getDirectionArtifactKind(rfpBlock.cleanedText)
+    : null
   const keywordCards = !isUser
     ? extractKeywordCardsData(rfpBlock.cleanedText)
     : []
+  const shouldRenderGeneratedImages =
+    Boolean(message.generatedImageBlock?.images.length) &&
+    message.generatedImageBlock?.purpose !== 'persona'
   const cleanedContent = stripInternalBlocksForDisplay(
     projectDirectionSplit?.after ?? rfpBlock.cleanedText
   )
@@ -2253,16 +4018,54 @@ function ChatBubble({
     : ''
   const choiceSplit = splitAssistantChoices(cleanedContent)
   const displayContent = choiceSplit.displayContent
+  const isPersonaCardMessage = Boolean(message.personaCardBlock)
   const shouldShowHints =
     !isUser &&
+    !isPersonaCardMessage &&
+    !problemStatements &&
+    !isProcessCheckPrompt(displayContent) &&
     !isStageProceedPrompt(displayContent) &&
     isAssistantQuestion(displayContent)
-  const choices =
-    choiceSplit.choices.length > 0
+  const choices = isPersonaCardMessage
+    ? []
+    : choiceSplit.choices.length > 0
       ? choiceSplit.choices
       : shouldShowHints
         ? buildFallbackHintChoices(displayContent)
         : []
+
+  useEffect(() => {
+    if (!meshyTaskId || meshyStatus === 'SUCCEEDED' || meshyStatus === 'FAILED') return
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/meshy?taskId=${meshyTaskId}`)
+        const task = await res.json()
+        if (!res.ok) {
+          setMeshyError(task.error || '3D 작업 상태를 확인하지 못했습니다.')
+          setMeshyStatus('FAILED')
+          return
+        }
+        setMeshyStatus(task.status)
+        if (task.status === 'SUCCEEDED' && task.thumbnail_url) {
+          setMeshyThumbnail(task.thumbnail_url)
+        }
+      } catch {
+        // ignore transient errors; keep polling
+      }
+    }, 5000)
+
+    return () => clearInterval(interval)
+  }, [meshyTaskId, meshyStatus])
+
+  const isPersonaVisualizationOnly =
+    Boolean(message.personaCardBlock?.imageUrl) &&
+    message.generatedImageBlock?.purpose === 'persona' &&
+    !displayContent
+
+  if (isPersonaVisualizationOnly) {
+    return null
+  }
 
   if (
     !displayContent &&
@@ -2271,7 +4074,7 @@ function ChatBubble({
     !directionWidgets &&
     keywordCards.length === 0 &&
     !message.personaCardBlock &&
-    !message.generatedImageBlock?.images.length &&
+    !shouldRenderGeneratedImages &&
     !rfpBlock.rfp
   ) {
     return null
@@ -2307,33 +4110,65 @@ function ChatBubble({
   return (
     <article className="flex w-full max-w-[800px] flex-col items-start gap-3 lg:w-[69.6%]">
       {beforeProjectDirection ? (
-        <div className="w-full rounded-[20px] bg-slate-200 px-[clamp(24px,3.33svh,36px)] py-[clamp(20px,2.59svh,28px)] outline outline-[2px] outline-offset-[-2px] outline-zinc-200">
+        <div className="w-full rounded-[20px] bg-slate-200 px-[clamp(24px,3.33svh,36px)] py-[clamp(20px,2.59svh,28px)]">
           <MarkdownContent content={beforeProjectDirection} />
         </div>
       ) : null}
 
       {projectDirection ? <ProjectDirectionCard data={projectDirection} /> : null}
-      {displayContent || message.generatedImageBlock?.images.length ? (
-        <div className="w-full rounded-[20px] bg-slate-200 px-[clamp(24px,3.33svh,36px)] py-[clamp(20px,2.59svh,28px)] outline outline-[2px] outline-offset-[-2px] outline-zinc-200">
+      {displayContent || shouldRenderGeneratedImages ? (
+        <div className="w-full rounded-[20px] bg-slate-200 px-[clamp(24px,3.33svh,36px)] py-[clamp(20px,2.59svh,28px)]">
           {displayContent ? (
             <MarkdownContent content={displayContent} />
           ) : null}
 
-          {message.generatedImageBlock?.images.length ? (
+          {shouldRenderGeneratedImages && message.generatedImageBlock ? (
             <div className="mt-5">
-              <div className="grid grid-cols-2 gap-3">
-                {message.generatedImageBlock.images.map((image, index) => (
-                  <Image
-                    key={`${message.id}-${index}`}
-                    src={image}
-                    alt=""
-                    width={260}
-                    height={260}
-                    unoptimized
-                    className="aspect-square w-full rounded-xl object-cover"
+              {message.generatedImageBlock.purpose === 'moodboard_candidate' ? (
+                moodboardImages ? (
+                  <MoodboardGrid
+                    images={moodboardImages}
+                    onOpenModal={onOpenMoodboardModal}
                   />
-                ))}
-              </div>
+                ) : (
+                  <MoodboardCandidates
+                    candidates={
+                      (message.generatedImageBlock.unsplashMeta as UnsplashImageMeta[]) ??
+                      message.generatedImageBlock.images.map((url, i) => ({
+                        id: String(i),
+                        photographer_name: '',
+                        photographer_url: '',
+                        thumb_url: url,
+                        unsplash_page_url: '',
+                        url,
+                      }))
+                    }
+                    disabled={disabled}
+                    projectId={projectId}
+                    searchQuery={message.generatedImageBlock.prompt}
+                    onBoardReady={(imgs) => {
+                      setMoodboardImages(imgs)
+                      onChoice('스타일 레퍼런스를 선택하고 무드보드를 만들었어요.')
+                    }}
+                  />
+                )
+              ) : (
+                <>
+                  <div className="grid grid-cols-2 gap-3">
+                    {message.generatedImageBlock.images.map((image, index) => (
+                      <Image
+                        key={`${message.id}-${index}`}
+                        src={image}
+                        alt=""
+                        width={260}
+                        height={260}
+                        unoptimized
+                        className="aspect-square w-full rounded-xl object-cover"
+                      />
+                    ))}
+                  </div>
+                </>
+              )}
               {message.generatedImageBlock.purpose === 'style_reference' ? (
                 <div className="mt-3 flex flex-wrap gap-2">
                   {message.generatedImageBlock.images.map((_, index) => (
@@ -2351,32 +4186,150 @@ function ChatBubble({
                   ))}
                 </div>
               ) : message.generatedImageBlock.purpose === 'design' ? (
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {message.generatedImageBlock.images.map((_, index) => (
+                <div className="mt-3 flex flex-col gap-3">
+                  <div className="flex flex-wrap gap-2">
+                    {message.generatedImageBlock.images.map((_, index) => (
+                      <button
+                        key={`${message.id}-design-choice-${index}`}
+                        type="button"
+                        disabled={disabled}
+                        onClick={() => {
+                          setSelectedDesignIndex(index)
+                          onChoice(
+                            `${index + 1}번 디자인 시안을 최종안으로 확정하고 진행할게요`
+                          )
+                          const image = message.generatedImageBlock?.images[index]
+                          if (image) {
+                            fetch('/api/projects/thumbnail', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ imageBase64: image, projectId }),
+                            })
+                              .then((r) => r.json())
+                              .then((p: { thumbnailUrl?: string }) => {
+                                if (p.thumbnailUrl) setConfirmedThumbnailUrl(p.thumbnailUrl)
+                              })
+                              .catch(() => null)
+                          }
+                        }}
+                        className={`rounded-full px-4 py-1.5 font-['Pretendard'] text-xs font-semibold transition disabled:opacity-50 ${
+                          selectedDesignIndex === index
+                            ? 'bg-blue-700 text-white ring-2 ring-blue-400'
+                            : 'bg-blue-600 text-white hover:bg-blue-700'
+                        }`}
+                      >
+                        {index + 1}번 시안 확정
+                      </button>
+                    ))}
                     <button
-                      key={`${message.id}-design-choice-${index}`}
                       type="button"
                       disabled={disabled}
                       onClick={() =>
-                        onChoice(
-                          `${index + 1}번 디자인 시안을 최종안으로 확정하고 진행할게요`
-                        )
+                        onChoice('현재 디자인 시안을 수정해서 다시 보여주세요')
                       }
-                      className="rounded-full bg-blue-600 px-4 py-1.5 font-['Pretendard'] text-xs font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50"
+                      className="rounded-full border border-zinc-200 bg-white px-4 py-1.5 font-['Pretendard'] text-xs font-semibold text-neutral-700 shadow-sm transition hover:border-blue-300 hover:bg-blue-50 disabled:opacity-50"
                     >
-                      {index + 1}번 시안 확정
+                      수정안 다시 생성
                     </button>
-                  ))}
-                  <button
-                    type="button"
-                    disabled={disabled}
-                    onClick={() =>
-                      onChoice('현재 디자인 시안을 수정해서 다시 보여주세요')
-                    }
-                    className="rounded-full border border-zinc-200 bg-white px-4 py-1.5 font-['Pretendard'] text-xs font-semibold text-neutral-700 shadow-sm transition hover:border-blue-300 hover:bg-blue-50 disabled:opacity-50"
-                  >
-                    수정안 다시 생성
-                  </button>
+                  </div>
+
+                  {/* Meshy AI 3D generation — 시안 확정 후 활성화 */}
+                  {selectedDesignIndex !== null && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={
+                          disabled ||
+                          meshyStatus === 'uploading' ||
+                          meshyStatus === 'PENDING' ||
+                          meshyStatus === 'IN_PROGRESS' ||
+                          meshyStatus === 'SUCCEEDED'
+                        }
+                        onClick={async () => {
+                          const selectedImage =
+                            message.generatedImageBlock?.images[selectedDesignIndex]
+                          if (!selectedImage) return
+                          setMeshyStatus('uploading')
+                          setMeshyError(null)
+                          try {
+                            const mimeType = selectedImage.startsWith('data:image/png')
+                              ? 'image/png'
+                              : 'image/jpeg'
+                            const res = await fetch('/api/meshy', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify(
+                              confirmedThumbnailUrl
+                                ? { thumbnailUrl: confirmedThumbnailUrl, projectId }
+                                : { imageBase64: selectedImage, mimeType, projectId }
+                            ),
+                            })
+                            const payload = (await res.json().catch(() => null)) as {
+                              error?: string
+                              stage?: string
+                              taskId?: string
+                            } | null
+                            if (!res.ok || !payload?.taskId) {
+                              const stageLabel = payload?.stage
+                                ? ` (${payload.stage})`
+                                : ''
+                              throw new Error(
+                                `${payload?.error || '3D 작업을 시작하지 못했습니다.'}${stageLabel}`
+                              )
+                            }
+                            const { taskId } = payload
+                            setMeshyTaskId(taskId)
+                            setMeshyStatus('PENDING')
+                          } catch (error) {
+                            setMeshyError(
+                              error instanceof Error
+                                ? error.message
+                                : '3D 작업을 시작하지 못했습니다.'
+                            )
+                            setMeshyStatus('FAILED')
+                          }
+                        }}
+                        className="rounded-full border border-zinc-300 bg-zinc-900 px-4 py-1.5 font-['Pretendard'] text-xs font-semibold text-white transition hover:bg-zinc-700 disabled:opacity-50"
+                      >
+                        {meshyStatus === 'uploading'
+                          ? '업로드 중...'
+                          : meshyStatus === 'PENDING' || meshyStatus === 'IN_PROGRESS'
+                            ? '3D 생성 중...'
+                            : meshyStatus === 'SUCCEEDED'
+                              ? '3D 모델 완료 ✓'
+                              : meshyStatus === 'FAILED'
+                                ? '3D 생성 실패 — 재시도'
+                                : `${selectedDesignIndex + 1}번 시안 3D 모델 생성하기`}
+                      </button>
+
+                      {(meshyStatus === 'PENDING' || meshyStatus === 'IN_PROGRESS') && (
+                        <span className="font-['Pretendard'] text-xs text-zinc-500">
+                          Meshy AI 처리 중...
+                        </span>
+                      )}
+                      {meshyStatus === 'FAILED' && meshyError ? (
+                        <span className="max-w-full font-['Pretendard'] text-xs text-red-600">
+                          {meshyError}
+                        </span>
+                      ) : null}
+                    </div>
+                  )}
+
+                  {meshyStatus === 'SUCCEEDED' && meshyThumbnail && (
+                    <div className="flex flex-col gap-1">
+                      <span className="font-['Pretendard'] text-xs font-semibold text-zinc-600">
+                        3D 모델 미리보기
+                      </span>
+                      <Image
+                        src={meshyThumbnail}
+                        alt="3D model thumbnail"
+                        width={160}
+                        height={160}
+                        unoptimized
+                        className="rounded-lg object-cover"
+                      />
+                    </div>
+                  )}
                 </div>
               ) : null}
             </div>
@@ -2399,7 +4352,7 @@ function ChatBubble({
         />
       ) : null}
 
-      {choices.length > 0 ? (
+      {choices.length > 0 && !directionArtifactKind ? (
         <div className="flex w-full justify-end">
           <button
             type="button"
@@ -2415,16 +4368,266 @@ function ChatBubble({
         </div>
       ) : null}
 
-      <div className="flex flex-wrap items-center gap-3">
-        {isStageProceedPrompt(displayContent) ? (
+      {message.personaCardBlock && isLatestEditablePersona ? (
+        <div className="flex w-full flex-col items-end gap-3">
+          <div className="flex items-center justify-end gap-3">
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => onChoice('페르소나 카드 다시 생성하기')}
+              className="min-w-24 rounded-[30px] bg-blue-600 px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-white disabled:opacity-50"
+            >
+              다시 생성하기
+            </button>
+            <button
+              type="button"
+              disabled={disabled || hasConfirmedPersona}
+              onClick={() => onChoice('페르소나 카드 확정하기')}
+              className="min-w-24 rounded-[30px] bg-neutral-500 px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-white disabled:opacity-50"
+            >
+              확정하기
+            </button>
+          </div>
+
+          {hasConfirmedPersona &&
+          !message.personaCardBlock.imageUrl &&
+          !hasVisualizedPersona ? (
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => void onVisualizePersona(message.personaCardBlock)}
+              className="inline-flex items-center gap-1 rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
+            >
+              시각화 하기
+              <Image
+                src="/assets/icons/chat/visualize.svg"
+                alt=""
+                width={18}
+                height={18}
+                className="ml-0.5 h-[18px] w-[18px]"
+              />
+              <span>2</span>
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
+      {(() => {
+        const psData = problemStatements
+        const isLatestPs = latestProblemStatementsMessageId === message.id
+
+        if (!psData || !isLatestPs) return null
+
+        return (
+          <div className="flex w-full flex-col items-end gap-3">
+            <div className="flex items-center justify-end gap-3">
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={() => onChoice('Problem Statements 다시 생성하기')}
+                className="min-w-24 rounded-[30px] bg-blue-600 px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-white disabled:opacity-50"
+              >
+                다시 생성하기
+              </button>
+              <button
+                type="button"
+                disabled={disabled || isProblemStatementsConfirmed}
+                onClick={() => onConfirmProblemStatements(message.id)}
+                className={`min-w-24 rounded-[30px] px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 disabled:cursor-default ${
+                  isProblemStatementsConfirmed
+                    ? 'bg-neutral-500 text-white'
+                    : 'bg-[#DDF444] text-black disabled:opacity-50'
+                }`}
+              >
+                확정하기
+              </button>
+            </div>
+            {isProblemStatementsConfirmed && !visualizedProblemStatements ? (
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={() => onVisualizeProblemStatements(psData)}
+                className="inline-flex items-center gap-1 rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
+              >
+                시각화 하기
+                <Image
+                  src="/assets/icons/chat/visualize.svg"
+                  alt=""
+                  width={18}
+                  height={18}
+                  className="ml-0.5 h-[18px] w-[18px]"
+                />
+                <span>2</span>
+              </button>
+            ) : null}
+          </div>
+        )
+      })()}
+
+      {keywordCards.map((keywordCard) => {
+        const isLatestKeywordResult =
+          latestKeywordMessageIds[keywordCard.kind] === message.id
+
+        if (!isLatestKeywordResult) {
+          return null
+        }
+
+        const isConfirmed = confirmedKeywordKinds.has(keywordCard.kind)
+        const visualizedCard = visualizedKeywordCards[keywordCard.kind]
+        const isCurrentCardVisualized = Boolean(
+          visualizedCard &&
+            visualizedCard.title === keywordCard.title &&
+            visualizedCard.summary === keywordCard.summary &&
+            visualizedCard.description === keywordCard.description &&
+            visualizedCard.keywords.join('\u0000') ===
+              keywordCard.keywords.join('\u0000')
+        )
+        const label =
+          keywordCard.kind === 'experience_keywords'
+            ? 'Keywords: Experience'
+            : 'Keywords: Relationship'
+
+        return (
+          <div
+            key={`${message.id}-${keywordCard.kind}-actions`}
+            className="flex w-full flex-col items-end gap-3"
+          >
+            <div className="flex items-center justify-end gap-3">
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={() => onChoice(`${label} 다시 생성하기`)}
+                className="min-w-24 rounded-[30px] bg-blue-600 px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-white disabled:opacity-50"
+              >
+                다시 생성하기
+              </button>
+              <button
+                type="button"
+                disabled={disabled || isConfirmed}
+                onClick={() =>
+                  onConfirmKeyword(keywordCard.kind, message.id)
+                }
+                className={`min-w-24 rounded-[30px] px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 disabled:cursor-default ${
+                  isConfirmed
+                    ? 'bg-neutral-500 text-white'
+                    : 'bg-[#DDF444] text-black disabled:opacity-50'
+                }`}
+              >
+                확정하기
+              </button>
+            </div>
+
+            {isConfirmed && !isCurrentCardVisualized ? (
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={() => onVisualizeKeyword(keywordCard)}
+                className="inline-flex items-center gap-1 rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
+              >
+                시각화 하기
+                <Image
+                  src="/assets/icons/chat/visualize.svg"
+                  alt=""
+                  width={18}
+                  height={18}
+                  className="ml-0.5 h-[18px] w-[18px]"
+                />
+                <span>2</span>
+              </button>
+            ) : null}
+          </div>
+        )
+      })}
+
+      {directionArtifactKind &&
+      latestDirectionMessageIds[directionArtifactKind] === message.id ? (
+        <div className="flex w-full flex-col items-end gap-3">
+          <div className="flex items-center justify-end gap-3">
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() =>
+                onChoice(
+                  `${getDirectionArtifactLabel(directionArtifactKind)} 다시 생성하기`
+                )
+              }
+              className="min-w-24 rounded-[30px] bg-blue-600 px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-white disabled:opacity-50"
+            >
+              다시 생성하기
+            </button>
+            <button
+              type="button"
+              disabled={
+                disabled || confirmedDirectionKinds.has(directionArtifactKind)
+              }
+              onClick={() =>
+                onConfirmDirection(directionArtifactKind, message.id)
+              }
+              className={`min-w-24 rounded-[30px] px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 disabled:cursor-default ${
+                confirmedDirectionKinds.has(directionArtifactKind)
+                  ? 'bg-neutral-500 text-white'
+                  : 'bg-[#DDF444] text-black disabled:opacity-50'
+              }`}
+            >
+              확정하기
+            </button>
+          </div>
+
+          {confirmedDirectionKinds.has(directionArtifactKind) &&
+          visualizedDirectionArtifacts[directionArtifactKind] !== message.id ? (
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() =>
+                onVisualizeDirection(
+                  directionArtifactKind,
+                  message.id,
+                  message.content
+                )
+              }
+              className="inline-flex items-center gap-1 rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
+            >
+              시각화 하기
+              <Image
+                src="/assets/icons/chat/visualize.svg"
+                alt=""
+                width={18}
+                height={18}
+                className="ml-0.5 h-[18px] w-[18px]"
+              />
+              <span>2</span>
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div className="flex w-full flex-wrap items-center justify-end gap-3">
+        {isProcessCheckPrompt(displayContent) ? (
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => onChoice('프로세스 확인하기')}
+            className="rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
+          >
+            프로세스 확인하기
+          </button>
+        ) : null}
+
+        {isStageProceedPrompt(displayContent) && !directionArtifactKind ? (
           <>
             <button
               type="button"
               disabled={disabled}
-              onClick={() => onChoice('다음 단계로 진행할게요')}
+              onClick={() =>
+                onChoice(
+                  isStep1EntryPrompt(displayContent)
+                    ? 'STEP 1 시작할게요'
+                    : '다음 단계로 진행할게요'
+                )
+              }
               className="rounded-[30px] bg-blue-600 px-[clamp(16px,1.85svh,20px)] py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-white disabled:opacity-50"
             >
-              다음 단계로
+              {isStep1EntryPrompt(displayContent) ? 'STEP 1 시작할게요' : '다음 단계로'}
             </button>
             <button
               type="button"
@@ -2438,54 +4641,60 @@ function ChatBubble({
         ) : null}
 
 
-        {rfpBlock.rfp ? (
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={() => void onDownloadRfp()}
-            className="rounded-[30px] bg-blue-600 px-[clamp(16px,1.85svh,20px)] py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-white disabled:opacity-50"
-          >
-            프로젝트 기획안 다운로드
-          </button>
-        ) : null}
+      </div>
 
-        {message.personaCardBlock &&
-        !message.personaCardBlock.imageUrl &&
-        !hasVisualizedPersona ? (
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={() => void onVisualizePersona(message.personaCardBlock)}
-            className="inline-flex items-center gap-1 rounded-[30px] bg-blue-600 px-[clamp(16px,1.85svh,20px)] py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-white disabled:opacity-50"
-          >
-            시각화 하기
-            <span className="ml-0.5 flex h-4 w-4 items-center justify-center">
-              <span className="h-2.5 w-2.5 rounded-sm border border-white" />
-            </span>
-            <span>2</span>
-          </button>
-        ) : null}
-
-        {keywordCards.map((keywordCard) =>
-          visualizedKeywordCards[keywordCard.kind] ? null : (
+      {rfpBlock.rfp && latestRfpMessageId === message.id ? (
+        <div className="flex w-full flex-col items-end gap-3">
+          <div className="flex items-center justify-end gap-3">
             <button
-              key={keywordCard.kind}
               type="button"
               disabled={disabled}
-              onClick={() => onVisualizeKeyword(keywordCard)}
-              className="inline-flex items-center gap-1 rounded-[30px] bg-[#DDF444] px-[clamp(16px,1.85svh,20px)] py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
+              onClick={() => onChoice('프로젝트 기획안 수정하기')}
+              className="min-w-24 rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
             >
-              {keywordCard.kind === 'experience_keywords'
-                ? 'Experience 시각화'
-                : 'Relationship 시각화'}
-              <span className="ml-0.5 flex h-4 w-4 items-center justify-center">
-                <span className="h-2.5 w-2.5 rounded-sm border border-black" />
-              </span>
+              수정하기
+            </button>
+            <button
+              type="button"
+              disabled={disabled || hasConfirmedRfp}
+              onClick={() => onChoice('프로젝트 기획안 확정하기')}
+              className="min-w-24 rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
+            >
+              확정하기
+            </button>
+          </div>
+
+          {hasConfirmedRfp && !hasVisualizedRfp ? (
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => onVisualizeRfp(message.id, rfpBlock.rfp!)}
+              className="inline-flex items-center gap-1 rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
+            >
+              시각화 하기
+              <Image
+                src="/assets/icons/chat/visualize.svg"
+                alt=""
+                width={18}
+                height={18}
+                className="ml-0.5 h-[18px] w-[18px]"
+              />
               <span>2</span>
             </button>
-          )
-        )}
-      </div>
+          ) : null}
+
+          {hasVisualizedRfp ? (
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => void onDownloadRfp()}
+              className="rounded-[30px] bg-blue-600 px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-white disabled:opacity-50"
+            >
+              리포트 다운로드
+            </button>
+          ) : null}
+        </div>
+      ) : null}
 
       {hintModalOpen && choices.length > 0 ? (
         <div
@@ -2494,18 +4703,22 @@ function ChatBubble({
         >
           <div className="absolute inset-0 bg-black/20" />
           <div
-            className="relative w-[480px] overflow-hidden rounded-[10px] bg-white shadow-[inset_-2px_2px_4px_1px_rgba(0,0,0,0.15)]"
+            className="relative w-[501px] overflow-hidden rounded-[10px] bg-white shadow-[inset_-2px_2px_4px_1px_rgba(0,0,0,0.15)]"
             onClick={(e) => e.stopPropagation()}
           >
+            <div className="h-px" />
             <div className="flex h-7 items-center justify-end px-6 py-[3px]">
               <button
                 type="button"
                 onClick={() => setHintModalOpen(false)}
-                className="flex h-5 w-5 items-center justify-center text-neutral-400 transition hover:text-neutral-700"
+                className="flex items-center justify-center"
               >
-                <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                  <path d="M1 1L11 11M11 1L1 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-                </svg>
+                <Image
+                  src="/assets/icons/chat/x-button.svg"
+                  alt="닫기"
+                  width={12}
+                  height={12}
+                />
               </button>
             </div>
             <div>
@@ -2515,13 +4728,15 @@ function ChatBubble({
                   type="button"
                   onClick={() => setSelectedHintIndex(index)}
                   className={`flex w-full items-center gap-10 border-t border-gray-200 py-3 pl-6 pr-9 text-left transition ${
-                    selectedHintIndex === index ? 'bg-zinc-100 shadow-[0px_2px_2px_0px_rgba(0,0,0,0.10)]' : 'hover:bg-zinc-50'
+                    selectedHintIndex === index
+                      ? 'bg-zinc-100 shadow-[0px_2px_2px_0px_rgba(0,0,0,0.10)]'
+                      : 'hover:bg-zinc-50'
                   }`}
                 >
                   <span className="w-10 text-center font-['Inter'] text-base font-semibold leading-6 text-neutral-900">
                     {choice.key}
                   </span>
-                  <span className="flex-1 font-['Pretendard'] text-sm font-semibold leading-6 text-[#1B2561]">
+                  <span className="w-72 font-['Pretendard'] text-sm font-semibold leading-6 text-[#1B2561]">
                     {choice.label}
                   </span>
                 </button>
@@ -2533,11 +4748,11 @@ function ChatBubble({
                 disabled={selectedHintIndex === null || disabled}
                 onClick={() => {
                   if (selectedHintIndex !== null) {
-                    onChoice(choices[selectedHintIndex]!.value)
+                    onChoice(choices[selectedHintIndex]!.label)
                     setHintModalOpen(false)
                   }
                 }}
-                className="rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-40"
+                className="w-24 rounded-[30px] bg-[#DDF444] px-5 py-[3px] text-center font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-40"
               >
                 선택하기
               </button>

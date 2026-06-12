@@ -89,14 +89,34 @@ export function hasDesignFinalSelection(text: string) {
 export function resolveIntentStageKey({
   currentStageKey,
   hasCompletedDirectionResearch = false,
+  hasCompletedStep1 = false,
   hasCompletedStep2Research = false,
   lastUserMessage,
 }: {
   currentStageKey: StageKey
   hasCompletedDirectionResearch?: boolean
+  hasCompletedStep1?: boolean
   hasCompletedStep2Research?: boolean
   lastUserMessage: string
 }): StageKey {
+  // "STEP 1 시작할게요"는 step_0_start 프로세스 소개 후 STEP 1 진입 신호 — step_2_persona로 넘어가지 않음
+  if (
+    (currentStageKey === 'step_0_start' || currentStageKey === 'step_1_idea') &&
+    /STEP\s*1\s*시작할게요/i.test(lastUserMessage)
+  ) {
+    return 'step_1_idea'
+  }
+
+  if (
+    currentStageKey === 'step_1_idea' &&
+    hasCompletedStep1 &&
+    /다음\s*단계로\s*진행할게요|STEP\s*2(?:로)?\s*(?:진행|넘어가|시작)/i.test(
+      lastUserMessage
+    )
+  ) {
+    return 'step_2_persona'
+  }
+
   if (
     currentStageKey === 'step_2_research' &&
     hasCompletedStep2Research &&
@@ -154,7 +174,11 @@ export function inferStageMetaFromText({
   currentStageKey: StageKey
   text: string
 }): StageMeta {
-  if (/STEP\s*1|아이디어|개발 조건/i.test(text) && currentStageKey === 'step_0_start') {
+  if (
+    currentStageKey === 'step_0_start' &&
+    /STEP\s*1/i.test(text) &&
+    /(?:전체\s*프로세스|프로세스는|1[.)]\s*개발\s*조건)/i.test(text)
+  ) {
     return {
       currentStageKey,
       nextStageKey: 'step_1_idea',
@@ -163,11 +187,16 @@ export function inferStageMetaFromText({
     }
   }
 
-  if (/STEP\s*2|페르소나/i.test(text) && currentStageKey === 'step_1_idea') {
+  if (
+    currentStageKey === 'step_1_idea' &&
+    /STEP\s*2\.?\s*사용자\s*명확화\s*단계(?:에\s*오신\s*것을\s*환영|입니다|를\s*시작)/i.test(
+      text
+    )
+  ) {
     return {
       currentStageKey,
       nextStageKey: 'step_2_persona',
-      reason: 'text_mentions_step_2',
+      reason: 'text_enters_step_2',
       transition: true,
     }
   }

@@ -407,10 +407,11 @@ function StepTwo({
           name="size"
           onChange={(value) => onChange({ size: value })}
           options={[
-            { label: { ENG: 'Palm-sized', KOR: '손바닥 크기' }, value: '손바닥 크기' },
-            { label: { ENG: 'Small desktop product', KOR: '책상 위 소형 제품' }, value: '책상 위 소형 제품' },
-            { label: { ENG: 'Furniture or equipment-sized', KOR: '가구/설비 크기' }, value: '가구/설비 크기' },
-            { label: { ENG: 'Not decided yet', KOR: '아직 미정' }, value: '아직 미정' },
+            { label: { ENG: 'Palm-sized (within 10cm)', KOR: '손바닥 크기 (10cm 이내)' }, value: '손바닥 크기 (10cm 이내)' },
+            { label: { ENG: 'Small (10–50cm)', KOR: '소형 (10~50cm)' }, value: '소형 (10~50cm)' },
+            { label: { ENG: 'Medium (50–100cm)', KOR: '중형 (50~100cm)' }, value: '중형 (50~100cm)' },
+            { label: { ENG: 'Large (over 100cm)', KOR: '대형 (100cm 이상)' }, value: '대형 (100cm 이상)' },
+            { label: { ENG: 'Not decided yet', KOR: '아직 못 정했어요' }, value: '아직 못 정했어요' },
           ]}
           value={data.size}
         />

@@ -17,6 +17,7 @@ import {
   appendRfpJsonBlock,
   buildRfpPrompt,
   extractRfpJsonBlock,
+  formatRfpMarkdown,
   parseRfpDocument,
   stripCodeFence,
 } from '@/lib/chat/rfp'
@@ -39,6 +40,12 @@ import {
   buildPersonaCardDataFromText,
 } from '@/lib/chat/persona-card'
 import { createClient } from '@/lib/supabase/server'
+import {
+  generateUnsplashSearchQuery,
+  getUnsplashAccessKey,
+  searchUnsplashPhotos,
+  type UnsplashImageMeta,
+} from '@/lib/chat/unsplash'
 
 export const maxDuration = 60
 
@@ -107,7 +114,7 @@ function isImageRequest(text: string) {
 function isPersonaCardVisualizationRequest(text: string) {
   return (
     /페르소나|persona/i.test(text) &&
-    /시각화|이미지|카드|visual|image|보여줘|생성|만들어/i.test(text)
+    /시각화|이미지|visuali[sz]e|image|그려|보여줘/i.test(text)
   )
 }
 
@@ -115,26 +122,47 @@ function isPersonaCardConfirmRequest(text: string) {
   return /페르소나\s*카드.*확정|persona\s*card.*confirm/i.test(text)
 }
 
-function buildStage3TransitionPrompt() {
-  return [
-    '다음으로 STEP 3. 개발 방향성 도출 단계로 넘어가겠습니다.',
-    '이 단계에서는 시장 규모, 소비 트렌드, 경쟁사 리서치를 통해 제품의 방향성을 정리합니다.',
-    '진행할까요?',
-  ].join('\n')
+function isPersonaCardRevisionRequest(text: string) {
+  return /페르소나\s*카드\s*(?:수정|다시\s*생성|재생성)|persona\s*card\s*(?:edit|revise|regenerate)/i.test(
+    text
+  )
+}
+
+function isRfpConfirmRequest(text: string) {
+  return /(?:프로젝트\s*)?기획안.*확정|project\s*(?:plan|report).*confirm/i.test(
+    text
+  )
+}
+
+function isRfpRevisionRequest(text: string) {
+  return /(?:프로젝트\s*)?기획안.*(?:수정|다시\s*생성|재생성)|project\s*(?:plan|report).*(?:edit|revise|regenerate)/i.test(
+    text
+  )
 }
 
 function buildPostPersonaKeywordPrompt() {
   return [
     'Persona Card를 생성했습니다.',
     '',
-    '이제 이 페르소나가 제품을 사용하며 기대하는 경험을 키워드로 정리하겠습니다.',
-    '먼저 Keywords: Experience부터 도출할게요.',
+    '내용을 확인한 뒤 다시 생성하거나 확정할 수 있습니다.',
+    '확정하면 시각화하기가 활성화됩니다.',
+  ].join('\n')
+}
+
+function buildPersonaConfirmedPrompt() {
+  return [
+    '페르소나 카드를 확정했습니다.',
     '',
-    '이 사용자가 제품을 사용한 뒤 가장 강하게 느껴야 하는 감정은 무엇이어야 하나요?',
+    'STEP 2의 모든 과정(Problem Statements, Keywords: Experience, Keywords: Relationship, Persona Card)이 완료되었습니다.',
+    'STEP 3 개발 방향성 도출로 넘어갈 준비가 되었습니다.',
+  ].join('\n')
+}
+
+function buildRfpConfirmedPrompt() {
+  return [
+    '프로젝트 기획안을 확정했습니다.',
     '',
-    'A. 안심과 안정감',
-    'B. 편리함과 효율감',
-    'C. 애착과 즐거움',
+    '확정된 내용을 Project Report로 시각화할 수 있습니다.',
   ].join('\n')
 }
 
@@ -148,6 +176,14 @@ function hasAllKeywordResults(
   return (
     /#{1,3}\s*Keywords:\s*Experience/i.test(content) &&
     /#{1,3}\s*Keywords:\s*Relationship/i.test(content)
+  )
+}
+
+function hasCompletedStep1(messages: Array<{ content: string }>) {
+  return messages.some((m) =>
+    /핵심\s*아이디어와\s*개발\s*조건이\s*정리되었습니다|STEP\s*2\.\s*사용자\s*명확화\s*단계로\s*넘어가겠습니다/i.test(
+      m.content
+    )
   )
 }
 
@@ -195,17 +231,22 @@ function getLatestPersonaCard(
 }
 
 function shouldCreatePersonaCard({
+  allowReplacement,
   currentStageKey,
   hasExistingPersonaCard,
   text,
   transitionToStep3,
 }: {
+  allowReplacement: boolean
   currentStageKey: StageKey
   hasExistingPersonaCard: boolean
   text: string
   transitionToStep3: boolean
 }) {
-  if (hasExistingPersonaCard || !currentStageKey.startsWith('step_2')) {
+  if (
+    (!allowReplacement && hasExistingPersonaCard) ||
+    !currentStageKey.startsWith('step_2')
+  ) {
     return false
   }
 
@@ -311,17 +352,43 @@ function summarizeIdeaText(requirements: Record<string, unknown>) {
     return '아직 아이디어 텍스트가 충분히 입력되지 않았습니다.'
   }
 
-  if (idea.length <= 180) {
-    return idea
+  if (/개발이\s*목표입니다[.!]?$/.test(idea)) {
+    return `${idea.replace(/[.!?]+$/, '')}.`
   }
 
-  return `${idea.slice(0, 180).trim()}...`
+  const conciseIdea = idea
+    .slice(0, 150)
+    .replace(/[.!?]+$/, '')
+    .replace(
+      /(?:을|를)?\s*(?:만들고|제작하고|개발하고)\s*싶(?:어|어요|습니다|다)?$/,
+      ''
+    )
+    .replace(
+      /(?:을|를)?\s*(?:만들|제작하|개발하)(?:려고|고자)\s*(?:해|해요|합니다|한다)?$/,
+      ''
+    )
+    .replace(/(?:을|를)?\s*(?:만들|제작할|개발할)\s*예정(?:입니다)?$/, '')
+    .trim()
+
+  return /개발$/.test(conciseIdea)
+    ? `${conciseIdea}이 목표입니다.`
+    : `${conciseIdea} 개발이 목표입니다.`
 }
 
 function buildProjectStartSnapshot(
   project: Awaited<ReturnType<typeof getProjectForUser>>
 ) {
+  const projectRequirements =
+    project?.requirements && typeof project.requirements === 'object'
+      ? (project.requirements as Record<string, unknown>)
+      : {}
   const requirements = getSurveyRequirements(project)
+  const generated =
+    projectRequirements.generated &&
+    typeof projectRequirements.generated === 'object'
+      ? (projectRequirements.generated as Record<string, unknown>)
+      : {}
+  const generatedSummary = getRequirementString(generated, 'summary', '')
   const budgetRange = formatBudgetRange(requirements)
   const duration = getRequirementString(requirements, 'duration')
   const budgetAndDuration =
@@ -334,7 +401,7 @@ function buildProjectStartSnapshot(
     category: formatRequirementList(requirements, 'categories', 'otherCategory'),
     features: formatRequirementList(requirements, 'features', 'otherFeature'),
     goal: getRequirementString(requirements, 'goal'),
-    ideaSummary: summarizeIdeaText(requirements),
+    ideaSummary: generatedSummary || summarizeIdeaText(requirements),
     size: getRequirementString(requirements, 'size'),
     title: project?.title || '새 프로젝트',
     usage: getRequirementString(requirements, 'usage'),
@@ -528,14 +595,9 @@ async function generateRfp({
   return appendRfpJsonBlock({
     rfp: parsed,
     text: [
-      '# 프로젝트 기획안',
+      'STEP 6. 평가 및 제품개발 기획안 생성',
       '',
-      `프로젝트명: ${parsed.projectName}`,
-      `한 줄 정의: ${parsed.oneLineDefinition}`,
-      `프로젝트 목표: ${parsed.projectGoal}`,
-      '',
-      '프로젝트 기획안 데이터가 생성되었습니다.',
-      '다음 STEP 7. 협력 파트너 매칭 단계로 진행할까요?',
+      formatRfpMarkdown(parsed).replace(/^# 프로젝트 기획안\n+/, ''),
     ].join('\n'),
   })
 }
@@ -585,8 +647,16 @@ export async function POST(request: Request) {
       : userMessage || (isForcedGeneration ? '시각화 생성 요청' : '')
     const isPersonaConfirmMessage =
       !isInitialEntry && isPersonaCardConfirmRequest(messageForModel)
-    const canUseStaticStep3Transition =
-      isPersonaConfirmMessage && hasAllKeywordResults(existingMessages)
+    const isPersonaRevisionMessage =
+      !isInitialEntry && isPersonaCardRevisionRequest(messageForModel)
+    const canUseStaticPersonaConfirmation =
+      isPersonaConfirmMessage && requestedStageKey.startsWith('step_2')
+    const isRfpConfirmMessage =
+      !isInitialEntry && isRfpConfirmRequest(messageForModel)
+    const isRfpRevisionMessage =
+      !isInitialEntry && isRfpRevisionRequest(messageForModel)
+    const canUseStaticRfpConfirmation =
+      isRfpConfirmMessage && requestedStageKey === 'step_6_rfp'
 
     if (!messageForModel) {
       return NextResponse.json({ error: 'message is required' }, { status: 400 })
@@ -595,6 +665,7 @@ export async function POST(request: Request) {
     const currentStageKey = resolveIntentStageKey({
       currentStageKey: requestedStageKey,
       hasCompletedDirectionResearch: hasDirectionResearch(existingMessages),
+      hasCompletedStep1: hasCompletedStep1(existingMessages),
       hasCompletedStep2Research: hasAllKeywordResults(existingMessages),
       lastUserMessage: messageForModel,
     })
@@ -618,7 +689,12 @@ export async function POST(request: Request) {
 
     const apiKey = isInitialEntry ? null : getGeminiApiKey()
 
-    if (!isInitialEntry && !canUseStaticStep3Transition && !apiKey) {
+    if (
+      !isInitialEntry &&
+      !canUseStaticPersonaConfirmation &&
+      !canUseStaticRfpConfirmation &&
+      !apiKey
+    ) {
       return NextResponse.json({ error: 'Gemini API key is missing' }, { status: 500 })
     }
 
@@ -652,7 +728,8 @@ export async function POST(request: Request) {
       const conversation = buildConversation(modelMessages)
       const hasExistingStyleImages = existingMessages.some(
         (existingMessage) =>
-          existingMessage.generatedImageBlock?.purpose === 'style_reference' &&
+          (existingMessage.generatedImageBlock?.purpose === 'style_reference' ||
+            existingMessage.generatedImageBlock?.purpose === 'moodboard_candidate') &&
           existingMessage.generatedImageBlock.images.length > 0
       )
       const hasExistingRfp = existingMessages.some(
@@ -672,14 +749,15 @@ export async function POST(request: Request) {
           currentStageKey === 'step_5_design') ||
         (currentStageKey === 'step_5_design' && isImageRequest(messageForModel))
       const shouldGenerateRfp =
-        currentStageKey === 'step_6_rfp' && !hasExistingRfp
+        currentStageKey === 'step_6_rfp' &&
+        (!hasExistingRfp || isRfpRevisionMessage)
 
-      if (
-        currentStageKey.startsWith('step_2') &&
-        canUseStaticStep3Transition
-      ) {
-        assistantContent = buildStage3TransitionPrompt()
-        responseStageKey = 'step_3_direction'
+      if (canUseStaticPersonaConfirmation) {
+        assistantContent = buildPersonaConfirmedPrompt()
+        responseStageKey = 'step_2_research'
+      } else if (canUseStaticRfpConfirmation) {
+        assistantContent = buildRfpConfirmedPrompt()
+        responseStageKey = 'step_6_rfp'
       } else if (shouldGeneratePersonaCardImage) {
         const personaCard = getLatestPersonaCard(conversationMessages)
 
@@ -720,16 +798,51 @@ export async function POST(request: Request) {
         let imageBlock = null
 
         if (shouldGenerateStyleImages) {
-          imageBlock = await generateGeminiImages({
-            apiKey: requiredApiKey,
-            count: 3,
-            prompt: buildStyleImagePrompt({
+          const unsplashKey = getUnsplashAccessKey()
+          let candidates: UnsplashImageMeta[] = []
+          let searchQuery = 'minimal elegant product design'
+
+          if (unsplashKey) {
+            searchQuery = await generateUnsplashSearchQuery({
+              apiKey: requiredApiKey,
               conversation,
-              projectTitle: project.title || 'Untitled project',
-              requirements: project.requirements,
-            }),
-            purpose: 'style_reference',
-          })
+            })
+            candidates = await searchUnsplashPhotos({
+              accessKey: unsplashKey,
+              query: searchQuery,
+              perPage: 3,
+            }).catch(() => [])
+          }
+
+          if (candidates.length === 0) {
+            // fallback: empty block so the chat still responds
+            imageBlock = null
+          } else {
+            // Save candidates to DB
+            await supabase.from('moodboard_images').insert(
+              candidates.map((img) => ({
+                is_selected: false,
+                phase: 'candidate',
+                photographer_name: img.photographer_name,
+                photographer_url: img.photographer_url,
+                project_id: projectId,
+                search_query: searchQuery,
+                thumb_url: img.thumb_url,
+                unsplash_id: img.id,
+                unsplash_page_url: img.unsplash_page_url,
+                url: img.url,
+              }))
+            )
+
+            imageBlock = {
+              images: candidates.map((c) => c.url),
+              model: 'unsplash',
+              prompt: searchQuery,
+              purpose: 'moodboard_candidate' as const,
+              selectedImageIndex: null,
+              unsplashMeta: candidates,
+            }
+          }
         } else if (shouldGenerateDesignImages) {
           imageBlock = await generateGeminiImages({
             apiKey: requiredApiKey,
@@ -766,6 +879,7 @@ export async function POST(request: Request) {
         const transitionToStep3 =
           stageMeta.transition && stageMeta.nextStageKey === 'step_3_direction'
         const createPersonaCard = shouldCreatePersonaCard({
+          allowReplacement: isPersonaRevisionMessage,
           currentStageKey,
           hasExistingPersonaCard: hasPersonaCard(conversationMessages),
           text: assistantContent,
