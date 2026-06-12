@@ -201,6 +201,18 @@ function hasDirectionResearch(
   ].some((pattern) => pattern.test(content))
 }
 
+function isDirectionResearchRequest(text: string) {
+  return /(?:시장\s*규모|소비\s*트렌드|경쟁사)\s*리서치\s*(?:보기|다시\s*생성하기)/i.test(
+    text
+  )
+}
+
+function isExplicitStep4ProceedRequest(text: string) {
+  return /(?:다음\s*(?:단계|STEP)(?:로)?\s*(?:진행|넘어가|이동|시작)|STEP\s*4(?:로)?\s*(?:진행|넘어가|이동|시작)|스타일\s*(?:컨셉|단계)(?:로)?\s*(?:진행|넘어가|이동|시작))/i.test(
+    text
+  )
+}
+
 function appendDirectionCompletionPrompt(text: string) {
   if (/STEP\s*4|스타일\s*컨셉.*(?:넘어|진행)|진행할까요/i.test(text)) {
     return text
@@ -662,8 +674,11 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'message is required' }, { status: 400 })
     }
 
+    const directionResearchRequest = isDirectionResearchRequest(messageForModel)
     const currentStageKey = resolveIntentStageKey({
-      currentStageKey: requestedStageKey,
+      currentStageKey: directionResearchRequest
+        ? 'step_3_direction'
+        : requestedStageKey,
       hasCompletedDirectionResearch: hasDirectionResearch(existingMessages),
       hasCompletedStep1: hasCompletedStep1(existingMessages),
       hasCompletedStep2Research: hasAllKeywordResults(existingMessages),
@@ -740,7 +755,9 @@ export async function POST(request: Request) {
         isPersonaCardVisualizationRequest(messageForModel)
       const shouldGenerateStyleImages =
         (body.forceImageGeneration === 'style_reference' ||
-          (currentStageKey === 'step_4_style' && !hasExistingStyleImages)) &&
+          (currentStageKey === 'step_4_style' &&
+            isExplicitStep4ProceedRequest(messageForModel) &&
+            !hasExistingStyleImages)) &&
         !hasStyleReferenceSelection(messageForModel)
       const shouldGenerateDesignImages =
         body.forceImageGeneration === 'initial_design' ||
@@ -900,9 +917,11 @@ export async function POST(request: Request) {
           })
           responseStageKey = 'step_2_research'
         } else {
-          responseStageKey = stageMeta.transition
-            ? stageMeta.nextStageKey
-            : stageMeta.currentStageKey
+          responseStageKey = directionResearchRequest
+            ? 'step_3_direction'
+            : stageMeta.transition
+              ? stageMeta.nextStageKey
+              : stageMeta.currentStageKey
         }
       }
     }

@@ -80,6 +80,12 @@ type ConsumptionKeywordData = {
   summary: string
 }
 
+type BrandPositioningData = {
+  brands: string[]
+  description: string
+  goal: string
+}
+
 type KeywordArtifactKind = 'experience_keywords' | 'relationship_keywords'
 
 type KeywordCardData = {
@@ -329,6 +335,7 @@ function stripInternalBlocksForDisplay(text: string) {
       /<<\s*\/?\s*AIDEE(?:[-_ ][A-Z0-9_-]+)*(?:\s*:[^>]*)?\s*>>/gi,
       ''
     )
+    .replace(/^\s*```[a-zA-Z0-9_-]*\s*$/gm, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
 }
@@ -390,6 +397,10 @@ function extractConsumptionKeywordData(
       /^\s*(?:#{1,6}\s*)?(?:\*{1,2}|_{1,2})?(?:Keywords?\s*[:：]\s*Consumption|소비\s*트렌드(?:\s*(?:리서치|분석|키워드))?)(?:\*{1,2}|_{1,2})?\s*/im,
       ''
     )
+    .replace(
+      /(?:다른\s*트렌드도\s*궁금하다면|다른\s*개발\s*방향성\s*리서치도|현재\s*정보가\s*충분하다면|다음\s*STEP\s*4)[\s\S]*$/i,
+      ''
+    )
     .trim()
   const lines = cleaned
     .split('\n')
@@ -399,7 +410,13 @@ function extractConsumptionKeywordData(
         .replace(/\*\*/g, '')
         .trim()
     )
-    .filter(Boolean)
+    .filter(
+      (line) =>
+        Boolean(line) &&
+        !/^(?:설명(?:글)?|키워드\s*목록|(?:10자\s*이내\s*)?키워드\s*\d+개|\d+자\s*이내\s*키워드\s*\d+개)\s*[:：-]?$/i.test(
+          line
+        )
+    )
   const stripLabel = (line: string) =>
     line
       .replace(
@@ -416,12 +433,25 @@ function extractConsumptionKeywordData(
       (line) =>
         line !== summaryLine &&
         line.length >= 20 &&
-        !/^(?:키워드|keywords?)\s*[:：-]?/i.test(line)
+        !/^(?:키워드|keywords?|\d+자\s*이내\s*키워드)\s*(?:\d+개)?\s*[:：-]?/i.test(
+          line
+        )
     )
     .map(stripLabel)
   const keywordCandidates = lines
+    .filter(
+      (line) =>
+        line !== summaryLine &&
+        !descriptiveLines.includes(stripLabel(line)) &&
+        !/^(?:설명(?:글)?|한\s*줄\s*요약|요약|소비\s*트렌드)\s*[:：-]?/i.test(
+          line
+        )
+    )
     .flatMap((line) => {
-      const withoutLabel = line.replace(/^(?:키워드|keywords?)(?:\s*\d+개)?\s*[:：-]?\s*/i, '')
+      const withoutLabel = line.replace(
+        /^(?:(?:\d+자\s*이내\s*)?키워드|keywords?)(?:\s*\d+개)?\s*[:：-]?\s*/i,
+        ''
+      )
       const parts = withoutLabel.split(/[,/·#|]|\s{2,}/)
 
       if (parts.length === 1 && withoutLabel.length > 20) {
@@ -435,7 +465,9 @@ function extractConsumptionKeywordData(
       (item) =>
         item.length >= 2 &&
         item.length <= 20 &&
-        !/^(?:요약|설명|키워드|소비\s*트렌드|keywords?|consumption)$/i.test(item)
+        !/^(?:요약|설명(?:글)?|키워드(?:\s*\d+개)?|\d+자\s*이내|소비\s*트렌드|keywords?|consumption)$/i.test(
+          item
+        )
     )
   const keywords = Array.from(new Set(keywordCandidates)).slice(0, 30)
 
@@ -460,6 +492,77 @@ function extractConsumptionKeywordData(
     summary:
       stripLabel(summaryLine) ||
       '명확한 가치와 신뢰를 바탕으로 지속 가능한 소비 경험을 제공하는 제품',
+  }
+}
+
+function extractBrandPositioningData(
+  content: string
+): BrandPositioningData | null {
+  if (getDirectionArtifactKind(content) !== 'brand_positioning') {
+    return null
+  }
+
+  const cleaned = stripInternalBlocksForDisplay(content)
+    .replace(/^\s*(?:#{1,6}\s*)?Positioning\s+Map\s*[:：]\s*Brand\s*/im, '')
+    .replace(
+      /(?:다른\s*트렌드도\s*궁금하다면|다른\s*개발\s*방향성\s*리서치도|현재\s*정보가\s*충분하다면|다음\s*STEP\s*4)[\s\S]*$/i,
+      ''
+    )
+    .trim()
+  const lines = cleaned
+    .split('\n')
+    .map((line) =>
+      line
+        .replace(/^[-*•]\s*/, '')
+        .replace(/\*\*/g, '')
+        .trim()
+    )
+    .filter(Boolean)
+  const goalLine =
+    lines.find((line) => /^(?:OUR\s*BRAND|자사\s*브랜드|목표\s*포지션)\s*[:：-]/i.test(line)) ??
+    ''
+  const brandCandidates = lines
+    .filter(
+      (line) =>
+        !/^(?:X축|Y축|OUR\s*BRAND|자사\s*브랜드|목표\s*포지션|합리적\s*기능형|프리미엄\s*기능형|합리적\s*라이프스타일형|프리미엄\s*라이프스타일형)\s*[:：-]?/i.test(
+          line
+        )
+    )
+    .flatMap((line) => line.split(/[,/|]/))
+    .map((item) => item.replace(/^\d+[.)]\s*/, '').trim())
+    .filter(
+      (item) =>
+        item.length >= 2 &&
+        item.length <= 28 &&
+        !/[.!?。！？]$/.test(item) &&
+        !/(?:시장|가격|기능|라이프스타일|포지션|브랜드|경쟁|분석|영역)/i.test(item)
+    )
+  const fallbackBrands = [
+    'Philips Hue',
+    'Nanoleaf',
+    'Apple Watch',
+    'Muse',
+    'Pomodoro Timer',
+    'Tick Time',
+    'Govee',
+    'Ikea',
+  ]
+  const brands = Array.from(new Set(brandCandidates)).slice(0, 8)
+  const descriptiveLines = lines.filter(
+    (line) =>
+      line.length >= 30 &&
+      line !== goalLine &&
+      !/^(?:X축|Y축)/i.test(line)
+  )
+
+  return {
+    brands: brands.length >= 4 ? brands : fallbackBrands,
+    description:
+      descriptiveLines.slice(-2).join(' ') ||
+      '합리적인 가격대 안에서 기능과 라이프스타일 가치를 함께 제공하는 브랜드 포지션이 적합합니다.',
+    goal:
+      goalLine.replace(/^(?:OUR\s*BRAND|자사\s*브랜드|목표\s*포지션)\s*[:：-]\s*/i, '') ||
+      '기능과 감성을 연결하는 라이프스타일 브랜드',
   }
 }
 
@@ -863,6 +966,12 @@ export function ProjectChatContainer({
     useState<LibraryArtifactKind | null>(null)
   const [personaCardModalData, setPersonaCardModalData] =
     useState<PersonaCardData | null>(null)
+  const [confirmedPersonaMessageId, setConfirmedPersonaMessageId] = useState<
+    string | null
+  >(null)
+  const [visualizedPersonaMessageId, setVisualizedPersonaMessageId] = useState<
+    string | null
+  >(null)
   const [keywordCardModalData, setKeywordCardModalData] =
     useState<KeywordCardData | null>(null)
   const [problemStatementsModalData, setProblemStatementsModalData] =
@@ -890,6 +999,8 @@ export function ProjectChatContainer({
     useState<MarketSizingData | null>(null)
   const [consumptionKeywordModalData, setConsumptionKeywordModalData] =
     useState<ConsumptionKeywordData | null>(null)
+  const [brandPositioningModalData, setBrandPositioningModalData] =
+    useState<BrandPositioningData | null>(null)
   const [visualizedConsumptionKeywordData, setVisualizedConsumptionKeywordData] =
     useState<ConsumptionKeywordData | null>(null)
   const [isPending, setIsPending] = useState(false)
@@ -959,6 +1070,10 @@ export function ProjectChatContainer({
       return false
     }
 
+    if (confirmedPersonaMessageId === latestEditablePersonaMessage.id) {
+      return true
+    }
+
     return visibleMessages.some(
       (message) =>
         message.role === 'user' &&
@@ -967,7 +1082,7 @@ export function ProjectChatContainer({
           message.content
         )
     )
-  }, [latestEditablePersonaMessage, visibleMessages])
+  }, [confirmedPersonaMessageId, latestEditablePersonaMessage, visibleMessages])
   const latestProblemStatementsMessageId = useMemo(() => {
     for (const message of [...visibleMessages].reverse()) {
       if (message.role !== 'assistant') continue
@@ -1289,6 +1404,24 @@ export function ProjectChatContainer({
   }, [projectId])
 
   useEffect(() => {
+    const restoreTimer = window.setTimeout(() => {
+      try {
+        setConfirmedPersonaMessageId(
+          window.localStorage.getItem(`aidee:confirmed-persona:${projectId}`)
+        )
+        setVisualizedPersonaMessageId(
+          window.localStorage.getItem(`aidee:visualized-persona:${projectId}`)
+        )
+      } catch {
+        setConfirmedPersonaMessageId(null)
+        setVisualizedPersonaMessageId(null)
+      }
+    }, 0)
+
+    return () => window.clearTimeout(restoreTimer)
+  }, [projectId])
+
+  useEffect(() => {
     const storageKey = `aidee:visualized-consumption-keywords:${projectId}`
     const restoreTimer = window.setTimeout(() => {
       try {
@@ -1513,13 +1646,29 @@ export function ProjectChatContainer({
     })
   }
 
-  async function visualizePersonaCard(personaCard?: PersonaCardData | null) {
+  function confirmPersonaCard(messageId: string) {
+    setConfirmedPersonaMessageId(messageId)
+
+    try {
+      window.localStorage.setItem(
+        `aidee:confirmed-persona:${projectId}`,
+        messageId
+      )
+    } catch {
+      // The confirmation remains available for the current session.
+    }
+  }
+
+  async function visualizePersonaCard(
+    messageId: string,
+    personaCard?: PersonaCardData | null
+  ) {
     if (personaCard?.imageUrl) {
       setPersonaCardModalData(personaCard)
       return
     }
 
-    if (latestVisualizedPersonaCard) {
+    if (!personaCard && latestVisualizedPersonaCard) {
       setPersonaCardModalData(latestVisualizedPersonaCard)
       return
     }
@@ -1530,6 +1679,15 @@ export function ProjectChatContainer({
     })
 
     if (assistantMessage?.personaCardBlock?.imageUrl) {
+      setVisualizedPersonaMessageId(messageId)
+      try {
+        window.localStorage.setItem(
+          `aidee:visualized-persona:${projectId}`,
+          messageId
+        )
+      } catch {
+        // The visualization remains available for the current session.
+      }
       setPersonaCardModalData(assistantMessage.personaCardBlock)
     }
   }
@@ -1653,6 +1811,11 @@ export function ProjectChatContainer({
           // The visualization remains available for the current session.
         }
       }
+      return
+    }
+
+    if (kind === 'brand_positioning') {
+      setBrandPositioningModalData(extractBrandPositioningData(content))
       return
     }
 
@@ -1804,9 +1967,19 @@ export function ProjectChatContainer({
                 <ChatBubble
                   key={message.id}
                   message={message}
+                  canShowStyleReferences={visibleMessages.some(
+                    (candidate) =>
+                      candidate.role === 'user' &&
+                      candidate.seq_order < message.seq_order &&
+                      /(?:다음\s*(?:단계|STEP)(?:로)?\s*(?:진행|넘어가|이동|시작)|STEP\s*4(?:로)?\s*(?:진행|넘어가|이동|시작)|스타일\s*(?:컨셉|단계)(?:로)?\s*(?:진행|넘어가|이동|시작))/i.test(
+                        candidate.content
+                      )
+                  )}
                   disabled={isPending}
                   hasConfirmedPersona={hasConfirmedLatestPersona}
-                  hasVisualizedPersona={Boolean(latestVisualizedPersonaCard)}
+                  hasVisualizedPersona={
+                    message.id === visualizedPersonaMessageId
+                  }
                   hasConfirmedRfp={hasConfirmedLatestRfp}
                   hasVisualizedRfp={hasVisualizedLatestRfp}
                   confirmedDirectionKinds={confirmedDirectionKinds}
@@ -1824,6 +1997,7 @@ export function ProjectChatContainer({
                   latestRfpMessageId={latestRfpMessage?.id ?? null}
                   onChoice={(value) => submitMessage(value)}
                   onConfirmKeyword={confirmKeywordCard}
+                  onConfirmPersona={confirmPersonaCard}
                   onDownloadRfp={downloadRfp}
                   onOpenMoodboardModal={() => setMoodboardModalOpen(true)}
                   onVisualizeKeyword={visualizeKeywordCard}
@@ -2021,6 +2195,19 @@ export function ProjectChatContainer({
             return
           }
 
+          if (kind === 'brand_positioning') {
+            const sourceMessage = visibleMessages.find(
+              (message) =>
+                message.id === latestDirectionMessageIds.brand_positioning
+            )
+            setBrandPositioningModalData(
+              sourceMessage
+                ? extractBrandPositioningData(sourceMessage.content)
+                : null
+            )
+            return
+          }
+
           setSelectedArtifactKind(kind)
         }}
         planLabel={userPlanLabel}
@@ -2064,6 +2251,11 @@ export function ProjectChatContainer({
       <ConsumptionKeywordModal
         data={consumptionKeywordModalData}
         onClose={() => setConsumptionKeywordModalData(null)}
+      />
+
+      <BrandPositioningModal
+        data={brandPositioningModalData}
+        onClose={() => setBrandPositioningModalData(null)}
       />
 
       <MoodboardModal
@@ -3016,6 +3208,108 @@ function ConsumptionKeywordChip({
   )
 }
 
+function BrandPositioningModal({
+  data,
+  onClose,
+}: {
+  data: BrandPositioningData | null
+  onClose: () => void
+}) {
+  useDismissModalOnEscape(Boolean(data), onClose)
+
+  if (!data) {
+    return null
+  }
+
+  const brandSlots = Array.from({ length: 8 }, (_, index) =>
+    data.brands[index] ?? `Brand ${index + 1}`
+  )
+
+  return (
+    <div
+      className="absolute inset-0 z-[80] flex items-center justify-center bg-neutral-900/70 p-4 sm:p-6 lg:p-10"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Positioning Map: Brand"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose()
+        }
+      }}
+    >
+      <article className="relative aspect-[1176/780] w-[min(1176px,calc(100%_-_80px),calc((100svh_-_80px)*1.5077))] overflow-hidden rounded-[20px] bg-[#232326] text-white shadow-[0px_24px_60px_rgba(0,0,0,0.20)] [container-type:inline-size]">
+        <h2 className="absolute left-[4.7%] top-[5.1%] z-20 font-['Inter'] text-[clamp(24px,3.06cqw,36px)] font-medium leading-[1.1]">
+          <span className="text-[#DDF444]">P</span>ositioning Map:
+          <br />
+          Brand
+        </h2>
+
+        <div className="absolute inset-x-[4.7%] top-[8.7%] h-[55%]">
+          <div className="absolute left-1/2 top-1/2 aspect-square w-[58%] -translate-x-1/2 -translate-y-1/2 rounded-full border border-indigo-300/20" />
+          <div className="absolute left-1/2 top-1/2 aspect-square w-[37%] -translate-x-1/2 -translate-y-1/2 rounded-full border border-indigo-300/20" />
+          <div className="absolute left-1/2 top-1/2 aspect-square w-[24%] -translate-x-1/2 -translate-y-1/2 rounded-full border border-indigo-300/30" />
+          <div className="absolute left-1/2 top-1/2 aspect-square w-[12%] -translate-x-1/2 -translate-y-1/2 rounded-full border border-indigo-300/50" />
+
+          <div className="absolute inset-x-0 top-1/2 h-px bg-[#DDF444]" />
+          <div className="absolute inset-y-0 left-1/2 w-px bg-[#DDF444]" />
+
+          <span className="absolute left-0 top-1/2 -translate-y-1/2 font-['Pretendard'] text-[clamp(9px,1.19cqw,14px)] font-medium text-stone-300">
+            프리미엄 가격
+          </span>
+          <span className="absolute right-0 top-1/2 -translate-y-1/2 font-['Pretendard'] text-[clamp(9px,1.19cqw,14px)] font-medium text-stone-300">
+            합리적인 가격
+          </span>
+          <span className="absolute left-1/2 top-0 -translate-x-1/2 font-['Pretendard'] text-[clamp(9px,1.19cqw,14px)] font-medium text-stone-300">
+            라이프스타일 중심
+          </span>
+          <span className="absolute bottom-0 left-1/2 -translate-x-1/2 font-['Pretendard'] text-[clamp(9px,1.19cqw,14px)] font-medium text-stone-300">
+            기능 중심
+          </span>
+
+          <div className="absolute inset-[7%_10%] grid grid-cols-2 grid-rows-2 gap-x-[18%] gap-y-[14%]">
+            {[0, 1, 2, 3].map((quadrant) => (
+              <div
+                key={quadrant}
+                className="flex flex-wrap content-center items-center justify-center gap-[clamp(6px,0.85cqw,10px)]"
+              >
+                {brandSlots.slice(quadrant * 2, quadrant * 2 + 2).map((brand) => (
+                  <span
+                    key={brand}
+                    className="inline-flex h-[clamp(26px,3.06cqw,36px)] max-w-full items-center rounded-full border border-[#DDF444] bg-[#232326] px-[clamp(9px,1.19cqw,14px)] font-['Inter'] text-[clamp(9px,1.19cqw,14px)] font-medium whitespace-nowrap"
+                  >
+                    {brand}
+                  </span>
+                ))}
+              </div>
+            ))}
+          </div>
+
+          <div className="absolute right-[16%] top-[2%] rounded-full border border-[#DDF444] bg-[#DDF444] px-[clamp(12px,2.04cqw,24px)] py-[clamp(4px,0.6cqw,7px)] font-['Inter'] text-[clamp(10px,1.36cqw,16px)] font-medium text-black shadow-[0_0_11px_rgba(236,255,113,1)]">
+            OUR BRAND
+          </div>
+        </div>
+
+        <section className="absolute inset-x-[4.6%] bottom-[5.5%] flex h-[22.5%] flex-col items-center justify-center overflow-hidden rounded-[20px] border border-[#DDF444] px-[8%] pb-[3%] pt-[5%] text-center">
+          <Image
+            src="/assets/icons/chat-modal/positioning-map.svg"
+            alt="OUR BRAND"
+            width={250}
+            height={65}
+            unoptimized
+            className="absolute left-1/2 top-[2%] h-auto w-[23.4%] -translate-x-1/2"
+          />
+          <p className="font-['Pretendard'] text-[clamp(11px,1.36cqw,16px)] font-medium leading-6 text-[#DDF444]">
+            {data.goal}
+          </p>
+          <p className="mt-[2%] line-clamp-3 font-['Pretendard'] text-[clamp(9px,1.02cqw,12px)] font-medium leading-5 text-white">
+            {data.description}
+          </p>
+        </section>
+      </article>
+    </div>
+  )
+}
+
 function ReportSection({
   children,
   className = '',
@@ -3209,8 +3503,8 @@ function PersonaCardFull({ data }: { data: PersonaCardData }) {
           </PersonaInfoSection>
 
           <PersonaInfoSection number="02." title="Persona Story">
-            <p className="line-clamp-4 font-['Pretendard'] text-[13px] font-medium leading-[22px] text-black">
-              {personaStory.join(' ')}
+            <p className="whitespace-pre-line break-words font-['Pretendard'] text-[13px] font-medium leading-[22px] text-black [overflow-wrap:anywhere]">
+              {personaStory.join('\n')}
             </p>
             {tags.length > 0 ? (
               <div className="mt-4 flex flex-wrap gap-2">
@@ -3250,7 +3544,7 @@ function FragmentPair({ label, value }: { label: string; value: string }) {
       <dt className="font-['Pretendard'] text-[13px] font-semibold leading-[19px] text-blue-600">
         {label}
       </dt>
-      <dd className="line-clamp-1 min-w-0 font-['Pretendard'] text-[13px] font-medium leading-[19px] text-black">
+      <dd className="min-w-0 whitespace-pre-line break-words font-['Pretendard'] text-[13px] font-medium leading-[19px] text-black [overflow-wrap:anywhere]">
         {value}
       </dd>
     </>
@@ -3286,7 +3580,9 @@ function PersonaBulletList({ items }: { items: string[] }) {
           className="flex gap-3 font-['Pretendard'] text-[13px] font-medium leading-[19px] text-black"
         >
           <span className="mt-2 h-1 w-1 shrink-0 rounded-full bg-blue-600" />
-          <span className="line-clamp-1 min-w-0">{item}</span>
+          <span className="min-w-0 whitespace-pre-line break-words [overflow-wrap:anywhere]">
+            {item}
+          </span>
         </li>
       ))}
     </ul>
@@ -3900,6 +4196,7 @@ function MarkdownContent({ content }: { content: string }) {
 }
 
 function ChatBubble({
+  canShowStyleReferences,
   confirmedDirectionKinds,
   confirmedKeywordKinds,
   directionArtifactKindOverride,
@@ -3917,6 +4214,7 @@ function ChatBubble({
   message,
   onChoice,
   onConfirmKeyword,
+  onConfirmPersona,
   onConfirmProblemStatements,
   onDownloadRfp,
   onConfirmDirection,
@@ -3932,6 +4230,7 @@ function ChatBubble({
   visualizedDirectionArtifacts,
   visualizedProblemStatements,
 }: {
+  canShowStyleReferences: boolean
   confirmedDirectionKinds: Set<DirectionArtifactKind>
   confirmedKeywordKinds: Set<KeywordArtifactKind>
   directionArtifactKindOverride: DirectionArtifactKind | null
@@ -3952,6 +4251,7 @@ function ChatBubble({
     kind: KeywordArtifactKind,
     messageId: string
   ) => void
+  onConfirmPersona: (messageId: string) => void
   onConfirmProblemStatements: (messageId: string) => void
   onDownloadRfp: () => void
   onConfirmDirection: (
@@ -3966,7 +4266,10 @@ function ChatBubble({
     content: string
   ) => void
   onVisualizeProblemStatements: (data: ProblemStatementsData) => void
-  onVisualizePersona: (personaCard?: PersonaCardData | null) => void
+  onVisualizePersona: (
+    messageId: string,
+    personaCard?: PersonaCardData | null
+  ) => void
   onVisualizeRfp: (messageId: string, rfp: RfpDocument) => void
   projectId: string
   userAvatarUrl?: string | null
@@ -4009,7 +4312,9 @@ function ChatBubble({
     : []
   const shouldRenderGeneratedImages =
     Boolean(message.generatedImageBlock?.images.length) &&
-    message.generatedImageBlock?.purpose !== 'persona'
+    message.generatedImageBlock?.purpose !== 'persona' &&
+    (message.generatedImageBlock?.purpose !== 'moodboard_candidate' ||
+      canShowStyleReferences)
   const cleanedContent = stripInternalBlocksForDisplay(
     projectDirectionSplit?.after ?? rfpBlock.cleanedText
   )
@@ -4060,7 +4365,6 @@ function ChatBubble({
 
   const isPersonaVisualizationOnly =
     Boolean(message.personaCardBlock?.imageUrl) &&
-    message.generatedImageBlock?.purpose === 'persona' &&
     !displayContent
 
   if (isPersonaVisualizationOnly) {
@@ -4382,8 +4686,12 @@ function ChatBubble({
             <button
               type="button"
               disabled={disabled || hasConfirmedPersona}
-              onClick={() => onChoice('페르소나 카드 확정하기')}
-              className="min-w-24 rounded-[30px] bg-neutral-500 px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-white disabled:opacity-50"
+              onClick={() => onConfirmPersona(message.id)}
+              className={`min-w-24 rounded-[30px] px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 disabled:cursor-default ${
+                hasConfirmedPersona
+                  ? 'bg-neutral-500 text-white'
+                  : 'bg-[#DDF444] text-black disabled:opacity-50'
+              }`}
             >
               확정하기
             </button>
@@ -4395,7 +4703,9 @@ function ChatBubble({
             <button
               type="button"
               disabled={disabled}
-              onClick={() => void onVisualizePersona(message.personaCardBlock)}
+              onClick={() =>
+                void onVisualizePersona(message.id, message.personaCardBlock)
+              }
               className="inline-flex items-center gap-1 rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
             >
               시각화 하기
