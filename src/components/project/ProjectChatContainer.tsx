@@ -4787,7 +4787,6 @@ function ChatBubble({
         const isCurrentCardVisualized = Boolean(
           visualizedCard &&
             visualizedCard.title === keywordCard.title &&
-            visualizedCard.summary === keywordCard.summary &&
             visualizedCard.description === keywordCard.description &&
             visualizedCard.keywords.join('\u0000') ===
               keywordCard.keywords.join('\u0000')
