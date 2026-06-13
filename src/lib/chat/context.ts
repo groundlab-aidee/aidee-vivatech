@@ -198,9 +198,12 @@ function getStageInstruction(stageKey: StageKey) {
         '사용자가 "Keywords: Experience 확정하기"를 선택한 뒤에만 Keywords: Relationship 탐색을 시작하세요.',
         'Keywords: Relationship은 기존 방해 요소, 제품이 놓이는 공간과 환경, 집중/휴식/사용 시간, 타인과의 관계를 질문으로 충분히 탐색하세요.',
         'Keywords: Relationship이 충분히 정리되면 반드시 아래 형식을 그대로 사용해 출력하세요: "## Keywords: Relationship\\n방해 요소: kw1, kw2, ...(10개)\\n공간과 환경: kw1, kw2, ...(10개)\\n사용 시간: kw1, kw2, ...(10개)\\n타인과의 관계: kw1, kw2, ...(10개)". 각 범주 10개, 총 40개. 각 키워드는 2~10자 짧은 명사구. 키워드 블록 이후에 질문·설명을 붙이지 마세요.',
-        '사용자가 "Keywords: Relationship 확정하기"를 선택한 뒤에만 Persona Summary 작성을 시작하세요.',
-        'Persona Summary는 반드시 아래 6개 항목으로 정리하세요: Demographic Info(이름/나이/상태/환경/생활패턴/특징 5줄), Persona Story(상황과 기대 역할 2문장 120자 이내), Problem & Needs(4개 각 40자 이내), Current Behavior(4개 각 44자 이내), Lifestyle Context(4개 각 48자 이내), Relationship Keyword(4개 각 48자 이내).',
-        '각 항목은 15자 내외 명사구로 작성. 서술형 종결("~입니다", "~합니다") 금지. 말줄임표/이미지URL/코드블록 금지.',
+        '사용자가 "Keywords: Relationship 확정하기"를 선택한 직후에는 Persona Summary를 바로 작성하지 마세요. 먼저 이 제품을 사용할 특정 인물 한 명을 떠올리도록 한 뒤, 이름 또는 호칭, 대략적인 나이대, 직업이나 현재 하는 일, 주로 생활하거나 제품을 사용할 장소, 반복되는 하루 일과, 성격 또는 행동 특징을 아는 범위에서 설명해 달라는 질문 1개만 출력하고 응답을 종료하세요.',
+        '이 질문에서는 "Demographic Info", "Persona Summary", "Persona Card" 같은 내부 용어와 6개 섹션 제목을 사용하지 마세요. 반드시 자연스러운 한국어 한 문단으로 질문하고, 모든 항목을 정하기 어렵다면 떠오르는 정보만 답해도 된다고 안내하세요.',
+        '사용자가 특정 인물 정보에 답한 다음 턴에만 누적 대화와 답변을 바탕으로 Persona Summary 전체를 작성하세요. 사용자가 직접 말하지 않은 세부 정보는 제품 사용 맥락에 맞는 설득력 있는 가설로 보완하되, "정리 필요"나 빈 항목을 남기지 마세요.',
+        'Persona Summary는 반드시 아래 6개 항목으로 충분히 정리하세요: Demographic Info는 이름·나이, 직업·상태, 주요 환경, 생활 패턴, 핵심 특징을 각각 한 줄씩 총 5줄로 작성하세요. Persona Story는 상황·반복 문제·제품 기대 역할을 연결한 70~100자의 3~4줄 분량 문단으로 작성하세요.',
+        'Problem & Needs, Current Behavior, Lifestyle Context, Relationship Keyword는 각각 서로 다른 내용 5개를 목록으로 작성하세요. 각 항목은 카드 한 줄 또는 두 줄에 들어가도록 18~38자의 완결된 표현으로 작성하고, 한 섹션을 한 문장으로 축약하지 마세요.',
+        '서술형 종결("~입니다", "~합니다")과 과도한 반복은 피하세요. "정리 필요", 빈 항목, 말줄임표, 이미지URL, 코드블록을 사용하지 마세요.',
         'Persona Card 확정 전에는 STEP 3 또는 다음 단계 진행을 언급하지 마세요.',
       ].join(' ')
     case 'step_2_research':

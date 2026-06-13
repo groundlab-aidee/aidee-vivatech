@@ -247,13 +247,11 @@ function shouldCreatePersonaCard({
   currentStageKey,
   hasExistingPersonaCard,
   text,
-  transitionToStep3,
 }: {
   allowReplacement: boolean
   currentStageKey: StageKey
   hasExistingPersonaCard: boolean
   text: string
-  transitionToStep3: boolean
 }) {
   if (
     (!allowReplacement && hasExistingPersonaCard) ||
@@ -262,12 +260,79 @@ function shouldCreatePersonaCard({
     return false
   }
 
+  const requiredSections = [
+    /(?:^|\n)\s*(?:#{1,6}\s*)?(?:\*{1,2})?Demographic\s*Info(?:\*{1,2})?\s*(?:\n|:|：)/i,
+    /(?:^|\n)\s*(?:#{1,6}\s*)?(?:\*{1,2})?Persona\s*Story(?:\*{1,2})?\s*(?:\n|:|：)/i,
+    /(?:^|\n)\s*(?:#{1,6}\s*)?(?:\*{1,2})?Problem\s*&?\s*Needs?(?:\*{1,2})?\s*(?:\n|:|：)/i,
+    /(?:^|\n)\s*(?:#{1,6}\s*)?(?:\*{1,2})?Current\s*Behavior(?:\*{1,2})?\s*(?:\n|:|：)/i,
+    /(?:^|\n)\s*(?:#{1,6}\s*)?(?:\*{1,2})?Lifestyle\s*Context(?:\*{1,2})?\s*(?:\n|:|：)/i,
+    /(?:^|\n)\s*(?:#{1,6}\s*)?(?:\*{1,2})?Relationship\s*Keyword(?:\*{1,2})?\s*(?:\n|:|：)/i,
+  ]
+
+  return requiredSections.every((pattern) => pattern.test(text))
+}
+
+function hasDensePersonaCardData(
+  data: ReturnType<typeof buildPersonaCardDataFromText>
+) {
   return (
-    transitionToStep3 ||
-    /persona\s*summary|persona\s*card|페르소나\s*(?:요약|카드)|demographic\s*info|problem\s*&?\s*needs?|relationship\s*keyword/i.test(
-      text
-    )
+    data.demographicInfo.length >= 5 &&
+    (data.personaStory[0]?.length ?? 0) >= 60 &&
+    data.problemNeeds.length >= 5 &&
+    data.currentBehavior.length >= 5 &&
+    data.lifestyleContext.length >= 5 &&
+    data.relationshipKeyword.length >= 5
   )
+}
+
+async function enrichPersonaSummary({
+  apiKey,
+  conversation,
+  draft,
+}: {
+  apiKey: string
+  conversation: string
+  draft: string
+}) {
+  return generateGeminiText({
+    apiKey,
+    messages: [
+      {
+        role: 'user',
+        content: [
+          '아래 대화와 초안을 바탕으로 제품 기획용 Persona Summary를 충분한 정보 밀도로 다시 작성하세요.',
+          '사용자가 직접 말한 정보는 유지하고, 누락된 세부 정보는 누적 대화의 제품·문제·행동·생활 맥락에서 설득력 있게 추론하세요.',
+          '카드 UI에 들어갈 내용이므로 장문 설명이나 반복은 피하되, 각 섹션을 한 줄로 축약하지 마세요.',
+          '"정리 필요", 빈 항목, 말줄임표, 코드 블록, 질문, 버튼 안내, 다음 단계 안내는 절대 포함하지 마세요.',
+          '',
+          '정확한 출력 형식과 분량:',
+          '## Persona Summary',
+          '### Demographic Info',
+          '- 이름 또는 호칭 | 구체적인 나이 또는 나이대 (18자 이내)',
+          '- 직업·현재 상태 (24자 이내)',
+          '- 주요 사용 환경 2~3곳 (28자 이내)',
+          '- 반복되는 생활 패턴 (32자 이내)',
+          '- 제품과 연결되는 핵심 특징 (30자 이내)',
+          '### Persona Story',
+          '상황, 반복되는 문제, 제품에 기대하는 역할을 연결한 70~100자의 3~4줄 분량 문단',
+          '### Problem & Needs',
+          '- 서로 다른 문제와 니즈 5개 (각 18~32자)',
+          '### Current Behavior',
+          '- 현재 반복하는 행동과 기존 대응 방식 5개 (각 18~34자)',
+          '### Lifestyle Context',
+          '- 자주 쓰는 도구·장소·취향·활동을 포함한 생활 맥락 5개 (각 20~38자)',
+          '### Relationship Keyword',
+          '- 기존 방해 요소, 공간, 자기관리, 제품 기대 역할의 관계 5개 (각 20~38자)',
+          '',
+          `누적 대화:\n${conversation.slice(-10000)}`,
+          '',
+          `현재 초안:\n${draft}`,
+        ].join('\n'),
+      },
+    ],
+    system:
+      '당신은 사용자 대화를 제품 기획용 페르소나 카드 문구로 구조화하는 사용자 리서처입니다. 지정된 형식만 출력합니다.',
+  })
 }
 
 function removePrematureStep3Transition(text: string) {
@@ -893,20 +958,35 @@ export async function POST(request: Request) {
           currentStageKey,
           text: assistantContent,
         })
-        const transitionToStep3 =
-          stageMeta.transition && stageMeta.nextStageKey === 'step_3_direction'
         const createPersonaCard = shouldCreatePersonaCard({
           allowReplacement: isPersonaRevisionMessage,
           currentStageKey,
           hasExistingPersonaCard: hasPersonaCard(conversationMessages),
           text: assistantContent,
-          transitionToStep3,
         })
 
         if (createPersonaCard) {
-          const personaText = removePrematureStep3Transition(assistantContent)
+          let personaText = removePrematureStep3Transition(assistantContent)
+          let personaData = buildPersonaCardDataFromText(personaText)
+
+          if (!hasDensePersonaCardData(personaData)) {
+            const enrichedText = await enrichPersonaSummary({
+              apiKey: requiredApiKey,
+              conversation,
+              draft: personaText,
+            }).catch(() => '')
+            const enrichedData = enrichedText
+              ? buildPersonaCardDataFromText(enrichedText)
+              : null
+
+            if (enrichedData && hasDensePersonaCardData(enrichedData)) {
+              personaText = enrichedText
+              personaData = enrichedData
+            }
+          }
+
           assistantContent = appendPersonaCardBlock({
-            data: buildPersonaCardDataFromText(assistantContent),
+            data: personaData,
             text: [
               personaText,
               '',
@@ -915,7 +995,7 @@ export async function POST(request: Request) {
               .filter(Boolean)
               .join('\n'),
           })
-          responseStageKey = 'step_2_research'
+          responseStageKey = currentStageKey
         } else {
           responseStageKey = directionResearchRequest
             ? 'step_3_direction'

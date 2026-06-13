@@ -168,7 +168,7 @@ function pushItem(
 
   if (
     cleaned &&
-    sections[key].length < (key === 'personaStory' ? 1 : 4) &&
+    sections[key].length < (key === 'personaStory' ? 1 : 5) &&
     !sections[key].some((item) => item === cleaned)
   ) {
     sections[key].push(cleaned)
@@ -191,7 +191,7 @@ function normalizePersonaCardData(data: Partial<PersonaCardData>) {
           .map((item) => cleanPersonaItem(item, key))
           .filter(Boolean)
           .filter((item, index, items) => items.indexOf(item) === index)
-          .slice(0, key === 'personaStory' ? 1 : 4)
+          .slice(0, key === 'personaStory' ? 1 : 5)
       : []
     return acc
   }, {} as Record<PersonaSectionKey, string[]>)
