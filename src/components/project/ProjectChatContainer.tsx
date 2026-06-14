@@ -2409,6 +2409,15 @@ export function ProjectChatContainer({
       (message) => message.role === 'assistant'
     )
 
+    // eslint-disable-next-line no-console
+    console.log('[AIDEE demo-guard]', {
+      isNewProject,
+      hasAssistantMessage,
+      alreadyRequested: didRequestInitialResponseRef.current,
+      isPending,
+      hasInitialIdea: Boolean(initialIdea),
+    })
+
     if (
       !isNewProject ||
       hasAssistantMessage ||
@@ -2423,6 +2432,13 @@ export function ProjectChatContainer({
     // Check for demo scenario from initialIdea before requesting assistant response
     if (initialIdea) {
       const demoScenario = findDemoScenarioFromText(initialIdea)
+      // eslint-disable-next-line no-console
+      console.log('[AIDEE demo-trigger]', {
+        isNewProject,
+        initialIdea,
+        matchedScenarioId: demoScenario?.id ?? null,
+        scenarioMessageCount: demoScenario?.messages.length ?? 0,
+      })
       if (demoScenario) {
         setIsDemoMode(true)
         // Prevent duplicate demo messages
