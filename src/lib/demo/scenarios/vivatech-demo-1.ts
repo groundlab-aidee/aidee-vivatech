@@ -1,5 +1,7 @@
 import type { DemoScenario } from '../types'
 
+console.log('🔥 VIVATECH DEMO FILE LOADED')
+
 export const vivatechDemo1: DemoScenario = {
   id: 'vivatech_demo_1',
 
