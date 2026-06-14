@@ -24,8 +24,16 @@ import {
   getExpertDefinition,
   type ExpertKey,
 } from '@/lib/chat/experts'
-import type { GeneratedImagePurpose, UnsplashImageMeta } from '@/lib/chat/image-blocks'
-import type { PersonaCardData } from '@/lib/chat/persona-card'
+import {
+  extractGeneratedImagesBlock,
+  type GeneratedImageBlock,
+  type GeneratedImagePurpose,
+  type UnsplashImageMeta,
+} from '@/lib/chat/image-blocks'
+import {
+  extractPersonaCardBlock,
+  type PersonaCardData,
+} from '@/lib/chat/persona-card'
 import { MoodboardCandidates } from '@/components/chat/MoodboardCandidates'
 import { MoodboardGrid, type MoodboardGridImage } from '@/components/chat/MoodboardGrid'
 import { MoodboardModal } from '@/components/moodboard/MoodboardModal'
@@ -35,6 +43,12 @@ import {
   inferStageMetaFromText,
   type StageKey,
 } from '@/lib/chat/stages'
+import {
+  demoVisualPrompts,
+  findDemoScenarioFromText,
+  type DemoMessage,
+  type DemoScenario,
+} from '@/lib/demo'
 
 type ModelViewerProps = DetailedHTMLProps<
   HTMLAttributes<HTMLElement> & {
@@ -62,6 +76,7 @@ declare module 'react' {
 type ProjectChatContainerProps = {
   initialMessages: ChatMessageRecord[]
   initialStageKey: StageKey
+  initialIdea?: string
   isNewProject: boolean
   projectId: string
   projectTitle: string
@@ -371,11 +386,16 @@ function stripInternalBlocksForDisplay(text: string) {
     .trim()
 }
 
+type StyleKeywordCategoryKey = 'emotional' | 'color' | 'structure' | 'texture'
+
 type StyleKeywordPickerData = {
   emotional: string[]
   color: string[]
   structure: string[]
   texture: string[]
+  // Demo only: pre-selected keywords per category. The live Gemini flow never
+  // emits this field, so selection stays empty for real responses.
+  selected?: Partial<Record<StyleKeywordCategoryKey, string[]>>
 }
 
 function hasStyleKeywordPicker(content: string) {
@@ -394,6 +414,7 @@ function parseStyleKeywordPickerData(content: string): StyleKeywordPickerData | 
       color: parsed.color ?? [],
       structure: parsed.structure ?? [],
       texture: parsed.texture ?? [],
+      selected: parsed.selected,
     }
   } catch {
     return null
@@ -401,7 +422,7 @@ function parseStyleKeywordPickerData(content: string): StyleKeywordPickerData | 
 }
 
 const STYLE_KEYWORD_CATEGORIES: Array<{
-  key: keyof StyleKeywordPickerData
+  key: StyleKeywordCategoryKey
   english: string
   korean: string
 }> = [
@@ -532,7 +553,7 @@ function extractConsumptionKeywordData(
       ''
     )
     .replace(
-      /(?:다른\s*트렌드도\s*궁금하다면|다른\s*개발\s*방향성\s*리서치도|현재\s*정보가\s*충분하다면|다음\s*STEP\s*4)[\s\S]*$/i,
+      /(?:다른\s*트렌드도\s*궁금하다면|다른\s*개발\s*방향성\s*리서치도|현재\s*정보가\s*충분하다면|다음\s*STEP\s*4|\n(?:The\s+[\w: ]+card\s+has\s+been\s+generated|You\s+can\s+(?:review|also)|The\s+selected\s+research|If\s+the\s+current\s+information))[\s\S]*$/i,
       ''
     )
     .trim()
@@ -653,7 +674,7 @@ function extractBrandPositioningData(
   const cleaned = stripInternalBlocksForDisplay(content)
     .replace(/^\s*(?:#{1,6}\s*)?Positioning\s+Map\s*[:：]\s*Brand\s*/im, '')
     .replace(
-      /(?:다른\s*트렌드도\s*궁금하다면|다른\s*개발\s*방향성\s*리서치도|현재\s*정보가\s*충분하다면|다음\s*STEP\s*4)[\s\S]*$/i,
+      /(?:다른\s*트렌드도\s*궁금하다면|다른\s*개발\s*방향성\s*리서치도|현재\s*정보가\s*충분하다면|다음\s*STEP\s*4|\n(?:The\s+[\w: ]+card\s+has\s+been\s+generated|You\s+can\s+(?:review|also)|The\s+selected\s+research|All\s+development\s+direction|Shall\s+we\s+proceed))[\s\S]*$/i,
       ''
     )
     .trim()
@@ -682,6 +703,7 @@ function extractBrandPositioningData(
       (item) =>
         item.length >= 2 &&
         item.length <= 28 &&
+        !/^[-—]{2,}$/.test(item) &&
         !/[.!?。！？]$/.test(item) &&
         !/(?:시장|가격|기능|라이프스타일|포지션|브랜드|경쟁|분석|영역)/i.test(item)
     )
@@ -856,26 +878,27 @@ function extractProblemStatementsData(content: string): ProblemStatementsData | 
 }
 
 function extractKeywordCardsData(content: string): KeywordCardData[] {
-  const normalized = stripInternalBlocksForDisplay(content)
-  // `#` prefix is optional — the AI sometimes outputs plain "Keywords: Experience"
-  const matches = normalized.matchAll(
-    /(?:^|\n)#{0,3}\s*Keywords:\s*(Experience|Relationship)\s*\n([\s\S]*?)(?=\n#{0,3}\s*Keywords:\s*(?:Experience|Relationship)|\n#{1,3}\s|\n\s*다음\s*STEP|\n이\s+['"]?Keywords|\s*$)/gi
+  const normalized = stripInternalBlocksForDisplay(content).replace(/\r\n/g, '\n')
+
+  // More flexible pattern: find "Keywords: Experience/Relationship" with optional heading markers
+  const cardMatches = normalized.matchAll(
+    /(?:^|\n)#{0,3}\s*Keywords:\s*(Experience|Relationship)[\s\S]*?(?=\n#{0,3}\s*Keywords:\s*(?:Experience|Relationship)|$)/gi
   )
 
-  return Array.from(matches, (match) => {
-    const titleSuffix = match[1].toLowerCase()
+  return Array.from(cardMatches, (match) => {
     const kind: KeywordArtifactKind =
-      titleSuffix === 'experience'
+      match[1].toLowerCase() === 'experience'
         ? 'experience_keywords'
         : 'relationship_keywords'
-    const body = match[2]
+
+    const cardText = match[0]
       .replace(/\*\*/g, '')
-      .replace(/\r\n/g, '\n')
-      // strip trailing AI question like "이 '...' 카드 내용으로 확정할까요?"
       .replace(/\n이\s+[^\n]{0,60}(?:확정|할까요)[^\n]*/gi, '')
-      .trim()
-    const rawLines = body
+
+    // Extract all lines after the Keywords header
+    const lines = cardText
       .split('\n')
+      .slice(1) // skip the "Keywords: Experience" line
       .map((line) =>
         line
           .replace(/^[-•*]\s*/, '')
@@ -884,23 +907,25 @@ function extractKeywordCardsData(content: string): KeywordCardData[] {
           .trim()
       )
       .filter(Boolean)
-    const keywordCandidates = rawLines
+
+    // Extract keywords from all content (including subsection headers and items)
+    const keywordCandidates = lines
       .flatMap((line) => {
-        // "감정: kw1, kw2" or "감정\nkw1, kw2" (category-only line → skip, next line has keywords)
-        const withoutCategory = line.replace(
-          /^(?:감정|행동|공간|관계|사용자|환경|기존\s*도구|시간|방해\s*요소|사용\s*시간|타인)\s*[:：]\s*/i,
-          ''
-        )
-        // if stripping changed nothing and line is a bare category word → skip
-        if (
-          withoutCategory === line &&
-          /^(?:감정|행동|공간|관계|사용자|환경|기존\s*도구|시간|방해\s*요소|사용\s*시간|타인)$/i.test(
-            line
-          )
-        ) {
+        // Skip category headers like "### Emotion", "### Behavior"
+        if (/^(?:Emotion|Behavior|Space|Relationship|User|Environment|Tool|Time|Barrier|Usage|Focus|People|Others|Interaction|Connection|Context|Sharing|감정|행동|공간|관계|사용자|환경|도구|시간|방해|사용)$/i.test(line)) {
           return []
         }
-        return withoutCategory.split(/[,，]|\/|·|#|  +/)
+
+        const withoutCategory = line.replace(
+          /^(?:감정|행동|공간|관계|사용자|환경|기존\s*도구|시간|방해\s*요소|사용\s*시간|타인|Emotion|Behavior|Space|Relationship|User|Environment|Tool|Time|Barrier|Usage|Focus|People|Others|Interaction|Connection|Context|Sharing)\s*[:：]\s*/i,
+          ''
+        )
+
+        if (withoutCategory === line && /^(?:감정|행동|공간|관계|사용자|환경|기존\s*도구|시간|방해\s*요소|사용\s*시간|타인|Emotion|Behavior|Space|Relationship|User|Environment|Tool|Time|Barrier|Usage|Focus|People|Others|Interaction|Connection|Context|Sharing)$/i.test(line)) {
+          return []
+        }
+
+        return withoutCategory.split(/[,，]|\/|·|#|\s{2,}/)
       })
       .map((item) =>
         item
@@ -910,13 +935,14 @@ function extractKeywordCardsData(content: string): KeywordCardData[] {
       .filter(
         (item) =>
           item.length >= 2 &&
-          item.length <= 18 &&
-          !/keywords?|experience|relationship|키워드|요약|설명/i.test(item)
+          item.length <= 30 &&
+          !/keywords?|experience|relationship|emotion|behavior|space|키워드|요약|설명/i.test(item)
       )
+
     const keywords = Array.from(new Set(keywordCandidates)).slice(0, 30)
-    const description = rawLines
-      .filter((line) => line.length > 18 && !/확정|할까요/i.test(line))
-      .slice(0, 4)
+    const description = lines
+      .filter((line) => line.length > 20 && !/^(?:Emotion|Behavior|Space|감정|행동|공간)/i.test(line) && !/확정|할까요/i.test(line))
+      .slice(0, 3)
       .join(' ')
       .replace(/\s+/g, ' ')
       .trim()
@@ -924,10 +950,12 @@ function extractKeywordCardsData(content: string): KeywordCardData[] {
     return {
       description:
         description ||
-        `${keywords.slice(0, 4).join(', ')} 중심의 경험 키워드를 정리했습니다.`,
-      keywords: keywords.length > 0 ? keywords : rawLines.slice(0, 12),
+        (kind === 'experience_keywords'
+          ? `${keywords.slice(0, 3).join(', ')} 중심의 경험 키워드를 정리했습니다.`
+          : `${keywords.slice(0, 3).join(', ')} 중심의 관계 키워드를 정리했습니다.`),
+      keywords: keywords.length > 0 ? keywords : lines.slice(0, 15),
       kind,
-      title: `Keywords: ${match[1][0].toUpperCase()}${match[1].slice(1).toLowerCase()}`,
+      title: `Keywords: ${match[1]}`,
     }
   })
 }
@@ -1087,9 +1115,39 @@ function isStep1EntryPrompt(content: string) {
   )
 }
 
+function buildDemoMessageRecord({
+  demoMessage,
+  index,
+}: {
+  demoMessage: DemoMessage
+  index: number
+}): ChatMessageRecord {
+  // Pre-made-UI visuals (Project Direction, Problem Statements, Keywords, TAM SAM
+  // SOM, Positioning Map, RFP, direction widgets) are parsed from message.content
+  // by ChatBubble itself — so a scenario just embeds those markers in `content`.
+  // The two blocks stored as separate record fields (images, persona card) must be
+  // pre-parsed here, mirroring mapMessageRow.
+  const { cleanedText: afterImages, imageBlock } = extractGeneratedImagesBlock(
+    demoMessage.content
+  )
+  const { cleanedText, personaCardBlock } = extractPersonaCardBlock(afterImages)
+
+  return {
+    content: cleanedText,
+    created_at: new Date().toISOString(),
+    generatedImageBlock: imageBlock,
+    id: `demo-${demoMessage.id}-${index}`,
+    personaCardBlock,
+    role: demoMessage.role,
+    seq_order: index,
+    stageKey: demoMessage.stageKey,
+  }
+}
+
 export function ProjectChatContainer({
   initialMessages,
   initialStageKey,
+  initialIdea,
   isNewProject,
   projectId,
   projectTitle,
@@ -1165,6 +1223,11 @@ export function ProjectChatContainer({
     useState<ConsumptionKeywordData | null>(null)
   const [isPending, setIsPending] = useState(false)
   const [moodboardModalOpen, setMoodboardModalOpen] = useState(false)
+  // Derive demo mode from the project's idea so it survives a page reload (not
+  // only the new-project flow). A demo project's idea is a demo trigger string.
+  const [isDemoMode, setIsDemoMode] = useState(
+    () => Boolean(initialIdea && findDemoScenarioFromText(initialIdea))
+  )
   const activeExpertDefinition = getExpertDefinition(activeExpert)
   const visibleMessages = useMemo(
     () => messages.filter((message) => message.role !== 'system'),
@@ -1177,16 +1240,21 @@ export function ProjectChatContainer({
       inferredStageKey = getLaterStageKey(inferredStageKey, message.stageKey)
 
       if (message.role === 'assistant') {
-        const inferred = inferStageMetaFromText({
-          currentStageKey: inferredStageKey,
-          text: message.content,
-        })
+        // Skip automatic stage inference for demo messages (use their stageKey directly)
+        const isDemoMessage = message.id.startsWith('demo-')
 
-        if (inferred.transition) {
-          inferredStageKey = getLaterStageKey(
-            inferredStageKey,
-            inferred.nextStageKey
-          )
+        if (!isDemoMessage) {
+          const inferred = inferStageMetaFromText({
+            currentStageKey: inferredStageKey,
+            text: message.content,
+          })
+
+          if (inferred.transition) {
+            inferredStageKey = getLaterStageKey(
+              inferredStageKey,
+              inferred.nextStageKey
+            )
+          }
         }
 
         if (
@@ -1237,9 +1305,36 @@ export function ProjectChatContainer({
 
     return null
   }, [visibleMessages])
+  const latestProblemStatements = useMemo(() => {
+    for (const message of [...visibleMessages].reverse()) {
+      if (message.role !== 'assistant') {
+        continue
+      }
+
+      const parsed = extractProblemStatementsData(message.content)
+
+      if (parsed) {
+        return parsed
+      }
+    }
+
+    return null
+  }, [visibleMessages])
   const latestVisualizedPersonaCard = useMemo(() => {
     for (const message of [...visibleMessages].reverse()) {
       if (message.personaCardBlock?.imageUrl) {
+        return message.personaCardBlock
+      }
+    }
+
+    return null
+  }, [visibleMessages])
+  // Demo mode: latest persona card regardless of image (the live-generated
+  // portrait is not persisted, so after reload the card has no imageUrl but the
+  // badge/modal should still work).
+  const latestDemoPersonaCard = useMemo(() => {
+    for (const message of [...visibleMessages].reverse()) {
+      if (message.personaCardBlock) {
         return message.personaCardBlock
       }
     }
@@ -1511,6 +1606,33 @@ export function ProjectChatContainer({
     latestCompanyMessage && confirmedCompanyMessageId === latestCompanyMessage.id
   )
   const hasVisualizedLatestCompany = companyModalOpen
+  // Demo mode: the experience/relationship keyword cards parsed from the latest
+  // matching messages, so badges/modals work without the confirm/visualize
+  // buttons. Derived (not an effect) to avoid cascading renders.
+  const demoKeywordCards = useMemo(() => {
+    if (!isDemoMode) {
+      return {} as Partial<Record<KeywordArtifactKind, KeywordCardData>>
+    }
+
+    const cards: Partial<Record<KeywordArtifactKind, KeywordCardData>> = {}
+
+    for (const kind of ['experience_keywords', 'relationship_keywords'] as const) {
+      const messageId = latestKeywordMessageIds[kind]
+      const sourceMessage = messageId
+        ? visibleMessages.find((m) => m.id === messageId)
+        : null
+      const card = sourceMessage
+        ? extractKeywordCardsData(sourceMessage.content).find(
+            (c) => c.kind === kind
+          )
+        : null
+      if (card) {
+        cards[kind] = card
+      }
+    }
+
+    return cards
+  }, [isDemoMode, latestKeywordMessageIds, visibleMessages])
   const availableArtifacts = useMemo(() => {
     const availableKinds = new Set<LibraryArtifactKind>()
 
@@ -1518,15 +1640,15 @@ export function ProjectChatContainer({
       availableKinds.add('project_direction')
     }
 
-    if (visualizedProblemStatements) {
+    if (visualizedProblemStatements || (isDemoMode && latestProblemStatements)) {
       availableKinds.add('problem_statements')
     }
 
-    if (visualizedKeywordCards.experience_keywords) {
+    if (visualizedKeywordCards.experience_keywords || demoKeywordCards.experience_keywords) {
       availableKinds.add('experience_keywords')
     }
 
-    if (visualizedKeywordCards.relationship_keywords) {
+    if (visualizedKeywordCards.relationship_keywords || demoKeywordCards.relationship_keywords) {
       availableKinds.add('relationship_keywords')
     }
 
@@ -1535,12 +1657,21 @@ export function ProjectChatContainer({
       'consumption_keywords',
       'brand_positioning',
     ] as const) {
-      if (
+      const isVisualized =
         visualizedDirectionArtifacts[kind] &&
         visualizedDirectionArtifacts[kind] === latestDirectionMessageIds[kind]
-      ) {
+
+      // Demo mode: the badge appears automatically when the research bubble
+      // plays (no widget click needed); the modal is parsed from the message.
+      if (isVisualized || (isDemoMode && latestDirectionMessageIds[kind])) {
         availableKinds.add(getDirectionLibraryKind(kind))
       }
+    }
+
+    // Demo mode: show the persona badge as soon as a persona card exists, even
+    // without the (non-persisted) generated portrait.
+    if (isDemoMode && latestDemoPersonaCard) {
+      availableKinds.add('persona')
     }
 
     for (const message of visibleMessages) {
@@ -1574,7 +1705,11 @@ export function ProjectChatContainer({
       availableKinds.has(artifact.kind)
     )
   }, [
+    demoKeywordCards,
     hasVisualizedLatestRfp,
+    isDemoMode,
+    latestDemoPersonaCard,
+    latestProblemStatements,
     latestProjectDirection,
     latestRfp,
     latestDirectionMessageIds,
@@ -1790,6 +1925,141 @@ export function ProjectChatContainer({
     }
   }, [isExpertMenuOpen])
 
+  // Demo mode: play a pre-defined scenario message-by-message (no /api/chat).
+  // Generated visuals (moodboard / 3D rendering / 3D modeling source) are produced
+  // live via /api/demo/visual and attached as normal GeneratedImageBlocks.
+  const saveDemoMessage = useCallback(
+    async (
+      demoMessage: DemoMessage,
+      seqOrder: number
+    ): Promise<ChatMessageRecord | null> => {
+      try {
+        const response = await fetch('/api/project/message', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            projectId,
+            role: demoMessage.role,
+            content: demoMessage.content,
+            seq_order: seqOrder,
+            stageKey: demoMessage.stageKey,
+          }),
+        })
+
+        if (!response.ok) {
+          console.error('[demo] failed to save message:', response.statusText)
+          return null
+        }
+
+        const data = (await response.json()) as { message?: ChatMessageRecord }
+        return data.message ?? null
+      } catch (error) {
+        console.error('[demo] error saving message:', error)
+        return null
+      }
+    },
+    [projectId]
+  )
+
+  const playDemoScenario = useCallback(
+    async (scenario: DemoScenario) => {
+      const sleep = (ms: number) =>
+        new Promise((resolve) => window.setTimeout(resolve, ms))
+
+      let baseSeqOrder = 0
+      setMessages((current) => {
+        baseSeqOrder = current.length
+          ? Math.max(...current.map((m) => m.seq_order)) + 1
+          : 0
+        return current
+      })
+
+      for (let i = 0; i < scenario.messages.length; i += 1) {
+        const demoMessage = scenario.messages[i]!
+        const seqOrder = baseSeqOrder + i
+
+        // Save to database first
+        const savedRecord = await saveDemoMessage(demoMessage, seqOrder)
+        const record = savedRecord ?? buildDemoMessageRecord({
+          demoMessage,
+          index: seqOrder,
+        })
+
+        setMessages((current) => [...current, record])
+        setStageKey((prev) => getLaterStageKey(prev, demoMessage.stageKey))
+
+        // Fire any "generate" visual actions and attach the result to this record.
+        const generateActions = (demoMessage.visualActions ?? []).filter(
+          (action) => action.generate
+        )
+        for (const action of generateActions) {
+          const promptMap =
+            demoVisualPrompts[scenario.id as keyof typeof demoVisualPrompts]
+          const prompt = action.promptKey
+            ? (promptMap as Record<string, string> | undefined)?.[
+                action.promptKey
+              ]
+            : undefined
+          if (!prompt) continue
+
+          try {
+            const res = await fetch('/api/demo/visual', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ visualType: action.type, prompt }),
+            })
+            const payload = (await res.json()) as {
+              imageBlock?: GeneratedImageBlock
+              imageUrl?: string | null
+            }
+
+            if (!res.ok) {
+              continue
+            }
+
+            // Persona: attach the generated portrait to the persona card's
+            // imageUrl so the existing persona badge + modal light up.
+            if (action.type === 'persona') {
+              const personaImageUrl =
+                payload.imageUrl ?? payload.imageBlock?.images[0] ?? null
+              if (personaImageUrl) {
+                setMessages((current) =>
+                  current.map((m) =>
+                    m.id === record.id && m.personaCardBlock
+                      ? {
+                          ...m,
+                          personaCardBlock: {
+                            ...m.personaCardBlock,
+                            imageUrl: personaImageUrl,
+                          },
+                        }
+                      : m
+                  )
+                )
+              }
+              continue
+            }
+
+            if (payload.imageBlock) {
+              setMessages((current) =>
+                current.map((m) =>
+                  m.id === record.id
+                    ? { ...m, generatedImageBlock: payload.imageBlock ?? null }
+                    : m
+                )
+              )
+            }
+          } catch {
+            // Demo continues even if a single visual fails.
+          }
+        }
+
+        await sleep(demoMessage.delayMs ?? 900)
+      }
+    },
+    [setMessages, setStageKey, saveDemoMessage]
+  )
+
   const requestAssistantResponse = useCallback(async ({
     forceImageGeneration,
     message,
@@ -1830,6 +2100,13 @@ export function ProjectChatContainer({
     }
 
     try {
+      const demoScenario = findDemoScenarioFromText(trimmed)
+
+      if (demoScenario) {
+        await playDemoScenario(demoScenario)
+        return
+      }
+
       const response = await fetch('/api/chat', {
         body: JSON.stringify({
           activeExpert,
@@ -1904,7 +2181,7 @@ export function ProjectChatContainer({
     } finally {
       setIsPending(false)
     }
-  }, [activeExpert, effectiveStageKey, isPending, messages, projectId])
+  }, [activeExpert, effectiveStageKey, isPending, messages, playDemoScenario, projectId])
 
   async function submitMessage(
     message: string,
@@ -2142,8 +2419,29 @@ export function ProjectChatContainer({
     }
 
     didRequestInitialResponseRef.current = true
+
+    // Check for demo scenario from initialIdea before requesting assistant response
+    if (initialIdea) {
+      const demoScenario = findDemoScenarioFromText(initialIdea)
+      if (demoScenario) {
+        setIsDemoMode(true)
+        // Prevent duplicate demo messages
+        const firstDemoContent = demoScenario.messages[0]?.content
+        const demoAlreadyExists = messages.some(
+          (m) =>
+            m.role === demoScenario.messages[0]?.role &&
+            m.content === firstDemoContent
+        )
+
+        if (!demoAlreadyExists) {
+          void playDemoScenario(demoScenario)
+        }
+        return
+      }
+    }
+
     requestAssistantResponse({ message: '' })
-  }, [isNewProject, isPending, messages, requestAssistantResponse])
+  }, [isNewProject, isPending, messages, requestAssistantResponse, initialIdea, playDemoScenario])
 
   useEffect(() => {
     const container = messageScrollRef.current
@@ -2169,11 +2467,11 @@ export function ProjectChatContainer({
       activeExpert,
       activeExperts: STAGE_EXPERTS[effectiveStageKey],
       activeStageKey: effectiveStageKey,
-      showProgress: hasConfirmedProcess || effectiveStageKey !== 'step_0_start',
+      showProgress: isDemoMode || hasConfirmedProcess || effectiveStageKey !== 'step_0_start',
     })
 
     return () => setSidebarState(defaultProjectChatSidebarState)
-  }, [activeExpert, effectiveStageKey, setSidebarState, visibleMessages])
+  }, [activeExpert, effectiveStageKey, setSidebarState, visibleMessages, isDemoMode])
 
   async function downloadRfp() {
     try {
@@ -2298,6 +2596,7 @@ export function ProjectChatContainer({
                   visualizedKeywordCards={visualizedKeywordCards}
                   visualizedDirectionArtifacts={visualizedDirectionArtifacts}
                   visualizedProblemStatements={visualizedProblemStatements}
+                  isDemoMode={isDemoMode}
                 />
               ))
             ) : (
@@ -2445,23 +2744,34 @@ export function ProjectChatContainer({
             return
           }
 
-          if (kind === 'problem_statements' && visualizedProblemStatements) {
-            setProblemStatementsModalData(visualizedProblemStatements)
-            return
+          if (kind === 'problem_statements') {
+            // Demo mode: visualized state is empty, so fall back to parsing the
+            // latest problem-statements bubble (mirrors the direction artifacts).
+            const data = visualizedProblemStatements ?? latestProblemStatements
+            if (data) {
+              setProblemStatementsModalData(data)
+              return
+            }
           }
 
-          if (kind === 'persona' && latestVisualizedPersonaCard) {
-            setPersonaCardModalData(latestVisualizedPersonaCard)
+          if (kind === 'persona' && (latestVisualizedPersonaCard || latestDemoPersonaCard)) {
+            setPersonaCardModalData(
+              latestVisualizedPersonaCard ?? latestDemoPersonaCard
+            )
             return
           }
 
           if (
-            (kind === 'experience_keywords' ||
-              kind === 'relationship_keywords') &&
-            visualizedKeywordCards[kind]
+            kind === 'experience_keywords' ||
+            kind === 'relationship_keywords'
           ) {
-            setKeywordCardModalData(visualizedKeywordCards[kind])
-            return
+            // Demo mode: visualized state is empty, so fall back to the parsed
+            // demo keyword card (mirrors the direction artifacts).
+            const data = visualizedKeywordCards[kind] ?? demoKeywordCards[kind]
+            if (data) {
+              setKeywordCardModalData(data)
+              return
+            }
           }
 
           if (kind === 'project_report' && latestRfp) {
@@ -3077,30 +3387,10 @@ function formatProjectIdea(ideaSummary: string) {
   const idea = ideaSummary.replace(/\s+/g, ' ').trim()
 
   if (!idea || idea === '미정') {
-    return '제품 아이디어를 구체화하는 것이 목표입니다.'
+    return '제품 아이디어를 구체화하는 것'
   }
 
-  if (/개발이\s*목표입니다[.!]?$/.test(idea)) {
-    return `${idea.replace(/[.!?]+$/, '')}.`
-  }
-
-  const conciseIdea = idea
-    .slice(0, 150)
-    .replace(/[.!?]+$/, '')
-    .replace(
-      /(?:을|를)?\s*(?:만들고|제작하고|개발하고)\s*싶(?:어|어요|습니다|다)?$/,
-      ''
-    )
-    .replace(
-      /(?:을|를)?\s*(?:만들|제작하|개발하)(?:려고|고자)\s*(?:해|해요|합니다|한다)?$/,
-      ''
-    )
-    .replace(/(?:을|를)?\s*(?:만들|제작할|개발할)\s*예정(?:입니다)?$/, '')
-    .trim()
-
-  return /개발$/.test(conciseIdea)
-    ? `${conciseIdea}이 목표입니다.`
-    : `${conciseIdea} 개발이 목표입니다.`
+  return idea.slice(0, 150)
 }
 
 function ProjectDirectionCard({ data }: { data: ProjectDirectionData }) {
@@ -4722,22 +5012,22 @@ function DirectionResearchWidgets({
     title: string
   }> = [
     {
-      description: 'TAM/SAM/SOM 관점으로 진입 시장을 봅니다.',
+      description: 'Analyze the market through the TAM / SAM / SOM framework.',
       index: '1',
       kind: 'market_size',
-      title: '시장 규모',
+      title: 'Market Size',
     },
     {
-      description: '구매 동기와 소비 키워드를 정리합니다.',
+      description: 'Identify key purchase motivations and consumer behavior keywords.',
       index: '2',
       kind: 'consumption_keywords',
-      title: '소비 트렌드',
+      title: 'Consumer Trends',
     },
     {
-      description: '경쟁 구도와 브랜드 포지션을 비교합니다.',
+      description: 'Compare the competitive landscape and brand positioning.',
       index: '3',
       kind: 'brand_positioning',
-      title: '경쟁사',
+      title: 'Competitors',
     },
   ]
 
@@ -4906,6 +5196,10 @@ function MarkdownContent({ content }: { content: string }) {
     const line = rawLine.trim()
 
     if (!line) {
+      // Render empty lines as spacing to preserve paragraph separation
+      blocks.push(
+        <div key={`spacing-${index}`} className="h-3" />
+      )
       index += 1
       continue
     }
@@ -5075,6 +5369,7 @@ function ChatBubble({
   visualizedKeywordCards,
   visualizedDirectionArtifacts,
   visualizedProblemStatements,
+  isDemoMode,
 }: {
   canShowStyleReferences: boolean
   confirmedDirectionKinds: Set<DirectionArtifactKind>
@@ -5138,7 +5433,9 @@ function ChatBubble({
     Record<DirectionArtifactKind, string>
   >
   visualizedProblemStatements: ProblemStatementsData | null
+  isDemoMode: boolean
 }) {
+  const { language } = useAppLanguage()
   const [hintModalOpen, setHintModalOpen] = useState(false)
   const [selectedHintIndex, setSelectedHintIndex] = useState<number | null>(null)
   const [selectedDesignIndex, setSelectedDesignIndex] = useState<number | null>(null)
@@ -5154,8 +5451,14 @@ function ChatBubble({
   const [meshyError, setMeshyError] = useState<string | null>(null)
   const [moodboardImages, setMoodboardImages] = useState<MoodboardGridImage[] | null>(null)
   const [selectedStyleKeywords, setSelectedStyleKeywords] = useState<
-    Partial<Record<keyof StyleKeywordPickerData, string[]>>
-  >({})
+    Partial<Record<StyleKeywordCategoryKey, string[]>>
+  >(() => {
+    // Demo only: hydrate the picker with the pre-selected keywords baked into
+    // the message marker so the user can confirm immediately. Real Gemini
+    // responses omit `selected`, so this falls back to an empty selection.
+    const preset = parseStyleKeywordPickerData(message.content)?.selected
+    return preset ? { ...preset } : {}
+  })
 
   async function startSelectedDesignVisualization() {
     if (
@@ -5253,6 +5556,7 @@ function ChatBubble({
   const displayContent = choiceSplit.displayContent
   const isPersonaCardMessage = Boolean(message.personaCardBlock)
   const shouldShowHints =
+    !isDemoMode &&
     !isUser &&
     !isPersonaCardMessage &&
     !problemStatements &&
@@ -5674,7 +5978,7 @@ function ChatBubble({
 
       {directionWidgets ? (
         <DirectionResearchWidgets
-          disabled={disabled}
+          disabled={disabled || isDemoMode}
           onSelect={(kind) => {
             const labelMap: Record<DirectionArtifactKind, string> = {
               brand_positioning: '경쟁사 리서치 보기',
@@ -5832,7 +6136,7 @@ function ChatBubble({
             }}
             className="rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
           >
-            힌트 보기
+            {language === 'ENG' ? 'Show hints' : '힌트 보기'}
           </button>
         </div>
       ) : null}
@@ -5889,54 +6193,8 @@ function ChatBubble({
 
       {(() => {
         const psData = problemStatements
-        const isLatestPs = latestProblemStatementsMessageId === message.id
-
-        if (!psData || !isLatestPs) return null
-
-        return (
-          <div className="flex w-full flex-col items-end gap-3">
-            <div className="flex items-center justify-end gap-3">
-              <button
-                type="button"
-                disabled={disabled}
-                onClick={() => onChoice('Problem Statements 다시 생성하기')}
-                className="min-w-24 rounded-[30px] bg-blue-600 px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-white disabled:opacity-50"
-              >
-                다시 생성하기
-              </button>
-              <button
-                type="button"
-                disabled={disabled || isProblemStatementsConfirmed}
-                onClick={() => onConfirmProblemStatements(message.id)}
-                className={`min-w-24 rounded-[30px] px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 disabled:cursor-default ${
-                  isProblemStatementsConfirmed
-                    ? 'bg-neutral-500 text-white'
-                    : 'bg-[#DDF444] text-black disabled:opacity-50'
-                }`}
-              >
-                확정하기
-              </button>
-            </div>
-            {isProblemStatementsConfirmed && !visualizedProblemStatements ? (
-              <button
-                type="button"
-                disabled={disabled}
-                onClick={() => onVisualizeProblemStatements(psData)}
-                className="inline-flex items-center gap-1 rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
-              >
-                시각화 하기
-                <Image
-                  src="/assets/icons/chat/visualize.svg"
-                  alt=""
-                  width={18}
-                  height={18}
-                  className="ml-0.5 h-[18px] w-[18px]"
-                />
-                <span>2</span>
-              </button>
-            ) : null}
-          </div>
-        )
+        // Demo mode: Problem Statements buttons removed - badge auto-generation only
+        return null
       })()}
 
       {keywordCards.map((keywordCard) => {
@@ -5956,61 +6214,8 @@ function ChatBubble({
             visualizedCard.keywords.join('\u0000') ===
               keywordCard.keywords.join('\u0000')
         )
-        const label =
-          keywordCard.kind === 'experience_keywords'
-            ? 'Keywords: Experience'
-            : 'Keywords: Relationship'
-
-        return (
-          <div
-            key={`${message.id}-${keywordCard.kind}-actions`}
-            className="flex w-full flex-col items-end gap-3"
-          >
-            <div className="flex items-center justify-end gap-3">
-              <button
-                type="button"
-                disabled={disabled}
-                onClick={() => onChoice(`${label} 다시 생성하기`)}
-                className="min-w-24 rounded-[30px] bg-blue-600 px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-white disabled:opacity-50"
-              >
-                다시 생성하기
-              </button>
-              <button
-                type="button"
-                disabled={disabled || isConfirmed}
-                onClick={() =>
-                  onConfirmKeyword(keywordCard.kind, message.id)
-                }
-                className={`min-w-24 rounded-[30px] px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 disabled:cursor-default ${
-                  isConfirmed
-                    ? 'bg-neutral-500 text-white'
-                    : 'bg-[#DDF444] text-black disabled:opacity-50'
-                }`}
-              >
-                확정하기
-              </button>
-            </div>
-
-            {isConfirmed && !isCurrentCardVisualized ? (
-              <button
-                type="button"
-                disabled={disabled}
-                onClick={() => onVisualizeKeyword(keywordCard)}
-                className="inline-flex items-center gap-1 rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
-              >
-                시각화 하기
-                <Image
-                  src="/assets/icons/chat/visualize.svg"
-                  alt=""
-                  width={18}
-                  height={18}
-                  className="ml-0.5 h-[18px] w-[18px]"
-                />
-                <span>2</span>
-              </button>
-            ) : null}
-          </div>
-        )
+        // Demo mode: Keyword buttons removed - badge auto-generation only
+        return null
       })}
 
       {directionArtifactKind &&

@@ -71,10 +71,22 @@ export default async function WorkspaceProjectPage({
     .eq('id', user.id)
     .maybeSingle()
 
+  const initialIdea =
+    typeof project.requirements === 'object' &&
+    project.requirements !== null &&
+    'survey' in project.requirements &&
+    typeof (project.requirements as Record<string, unknown>).survey === 'object' &&
+    (project.requirements as Record<string, unknown>).survey !== null
+      ? (
+          (project.requirements as Record<string, unknown>).survey as Record<string, unknown>
+        ).idea
+      : undefined
+
   return (
     <ProjectChatContainer
       initialMessages={messages}
       initialStageKey={getInitialStageFromMessages(messages)}
+      initialIdea={typeof initialIdea === 'string' ? initialIdea : undefined}
       isNewProject={resolvedSearchParams.isNew === 'true'}
       projectId={project.id}
       projectTitle={project.title || '새 프로젝트'}

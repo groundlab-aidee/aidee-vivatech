@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 
 import { insertProjectMessage } from '@/lib/chat/persistence'
 import { DEFAULT_STAGE_KEY } from '@/lib/chat/stages'
+import { findDemoScenarioFromText } from '@/lib/demo'
 import { createClient } from '@/lib/supabase/server'
 
 type SurveyData = {
@@ -297,10 +298,14 @@ export async function POST(request: Request) {
       console.error('[project create] context message insert failed:', error)
     }
 
-    if (survey.idea?.trim()) {
+    // Don't save user message if demo scenario is triggered
+    const ideaText = survey.idea?.trim()
+    const isDemoScenario = ideaText ? findDemoScenarioFromText(ideaText) : null
+
+    if (ideaText && !isDemoScenario) {
       try {
         await insertProjectMessage({
-          content: survey.idea.trim(),
+          content: ideaText,
           projectId: project.id,
           role: 'user',
           seqOrder: 1,

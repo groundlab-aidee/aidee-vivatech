@@ -592,27 +592,7 @@ function summarizeIdeaText(requirements: Record<string, unknown>) {
     return '아직 아이디어 텍스트가 충분히 입력되지 않았습니다.'
   }
 
-  if (/개발이\s*목표입니다[.!]?$/.test(idea)) {
-    return `${idea.replace(/[.!?]+$/, '')}.`
-  }
-
-  const conciseIdea = idea
-    .slice(0, 150)
-    .replace(/[.!?]+$/, '')
-    .replace(
-      /(?:을|를)?\s*(?:만들고|제작하고|개발하고)\s*싶(?:어|어요|습니다|다)?$/,
-      ''
-    )
-    .replace(
-      /(?:을|를)?\s*(?:만들|제작하|개발하)(?:려고|고자)\s*(?:해|해요|합니다|한다)?$/,
-      ''
-    )
-    .replace(/(?:을|를)?\s*(?:만들|제작할|개발할)\s*예정(?:입니다)?$/, '')
-    .trim()
-
-  return /개발$/.test(conciseIdea)
-    ? `${conciseIdea}이 목표입니다.`
-    : `${conciseIdea} 개발이 목표입니다.`
+  return idea.slice(0, 150)
 }
 
 function buildProjectStartSnapshot(

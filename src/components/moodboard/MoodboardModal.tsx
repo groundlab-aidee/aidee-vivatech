@@ -24,15 +24,33 @@ export function MoodboardModal({ isOpen, onClose, projectId }: Props) {
 
   useEffect(() => {
     if (!isOpen) return
-    setLoading(true)
 
-    fetch(`/api/moodboard?projectId=${projectId}`)
-      .then((r) => r.json())
-      .then((data: { board?: MoodboardImage[] }) => {
+    const controller = new AbortController()
+
+    async function loadMoodboard() {
+      setLoading(true)
+
+      try {
+        const res = await fetch(`/api/moodboard?projectId=${projectId}`, {
+          signal: controller.signal,
+        })
+
+        const data = (await res.json()) as { board?: MoodboardImage[] }
+
         setImages(data.board ?? [])
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false))
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') return
+        setImages([])
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    void loadMoodboard()
+
+    return () => {
+      controller.abort()
+    }
   }, [isOpen, projectId])
 
   if (!isOpen) return null
