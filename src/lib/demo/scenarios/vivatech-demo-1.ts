@@ -1144,5 +1144,17 @@ export const vivatechDemo1: DemoScenario = {
             '<</AIDEE_STYLE_KEYWORD_PICKER>>',
         ].join('\n'),
     },
+    {
+        id: 'demo1_user_28',
+        role: 'user',
+        stageKey: 'step_4_style',
+
+        content:
+            'I selected the following style keywords:\n\n' +
+            '**Emotion:** Motivating, Trustworthy, Immersive, Self-directed, Refined\n' +
+            '**Color:** Natural, Neutral, Deep, Minimal, Metallic\n' +
+            '**Structure:** Ergonomic, Compact, Lightweight, Streamlined, Balanced\n' +
+            '**Texture:** Silicone, Matte Metal, Soft-touch Polymer, Fabric Texture, Durable Composite',
+    },
   ],
 }
