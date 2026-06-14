@@ -26,7 +26,7 @@ export async function createImageTo3DTask(
   const apiKey = process.env.MESHY_API_KEY
   if (!apiKey) throw new Error('MESHY_API_KEY not configured')
 
-  const res = await fetch('https://api.meshy.ai/openapi/v2/image-to-3d', {
+  const res = await fetch('https://api.meshy.ai/openapi/v1/image-to-3d', {
     signal: AbortSignal.timeout(45_000),
     method: 'POST',
     headers: {
@@ -54,7 +54,7 @@ export async function getMeshyTaskStatus(
   if (!apiKey) throw new Error('MESHY_API_KEY not configured')
 
   const res = await fetch(
-    `https://api.meshy.ai/openapi/v2/image-to-3d/${taskId}`,
+    `https://api.meshy.ai/openapi/v1/image-to-3d/${taskId}`,
     {
       headers: {
         Authorization: `Bearer ${apiKey}`,

@@ -7,6 +7,8 @@ import {
   useMemo,
   useRef,
   useState,
+  type DetailedHTMLProps,
+  type HTMLAttributes,
   type ReactNode,
 } from 'react'
 
@@ -28,7 +30,34 @@ import { MoodboardCandidates } from '@/components/chat/MoodboardCandidates'
 import { MoodboardGrid, type MoodboardGridImage } from '@/components/chat/MoodboardGrid'
 import { MoodboardModal } from '@/components/moodboard/MoodboardModal'
 import { extractRfpJsonBlock, type RfpDocument } from '@/lib/chat/rfp'
-import { inferStageMetaFromText, type StageKey } from '@/lib/chat/stages'
+import {
+  getLaterStageKey,
+  inferStageMetaFromText,
+  type StageKey,
+} from '@/lib/chat/stages'
+
+type ModelViewerProps = DetailedHTMLProps<
+  HTMLAttributes<HTMLElement> & {
+    src?: string
+    'camera-controls'?: string
+    'auto-rotate'?: string
+    'rotation-per-second'?: string
+    'shadow-intensity'?: string
+    exposure?: string
+    'touch-action'?: string
+    'interaction-prompt'?: string
+  },
+  HTMLElement
+>
+
+declare module 'react' {
+  // eslint-disable-next-line @typescript-eslint/no-namespace
+  namespace JSX {
+    interface IntrinsicElements {
+      'model-viewer': ModelViewerProps
+    }
+  }
+}
 
 type ProjectChatContainerProps = {
   initialMessages: ChatMessageRecord[]
@@ -144,7 +173,6 @@ function getImageArtifactKind(purpose?: GeneratedImagePurpose): LibraryArtifactK
       return 'persona'
     case 'style_reference':
       return 'mood_board'
-    case 'design':
     case 'thumbnail':
       return 'rendering'
     default:
@@ -331,11 +359,117 @@ function stripInternalBlocksForDisplay(text: string) {
     .replace(/\n?<CLICK_BUTTON[^>]*>/gi, '')
     .replace(/\n?<\[BUTTON[^\]]*\][^>]*>/gi, '')
     .replace(/\n?\[시스템\s*참고:[\s\S]*?\]/gi, '')
+    // Remove AI-emitted fake "[디자인 시안 N 선택]" style choice lines (selection is image-based)
+    .replace(/^\s*\[(?:디자인\s*)?시안\s*\d+\s*선택\]\s*$/gim, '')
     .replace(
       /<<\s*\/?\s*AIDEE(?:[-_ ][A-Z0-9_-]+)*(?:\s*:[^>]*)?\s*>>/gi,
       ''
     )
+    .replace(/\n?\s*\{\s*"moods"\s*:\s*\[[\s\S]*?\]\s*\}/g, '')
     .replace(/^\s*```[a-zA-Z0-9_-]*\s*$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+type StyleKeywordPickerData = {
+  emotional: string[]
+  color: string[]
+  structure: string[]
+  texture: string[]
+}
+
+function hasStyleKeywordPicker(content: string) {
+  return /<<AIDEE_STYLE_KEYWORD_PICKER>>/.test(content)
+}
+
+function parseStyleKeywordPickerData(content: string): StyleKeywordPickerData | null {
+  const match = content.match(
+    /<<AIDEE_STYLE_KEYWORD_PICKER>>\s*([\s\S]*?)\s*<<\/AIDEE_STYLE_KEYWORD_PICKER>>/
+  )
+  if (!match) return null
+  try {
+    const parsed = JSON.parse(match[1]) as Partial<StyleKeywordPickerData>
+    return {
+      emotional: parsed.emotional ?? [],
+      color: parsed.color ?? [],
+      structure: parsed.structure ?? [],
+      texture: parsed.texture ?? [],
+    }
+  } catch {
+    return null
+  }
+}
+
+const STYLE_KEYWORD_CATEGORIES: Array<{
+  key: keyof StyleKeywordPickerData
+  english: string
+  korean: string
+}> = [
+  { key: 'emotional', english: 'Emotional Keywords', korean: '감정' },
+  { key: 'color', english: 'Color Keywords', korean: '색감' },
+  { key: 'structure', english: 'Structure Keywords', korean: '구조' },
+  { key: 'texture', english: 'Texture Keywords', korean: '촉감' },
+]
+
+type StyleMoodOption = {
+  description: string
+  title: string
+}
+
+function parseMoodOptions(content: string): StyleMoodOption[] | null {
+  const widgetsMatch = content.match(
+    /\{\s*"widgets"\s*:\s*(\[[\s\S]*?\])\s*\}/i
+  )
+
+  if (widgetsMatch) {
+    try {
+      const parsed = JSON.parse(widgetsMatch[1]) as unknown
+
+      if (!Array.isArray(parsed)) return null
+
+      const widgets = parsed
+        .filter(
+          (item): item is Record<string, unknown> =>
+            Boolean(item) && typeof item === 'object'
+        )
+        .map((item) => ({
+          description:
+            typeof item.description === 'string' ? item.description.trim() : '',
+          title: typeof item.title === 'string' ? item.title.trim() : '',
+        }))
+        .filter((item) => item.title)
+        .slice(0, 3)
+
+      return widgets.length > 0 ? widgets : null
+    } catch {
+      return null
+    }
+  }
+
+  const moodsMatch = content.match(/\{\s*"moods"\s*:\s*(\[[\s\S]*?\])\s*\}/i)
+  if (!moodsMatch) return null
+
+  try {
+    const arr = JSON.parse(moodsMatch[1]) as unknown
+    return Array.isArray(arr)
+      ? arr
+          .filter((item): item is string => typeof item === 'string')
+          .map((item) => ({ description: '', title: item.trim() }))
+          .filter((item) => item.title)
+      : null
+  } catch {
+    return null
+  }
+}
+
+function hasMoodOptions(content: string) {
+  return /\{\s*"(?:moods|widgets)"\s*:/i.test(content)
+}
+
+function stripMoodOptionsPayload(content: string) {
+  return content
+    .replace(/\n?\{\s*"widgets"\s*:\s*\[[\s\S]*?\]\s*\}\s*/gi, '\n')
+    .replace(/\n?\{\s*"moods"\s*:\s*\[[\s\S]*?\]\s*\}\s*/gi, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
 }
@@ -406,17 +540,10 @@ function extractConsumptionKeywordData(
     .split('\n')
     .map((line) =>
       line
-        .replace(/^[-*•]\s*/, '')
         .replace(/\*\*/g, '')
         .trim()
     )
-    .filter(
-      (line) =>
-        Boolean(line) &&
-        !/^(?:설명(?:글)?|키워드\s*목록|(?:10자\s*이내\s*)?키워드\s*\d+개|\d+자\s*이내\s*키워드\s*\d+개)\s*[:：-]?$/i.test(
-          line
-        )
-    )
+    .filter(Boolean)
   const stripLabel = (line: string) =>
     line
       .replace(
@@ -432,39 +559,60 @@ function extractConsumptionKeywordData(
     .filter(
       (line) =>
         line !== summaryLine &&
+        !/^[-*•]\s*/.test(line) &&
+        !/^\d+[.)]\s*/.test(line) &&
         line.length >= 20 &&
         !/^(?:키워드|keywords?|\d+자\s*이내\s*키워드)\s*(?:\d+개)?\s*[:：-]?/i.test(
           line
         )
     )
     .map(stripLabel)
-  const keywordCandidates = lines
-    .filter(
-      (line) =>
-        line !== summaryLine &&
-        !descriptiveLines.includes(stripLabel(line)) &&
-        !/^(?:설명(?:글)?|한\s*줄\s*요약|요약|소비\s*트렌드)\s*[:：-]?/i.test(
-          line
-        )
+  const keywordHeadingIndex = lines.findIndex((line) =>
+    /^(?:(?:\d+자\s*이내\s*)?키워드|keywords?)(?:\s*\d+(?:\s*[~-]\s*\d+)?개)?\s*[:：-]?/i.test(
+      line
     )
+  )
+  const keywordLines =
+    keywordHeadingIndex >= 0
+      ? lines.slice(keywordHeadingIndex)
+      : lines.filter(
+          (line) =>
+            line !== summaryLine &&
+            !descriptiveLines.includes(stripLabel(line)) &&
+            !/^(?:설명(?:글)?|한\s*줄\s*요약|요약|소비\s*트렌드)\s*[:：-]?/i.test(
+              line
+            )
+        )
+  const keywordCandidates = keywordLines
     .flatMap((line) => {
       const withoutLabel = line.replace(
-        /^(?:(?:\d+자\s*이내\s*)?키워드|keywords?)(?:\s*\d+개)?\s*[:：-]?\s*/i,
+        /^(?:(?:\d+자\s*이내\s*)?키워드|keywords?)(?:\s*\d+(?:\s*[~-]\s*\d+)?개)?\s*[:：-]?\s*/i,
         ''
       )
-      const parts = withoutLabel.split(/[,/·#|]|\s{2,}/)
+      const parts = withoutLabel.split(/[,，/·#|]|\s{2,}/)
 
-      if (parts.length === 1 && withoutLabel.length > 20) {
+      if (
+        parts.length === 1 &&
+        withoutLabel.length > 20 &&
+        !/^[-*•]\s*/.test(withoutLabel) &&
+        !/^\d+[.)]\s*/.test(withoutLabel)
+      ) {
         return []
       }
 
       return parts
     })
-    .map((item) => item.replace(/^\d+[.)]\s*/, '').replace(/[.!?。！？]+$/g, '').trim())
+    .map((item) =>
+      item
+        .replace(/^[-*•]\s*/, '')
+        .replace(/^\d+[.)]\s*/, '')
+        .replace(/[.!?。！？]+$/g, '')
+        .trim()
+    )
     .filter(
       (item) =>
         item.length >= 2 &&
-        item.length <= 20 &&
+        item.length <= 16 &&
         !/^(?:요약|설명(?:글)?|키워드(?:\s*\d+개)?|\d+자\s*이내|소비\s*트렌드|keywords?|consumption)$/i.test(
           item
         )
@@ -993,6 +1141,10 @@ export function ProjectChatContainer({
   const [visualizedRfpMessageId, setVisualizedRfpMessageId] = useState<
     string | null
   >(null)
+  const [confirmedCompanyMessageId, setConfirmedCompanyMessageId] = useState<
+    string | null
+  >(null)
+  const [companyModalOpen, setCompanyModalOpen] = useState(false)
   const [projectReportModalData, setProjectReportModalData] =
     useState<RfpDocument | null>(null)
   const [marketSizingModalData, setMarketSizingModalData] =
@@ -1001,6 +1153,14 @@ export function ProjectChatContainer({
     useState<ConsumptionKeywordData | null>(null)
   const [brandPositioningModalData, setBrandPositioningModalData] =
     useState<BrandPositioningData | null>(null)
+  const [selectedRenderingImage, setSelectedRenderingImage] = useState<
+    string | null
+  >(null)
+  const [renderingModalImage, setRenderingModalImage] = useState<string | null>(
+    null
+  )
+  const [meshyModelUrl, setMeshyModelUrl] = useState<string | null>(null)
+  const [modelViewerOpen, setModelViewerOpen] = useState(false)
   const [visualizedConsumptionKeywordData, setVisualizedConsumptionKeywordData] =
     useState<ConsumptionKeywordData | null>(null)
   const [isPending, setIsPending] = useState(false)
@@ -1010,28 +1170,58 @@ export function ProjectChatContainer({
     () => messages.filter((message) => message.role !== 'system'),
     [messages]
   )
-  const latestAssistantMessage = useMemo(
-    () =>
-      [...visibleMessages]
-        .reverse()
-        .find((message) => message.role === 'assistant') ?? null,
-    [visibleMessages]
-  )
   const effectiveStageKey = useMemo(() => {
-    if (!latestAssistantMessage || stageKey !== 'step_1_idea') {
-      return stageKey
+    let inferredStageKey = stageKey
+
+    for (const message of visibleMessages) {
+      inferredStageKey = getLaterStageKey(inferredStageKey, message.stageKey)
+
+      if (message.role === 'assistant') {
+        const inferred = inferStageMetaFromText({
+          currentStageKey: inferredStageKey,
+          text: message.content,
+        })
+
+        if (inferred.transition) {
+          inferredStageKey = getLaterStageKey(
+            inferredStageKey,
+            inferred.nextStageKey
+          )
+        }
+
+        if (
+          message.generatedImageBlock?.purpose === 'moodboard_candidate' ||
+          message.generatedImageBlock?.purpose === 'design' ||
+          message.generatedImageBlock?.purpose === 'thumbnail'
+        ) {
+          inferredStageKey = getLaterStageKey(
+            inferredStageKey,
+            'step_5_design'
+          )
+        } else if (
+          message.generatedImageBlock?.purpose === 'style_reference' ||
+          hasStyleKeywordPicker(message.content) ||
+          hasMoodOptions(message.content)
+        ) {
+          inferredStageKey = getLaterStageKey(
+            inferredStageKey,
+            'step_4_style'
+          )
+        }
+      }
+
+      if (
+        message.role === 'user' &&
+        /스타일\s*레퍼런스를\s*선택하고\s*무드보드를\s*만들었어요/i.test(
+          message.content
+        )
+      ) {
+        inferredStageKey = getLaterStageKey(inferredStageKey, 'step_5_design')
+      }
     }
 
-    const inferredStage = inferStageMetaFromText({
-      currentStageKey: stageKey,
-      text: latestAssistantMessage.content,
-    })
-
-    return inferredStage.transition &&
-      inferredStage.nextStageKey === 'step_2_persona'
-      ? inferredStage.nextStageKey
-      : stageKey
-  }, [latestAssistantMessage, stageKey])
+    return inferredStageKey
+  }, [stageKey, visibleMessages])
   const latestProjectDirection = useMemo(() => {
     for (const message of [...visibleMessages].reverse()) {
       if (message.role !== 'assistant') {
@@ -1083,6 +1273,63 @@ export function ProjectChatContainer({
         )
     )
   }, [confirmedPersonaMessageId, latestEditablePersonaMessage, visibleMessages])
+  const latestStyleKeywordPickerMessageId = useMemo(() => {
+    for (const message of [...visibleMessages].reverse()) {
+      if (message.role === 'assistant' && hasStyleKeywordPicker(message.content)) {
+        return message.id
+      }
+    }
+    return null
+  }, [visibleMessages])
+  const isStyleKeywordsSubmitted = useMemo(() => {
+    if (!latestStyleKeywordPickerMessageId) return false
+    const source = visibleMessages.find((m) => m.id === latestStyleKeywordPickerMessageId)
+    if (!source) return false
+    return visibleMessages.some(
+      (m) =>
+        m.role === 'user' &&
+        m.seq_order > source.seq_order &&
+        /스타일\s*키워드를\s*선택했습니다/i.test(m.content)
+    )
+  }, [latestStyleKeywordPickerMessageId, visibleMessages])
+  const latestMoodOptionsMessageId = useMemo(() => {
+    for (const message of [...visibleMessages].reverse()) {
+      if (message.role === 'assistant' && hasMoodOptions(message.content)) {
+        return message.id
+      }
+    }
+    return null
+  }, [visibleMessages])
+  const isMoodSelected = useMemo(() => {
+    if (!latestMoodOptionsMessageId) return false
+    const source = visibleMessages.find((m) => m.id === latestMoodOptionsMessageId)
+    if (!source) return false
+    return visibleMessages.some(
+      (m) =>
+        m.role === 'user' &&
+        m.seq_order > source.seq_order &&
+        /스타일\s*분위기를\s*선택했어요/i.test(m.content)
+    )
+  }, [latestMoodOptionsMessageId, visibleMessages])
+  const hasDesignImages = useMemo(
+    () =>
+      visibleMessages.some(
+        (m) =>
+          m.generatedImageBlock?.purpose === 'design' &&
+          (m.generatedImageBlock?.images.length ?? 0) > 0
+      ),
+    [visibleMessages]
+  )
+  const latestMoodboardImageUrl = useMemo(() => {
+    for (const m of [...visibleMessages].reverse()) {
+      if (m.generatedImageBlock?.purpose === 'moodboard_candidate') {
+        const meta = m.generatedImageBlock.unsplashMeta as UnsplashImageMeta[] | null
+        const url = meta?.[0]?.url ?? m.generatedImageBlock.images[0] ?? null
+        if (url) return url
+      }
+    }
+    return null
+  }, [visibleMessages])
   const latestProblemStatementsMessageId = useMemo(() => {
     for (const message of [...visibleMessages].reverse()) {
       if (message.role !== 'assistant') continue
@@ -1252,6 +1499,18 @@ export function ProjectChatContainer({
   const hasVisualizedLatestRfp = Boolean(
     latestRfpMessage && visualizedRfpMessageId === latestRfpMessage.id
   )
+  const latestCompanyMessage = useMemo(() => {
+    for (const message of [...visibleMessages].reverse()) {
+      if (message.role === 'assistant' && message.stageKey === 'step_6_company') {
+        return message
+      }
+    }
+    return null
+  }, [visibleMessages])
+  const hasConfirmedLatestCompany = Boolean(
+    latestCompanyMessage && confirmedCompanyMessageId === latestCompanyMessage.id
+  )
+  const hasVisualizedLatestCompany = companyModalOpen
   const availableArtifacts = useMemo(() => {
     const availableKinds = new Set<LibraryArtifactKind>()
 
@@ -1299,6 +1558,14 @@ export function ProjectChatContainer({
 
     }
 
+    if (selectedRenderingImage) {
+      availableKinds.add('rendering')
+    }
+
+    if (meshyModelUrl) {
+      availableKinds.add('modeling')
+    }
+
     if (latestRfp && hasVisualizedLatestRfp) {
       availableKinds.add('project_report')
     }
@@ -1311,6 +1578,8 @@ export function ProjectChatContainer({
     latestProjectDirection,
     latestRfp,
     latestDirectionMessageIds,
+    meshyModelUrl,
+    selectedRenderingImage,
     visibleMessages,
     visualizedDirectionArtifacts,
     visualizedKeywordCards,
@@ -1611,7 +1880,12 @@ export function ProjectChatContainer({
 
         return nextMessages
       })
-      setStageKey(result.nextStageKey ?? effectiveStageKey)
+      setStageKey(
+        getLaterStageKey(
+          effectiveStageKey,
+          result.nextStageKey ?? effectiveStageKey
+        )
+      )
       return assistantMessage
     } catch (error) {
       if (optimisticUserMessage) {
@@ -1971,10 +2245,12 @@ export function ProjectChatContainer({
                     (candidate) =>
                       candidate.role === 'user' &&
                       candidate.seq_order < message.seq_order &&
-                      /(?:다음\s*(?:단계|STEP)(?:로)?\s*(?:진행|넘어가|이동|시작)|STEP\s*4(?:로)?\s*(?:진행|넘어가|이동|시작)|스타일\s*(?:컨셉|단계)(?:로)?\s*(?:진행|넘어가|이동|시작))/i.test(
+                      /(?:다음\s*(?:단계|STEP)(?:로)?\s*(?:진행|넘어가|이동|시작)|STEP\s*4(?:로)?\s*(?:진행|넘어가|이동|시작)|스타일\s*(?:컨셉|단계)(?:로)?\s*(?:진행|넘어가|이동|시작)|스타일\s*분위기를\s*선택했어요)/i.test(
                         candidate.content
                       )
                   )}
+                  isMoodSelected={isMoodSelected}
+                  latestMoodOptionsMessageId={latestMoodOptionsMessageId}
                   disabled={isPending}
                   hasConfirmedPersona={hasConfirmedLatestPersona}
                   hasVisualizedPersona={
@@ -1982,12 +2258,17 @@ export function ProjectChatContainer({
                   }
                   hasConfirmedRfp={hasConfirmedLatestRfp}
                   hasVisualizedRfp={hasVisualizedLatestRfp}
+                  hasConfirmedCompany={hasConfirmedLatestCompany}
+                  hasVisualizedCompany={hasVisualizedLatestCompany}
+                  latestCompanyMessageId={latestCompanyMessage?.id ?? null}
                   confirmedDirectionKinds={confirmedDirectionKinds}
                   confirmedKeywordKinds={confirmedKeywordKinds}
                   isProblemStatementsConfirmed={isProblemStatementsConfirmed}
                   isLatestEditablePersona={
                     message.id === latestEditablePersonaMessage?.id
                   }
+                  isStyleKeywordsSubmitted={isStyleKeywordsSubmitted}
+                  latestStyleKeywordPickerMessageId={latestStyleKeywordPickerMessageId}
                   latestKeywordMessageIds={latestKeywordMessageIds}
                   latestProblemStatementsMessageId={latestProblemStatementsMessageId}
                   latestDirectionMessageIds={latestDirectionMessageIds}
@@ -2007,6 +2288,11 @@ export function ProjectChatContainer({
                   onVisualizeDirection={visualizeDirectionArtifact}
                   onConfirmDirection={confirmDirectionArtifact}
                   onVisualizeRfp={visualizeProjectReport}
+                  onConfirmCompany={(id) => setConfirmedCompanyMessageId(id)}
+                  onVisualizeCompany={() => setCompanyModalOpen(true)}
+                  onModelReady={(url) => setMeshyModelUrl(url)}
+                  onOpenModelViewer={() => setModelViewerOpen(true)}
+                  onSelectDesignRendering={setSelectedRenderingImage}
                   projectId={projectId}
                   userAvatarUrl={userAvatarUrl}
                   visualizedKeywordCards={visualizedKeywordCards}
@@ -2031,6 +2317,22 @@ export function ProjectChatContainer({
             <p className="mb-3 rounded-xl bg-red-50 px-4 py-3 text-sm font-medium text-red-600">
               {errorMessage}
             </p>
+          ) : null}
+
+          {effectiveStageKey === 'step_5_design' &&
+          !hasDesignImages &&
+          !isPending ? (
+            <div className="mx-auto mb-3 flex w-full max-w-[1171px] justify-end">
+              <button
+                type="button"
+                onClick={() =>
+                  requestAssistantResponse({ forceImageGeneration: 'initial_design', message: '' })
+                }
+                className="rounded-[30px] bg-blue-600 px-6 py-2 font-['Pretendard'] text-sm font-semibold text-white shadow transition hover:bg-blue-700"
+              >
+                시안 생성하기
+              </button>
+            </div>
           ) : null}
 
           <div ref={expertMenuRef} className="relative mx-auto w-full max-w-[1171px]">
@@ -2178,7 +2480,7 @@ export function ProjectChatContainer({
           }
 
           if (kind === 'consumption_keywords') {
-            if (visualizedConsumptionKeywordData) {
+            if (visualizedConsumptionKeywordData?.keywords.length) {
               setConsumptionKeywordModalData(visualizedConsumptionKeywordData)
               return
             }
@@ -2205,6 +2507,16 @@ export function ProjectChatContainer({
                 ? extractBrandPositioningData(sourceMessage.content)
                 : null
             )
+            return
+          }
+
+          if (kind === 'rendering' && selectedRenderingImage) {
+            setRenderingModalImage(selectedRenderingImage)
+            return
+          }
+
+          if (kind === 'modeling' && meshyModelUrl) {
+            setModelViewerOpen(true)
             return
           }
 
@@ -2239,8 +2551,14 @@ export function ProjectChatContainer({
 
       <ProjectReportModal
         data={projectReportModalData}
+        imageUrl={latestMoodboardImageUrl}
         onClose={() => setProjectReportModalData(null)}
         onDownload={downloadRfp}
+      />
+
+      <CompanyModal
+        open={companyModalOpen}
+        onClose={() => setCompanyModalOpen(false)}
       />
 
       <MarketSizingModal
@@ -2262,6 +2580,16 @@ export function ProjectChatContainer({
         isOpen={moodboardModalOpen}
         onClose={() => setMoodboardModalOpen(false)}
         projectId={projectId}
+      />
+
+      <RenderingImageModal
+        image={renderingModalImage}
+        onClose={() => setRenderingModalImage(null)}
+      />
+
+      <ModelViewerModal
+        modelUrl={modelViewerOpen ? meshyModelUrl : null}
+        onClose={() => setModelViewerOpen(false)}
       />
     </div>
   )
@@ -2343,6 +2671,7 @@ function LibraryPanel({
             const isProjectReport = artifact.kind === 'project_report'
             const isMoodBoard = artifact.kind === 'mood_board'
             const isRendering = artifact.kind === 'rendering'
+            const isModeling = artifact.kind === 'modeling'
             const isSelected = artifact.kind === selectedArtifactKind
 
             return (
@@ -2351,6 +2680,7 @@ function LibraryPanel({
                 type="button"
                 disabled={isProjectDirection}
                 onClick={() => onSelectArtifact(artifact.kind)}
+                style={isModeling ? { backgroundColor: '#D2DAFF' } : undefined}
                 className={`relative mx-auto aspect-[184/140] w-[clamp(136px,17.04svh,184px)] max-w-full overflow-hidden rounded-[clamp(15px,1.85svh,20px)] text-left outline-none transition ${
                   isProjectDirection
                     ? 'cursor-default bg-violet-100'
@@ -2374,6 +2704,8 @@ function LibraryPanel({
                             ? 'bg-stone-300'
                             : isRendering
                               ? 'bg-indigo-400'
+                            : isModeling
+                              ? 'bg-[#D2DAFF]'
                     : 'bg-zinc-100'
                 } ${
                   isSelected
@@ -2547,6 +2879,22 @@ function LibraryPanel({
                       height={90}
                       unoptimized
                       className="absolute left-[58.52%] top-[27.78%] h-auto w-[44.02%]"
+                    />
+                  </>
+                ) : isModeling ? (
+                  <>
+                    <h2 className="absolute left-[5.43%] top-[7.14%] z-10 whitespace-pre-line font-['Inter'] text-[clamp(20px,2.78svh,30px)] font-medium leading-[1.07] text-neutral-800">
+                      3D Design:
+                      <br />
+                      Modeling
+                    </h2>
+                    <Image
+                      src="/assets/icons/chat-badge/3d-design-modeling.svg"
+                      alt=""
+                      width={184}
+                      height={57}
+                      unoptimized
+                      className="absolute bottom-0 left-0 h-auto w-full"
                     />
                   </>
                 ) : isMarketSizing ? (
@@ -2924,12 +3272,187 @@ function LibraryPlaceholderCard({ artifact }: { artifact: LibraryArtifact }) {
   )
 }
 
+const COMPANY_CATEGORIES = [
+  {
+    title: '제품 디자인',
+    subtitle: '제품의 형태, 사용성, CMF, 렌더링을 구체화합니다.',
+    partnerIndices: [0, 1, 2, 3],
+  },
+  {
+    title: '하드웨어 · 전자개발',
+    subtitle: 'LED 제어, 버튼, 배터리, 회로, 펌웨어 개발을 지원합니다.',
+    partnerIndices: [4, 5, 6, 7],
+  },
+  {
+    title: '시제품 제작 · 제조',
+    subtitle: '외형 목업과 작동 시제품을 제작하고, 양산 가능성을 검토합니다.',
+    partnerIndices: [8, 9, 10, 11],
+  },
+  {
+    title: '브랜딩 · 패키지 · 출시',
+    subtitle: '브랜드 메시지, 패키지, 상세페이지, 크라우드펀딩 준비를 지원합니다.',
+    partnerIndices: [0, 3, 5, 7],
+  },
+] as const
+
+const DASHBOARD_PARTNERS = [
+  { accent: 'from-blue-100 to-indigo-200', image: '/assets/images/partner1png.png', name: '프로토랩스 코리아', rating: 4.8 },
+  { accent: 'from-cyan-100 to-sky-200', image: '/assets/images/partner2.png', name: '(주)테크윈 솔루션', rating: 4.6 },
+  { accent: 'from-violet-100 to-fuchsia-200', image: '/assets/images/partner3.png', name: '라인웍스 디렉션', rating: 4.7 },
+  { accent: 'from-[#DDF444]/30 to-[#DDF444]/70', image: '/assets/images/partner4.png', name: '픽셀 투 프로덕트', rating: 4.5 },
+  { accent: 'from-emerald-100 to-teal-200', image: '/assets/images/partner5.png', name: '오브젝트 랩', rating: 4.9 },
+  { accent: 'from-rose-100 to-pink-200', image: '/assets/images/partner6.png', name: '볼드앤브레이브', rating: 4.4 },
+  { accent: 'from-slate-100 to-slate-300', image: '/assets/images/partner7.png', name: '마인드브릿지 컨설팅', rating: 4.7 },
+  { accent: 'from-[#DDF444]/30 to-[#DDF444]/70', image: '/assets/images/partner8.png', name: '(주)맥스텍', rating: 4.6 },
+  { accent: 'from-orange-100 to-amber-200', image: '/assets/images/partner9.png', name: '오렌지 팩토리', rating: 4.8 },
+  { accent: 'from-zinc-100 to-zinc-200', image: '/assets/images/partner10.png', name: '퓨처 프로덕션', rating: 4.5 },
+  { accent: 'from-slate-100 to-gray-200', image: '/assets/images/partner11.png', name: '그린 하드웨어', rating: 4.7 },
+  { accent: 'from-stone-100 to-neutral-200', image: '/assets/images/partner12.png', name: '아이디어 플러스', rating: 4.6 },
+]
+
+function CompanyPartnerCard({ partner }: { partner: typeof DASHBOARD_PARTNERS[number] }) {
+  const filledStars = Math.round(partner.rating)
+  return (
+    <article className="relative mx-auto aspect-[3/4] w-full max-w-36 min-w-0 overflow-hidden rounded-[10px] bg-white transition [container-type:inline-size] hover:-translate-y-0.5 hover:shadow-md">
+      <div
+        className={`relative h-[58.333%] overflow-hidden rounded-t-[clamp(6px,6.944cqw,10px)] rounded-b-[clamp(12px,13.889cqw,20px)] border-[clamp(2px,2.083cqw,3px)] border-zinc-200 bg-gradient-to-br ${partner.accent}`}
+      >
+        <Image
+          src={partner.image}
+          alt=""
+          fill
+          sizes="144px"
+          unoptimized
+          className="object-cover object-center"
+        />
+      </div>
+      <div className="absolute inset-x-0 bottom-0 h-[55.208%] rounded-b-[clamp(6px,6.944cqw,10px)] bg-white px-[8.333%] pb-[8.333%] pt-[4.167%]">
+        <h3 className="truncate font-['Inter'] text-[clamp(9px,9.722cqw,14px)] font-medium leading-[clamp(16px,16.667cqw,24px)] text-zinc-700">
+          {partner.name}
+        </h3>
+        <div className="mt-[1%] flex h-[clamp(8px,8.333cqw,12px)] min-w-0 items-center gap-[clamp(2px,2.778cqw,4px)]">
+          <div className="flex items-center gap-[1px]">
+            {Array.from({ length: 5 }, (_, i) => (
+              <Image
+                key={i}
+                src={
+                  i < filledStars
+                    ? '/assets/icons/dashboard/star-filled.svg'
+                    : '/assets/icons/dashboard/star-blank.svg'
+                }
+                alt=""
+                width={14}
+                height={13}
+                unoptimized
+                className="h-[clamp(8px,8.333cqw,12px)] w-[clamp(9px,9.722cqw,14px)] object-contain"
+              />
+            ))}
+          </div>
+          <span className="font-['Inter'] text-[clamp(8px,6.944cqw,10px)] font-medium leading-none text-zinc-500">
+            {partner.rating.toFixed(1)}
+          </span>
+        </div>
+      </div>
+    </article>
+  )
+}
+
+function CompanyModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  useDismissModalOnEscape(open, onClose)
+
+  if (!open) return null
+
+  return (
+    <div
+      className="absolute inset-0 z-[80] flex items-start justify-center overflow-y-auto bg-neutral-900/70 p-6 sm:p-10"
+      role="dialog"
+      aria-modal="true"
+      aria-label="협력업체 추천"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div className="relative w-full max-w-[780px] rounded-[20px] bg-slate-200 px-8 pt-8 pb-6 outline outline-[3px] outline-offset-[-3px] outline-zinc-200">
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="닫기"
+          className="absolute right-5 top-5 flex h-8 w-8 items-center justify-center rounded-full text-xl text-zinc-500 transition hover:bg-zinc-300"
+        >
+          ×
+        </button>
+
+        <div className="flex flex-col gap-10">
+          {COMPANY_CATEGORIES.map((category) => (
+            <section key={category.title}>
+              <div className="mb-4">
+                <h2 className="font-['Pretendard'] text-3xl font-medium leading-6 text-black">
+                  {category.title}
+                </h2>
+                <p className="mt-3 font-['Pretendard'] text-xs font-medium leading-6 text-black">
+                  {category.subtitle}
+                </p>
+              </div>
+              <div className="grid grid-cols-4 gap-2.5">
+                {category.partnerIndices.map((idx) => (
+                  <CompanyPartnerCard key={idx} partner={DASHBOARD_PARTNERS[idx]} />
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function RfpRow({
+  label,
+  value,
+  wide = false,
+}: {
+  label: string
+  value: string
+  wide?: boolean
+}) {
+  return (
+    <div className={`flex items-start gap-3 py-1.5 ${wide ? '' : ''}`}>
+      <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">
+        {label}
+      </span>
+      <span className="font-['Pretendard'] text-[10px] font-normal leading-4 text-black">
+        {value}
+      </span>
+    </div>
+  )
+}
+
+function RfpSectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="mb-2 font-['Pretendard'] text-xs font-bold text-blue-600">{children}</p>
+  )
+}
+
+function RfpSubSectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mb-2 mt-4 border-t border-blue-600 pt-1">
+      <p className="font-['Pretendard'] text-xs font-bold text-blue-600">{children}</p>
+    </div>
+  )
+}
+
+function RfpDivider() {
+  return <div className="my-0 border-t border-black/20" />
+}
+
 function ProjectReportModal({
   data,
+  imageUrl,
   onClose,
   onDownload,
 }: {
   data: RfpDocument | null
+  imageUrl?: string | null
   onClose: () => void
   onDownload: () => void
 }) {
@@ -2941,7 +3464,7 @@ function ProjectReportModal({
 
   return (
     <div
-      className="absolute inset-0 z-[80] flex items-center justify-center bg-neutral-900/70 p-4 sm:p-6 lg:p-10"
+      className="absolute inset-0 z-[80] flex items-center justify-center bg-neutral-900/70 p-4 sm:p-8"
       role="dialog"
       aria-modal="true"
       aria-label="Project Report"
@@ -2951,98 +3474,169 @@ function ProjectReportModal({
         }
       }}
     >
-      <article className="flex max-h-[calc(100svh-32px)] w-full max-w-[1000px] flex-col overflow-hidden rounded-[24px] bg-[#f5f3ff] shadow-[0px_24px_60px_rgba(0,0,0,0.24)] sm:max-h-[calc(100svh-48px)]">
-        <header className="flex shrink-0 items-center justify-between gap-4 bg-neutral-900 px-5 py-4 text-white sm:px-8">
-          <div className="min-w-0">
-            <p className="font-['Inter'] text-xs font-semibold uppercase tracking-[0.18em] text-violet-300">
-              Project Report
-            </p>
-            <h2 className="truncate font-['Pretendard'] text-xl font-bold sm:text-2xl">
-              {data.projectName}
-            </h2>
+      <article className="w-full max-w-[943px] overflow-hidden rounded-[20px] bg-white shadow-[0px_24px_60px_rgba(0,0,0,0.24)]">
+        {/* Top: Image + Blue Header */}
+        <div className="flex min-h-[160px]">
+          {/* Left: moodboard image */}
+          <div className="relative w-[41%] shrink-0 overflow-hidden rounded-tl-[20px] bg-zinc-300">
+            {imageUrl ? (
+              <Image
+                src={imageUrl}
+                alt=""
+                fill
+                unoptimized
+                className="object-cover"
+              />
+            ) : (
+              <div className="h-full w-full bg-gradient-to-br from-zinc-400 to-zinc-200" />
+            )}
           </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <button
-              type="button"
-              onClick={() => void onDownload()}
-              className="rounded-lg bg-blue-600 px-3 py-2 font-['Pretendard'] text-xs font-semibold text-white transition hover:bg-blue-700"
-            >
-              다운로드
-            </button>
+          {/* Right: blue header */}
+          <div className="relative flex flex-1 flex-col justify-center gap-2 bg-blue-600 px-8 py-6">
+            <div className="flex items-baseline gap-3">
+              <span className="font-['Pretendard'] text-2xl font-medium text-white">
+                제품 개발 기획안
+              </span>
+              <span className="font-['Inter'] text-base font-medium text-white/70">
+                Project Report
+              </span>
+            </div>
+            <p className="font-['Pretendard'] text-xs font-semibold leading-5 text-white/90">
+              {data.oneLineDefinition}
+            </p>
             <button
               type="button"
               onClick={onClose}
               aria-label="닫기"
-              className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/20 text-xl text-white transition hover:bg-white/10"
+              className="absolute right-4 top-4 flex h-7 w-7 items-center justify-center rounded-full text-xl text-white/70 transition hover:bg-white/10 hover:text-white"
             >
               ×
             </button>
           </div>
-        </header>
+        </div>
 
-        <div className="app-content-scrollbar min-h-0 overflow-y-auto p-4 sm:p-8">
-          <div className="grid gap-4 lg:grid-cols-12">
-            <section className="rounded-[20px] bg-white p-5 shadow-sm lg:col-span-8 sm:p-7">
-              <p className="font-['Inter'] text-sm font-semibold text-blue-600">
-                Product Definition
-              </p>
-              <p className="mt-3 font-['Pretendard'] text-xl font-bold leading-8 text-neutral-900 sm:text-2xl">
-                {data.oneLineDefinition}
-              </p>
-              <dl className="mt-6 grid gap-4 sm:grid-cols-2">
-                <ReportDefinition label="프로젝트 목표" value={data.projectGoal} />
-                <ReportDefinition label="최종 활용 목적" value={data.finalPurpose} />
-              </dl>
-            </section>
+        {/* Body: Two columns */}
+        <div className="flex divide-x divide-zinc-200 overflow-y-auto" style={{ maxHeight: 'calc(90svh - 160px)' }}>
+          {/* Left column: 프로젝트 개요 */}
+          <div className="w-[45%] shrink-0 px-6 py-5">
+            <RfpSectionLabel>프로젝트 개요</RfpSectionLabel>
 
-            <section className="rounded-[20px] bg-violet-200 p-5 lg:col-span-4 sm:p-7">
-              <p className="font-['Inter'] text-sm font-semibold text-neutral-700">
-                Project Scope
-              </p>
-              <p className="mt-5 font-['Pretendard'] text-2xl font-bold text-neutral-900">
-                {data.budgetRange}
-              </p>
-              <p className="mt-2 font-['Inter'] text-lg font-semibold text-neutral-700">
-                {data.timeline}
-              </p>
-              <p className="mt-5 font-['Pretendard'] text-sm leading-6 text-neutral-700">
-                {data.sizeOrForm}
-              </p>
-            </section>
+            <div className="flex items-start gap-3 py-1.5">
+              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">제품 정의</span>
+              <span className="font-['Pretendard'] text-[10px] font-normal leading-4 text-black">{data.oneLineDefinition}</span>
+            </div>
+            <RfpDivider />
 
-            <ReportSection number="02" title="페르소나" className="lg:col-span-6">
-              <ReportDefinition label="메인 타겟" value={data.mainTarget} />
-              <ReportDefinition label="사용 상황(TPO)" value={data.usageContext} />
-              <ReportDefinition label="핵심 니즈 / 문제" value={data.coreNeeds} />
-            </ReportSection>
+            <div className="grid grid-cols-2">
+              <RfpRow label="목표" value={data.projectGoal} />
+              <RfpRow label="예산" value={data.budgetRange} />
+            </div>
+            <RfpDivider />
 
-            <ReportSection number="03" title="제품 방향" className="lg:col-span-6">
-              <ReportDefinition label="핵심 가치" value={data.coreValue} />
-              <ReportTags label="스타일 키워드" items={data.styleKeywords} />
-              <ReportList label="피해야 하는 방향" items={data.avoidDirections} />
-            </ReportSection>
+            <div className="grid grid-cols-2">
+              <RfpRow label="활용 목적" value={data.finalPurpose} />
+              <RfpRow label="기간" value={data.timeline} />
+            </div>
+            <RfpDivider />
 
-            <ReportSection number="04" title="기능 요구사항" className="lg:col-span-7">
-              <ReportList label="반드시 포함할 핵심 기능" items={data.mustHaveFeatures} />
-              <ReportList label="있으면 좋은 기능" items={data.niceToHaveFeatures} />
-            </ReportSection>
+            <div className="flex items-start gap-3 py-1.5">
+              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">스타일 키워드</span>
+              <div className="flex flex-wrap gap-1">
+                {data.styleKeywords.map((kw, i) => (
+                  <span
+                    key={i}
+                    className="inline-flex items-center rounded-full bg-yellow-300 px-2.5 py-0.5 font-['Pretendard'] text-[9px] font-normal text-black"
+                  >
+                    {kw}
+                  </span>
+                ))}
+              </div>
+            </div>
+            <RfpDivider />
 
-            <ReportSection number="05" title="구현 및 제작 조건" className="lg:col-span-5">
-              <ReportList label="구현 시 주의할 점" items={data.implementationNotes} />
-            </ReportSection>
+            <div className="flex items-start gap-3 py-1.5">
+              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">레퍼런스 요약</span>
+              <span className="font-['Pretendard'] text-[10px] font-normal leading-4 text-black">{data.referenceSummary}</span>
+            </div>
+            <RfpDivider />
 
-            <ReportSection number="06" title="레퍼런스 및 시장 인사이트" className="lg:col-span-12">
-              <ReportDefinition label="참고 이미지 / 레퍼런스" value={data.referenceSummary} />
-              <ReportList label="리서치 핵심 인사이트" items={data.researchInsights} columns />
-            </ReportSection>
+            <div className="flex items-start gap-3 py-1.5">
+              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">제외 방향</span>
+              <div className="flex flex-col gap-0.5">
+                {data.avoidDirections.map((d, i) => (
+                  <span key={i} className="font-['Pretendard'] text-[10px] font-normal leading-4 text-black">{d}</span>
+                ))}
+              </div>
+            </div>
+          </div>
 
-            <ReportSection number="07" title="성공 기준" className="lg:col-span-6">
-              <ReportList label="Success Criteria" items={data.successCriteria} />
-            </ReportSection>
+          {/* Right column: 타겟 + 디자인 + 제작 */}
+          <div className="flex-1 px-6 py-5">
+            <RfpSectionLabel>타겟과 핵심 가치</RfpSectionLabel>
 
-            <ReportSection number="08" title="다음 액션" className="bg-neutral-900 text-white lg:col-span-6">
-              <ReportList label="Next Actions" items={data.nextActions} inverted />
-            </ReportSection>
+            <RfpRow label="메인 타겟" value={data.mainTarget} />
+            <RfpDivider />
+            <div className="flex items-start gap-3 py-1.5">
+              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">사용 상황</span>
+              <span className="font-['Pretendard'] text-[10px] font-normal leading-4 text-black">{data.usageContext}</span>
+            </div>
+            <RfpDivider />
+            <div className="flex items-start gap-3 py-1.5">
+              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">니즈</span>
+              <span className="font-['Pretendard'] text-[10px] font-normal leading-4 text-black">{data.coreNeeds}</span>
+            </div>
+            <RfpDivider />
+            <div className="flex items-start gap-3 py-1.5">
+              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">핵심 가치</span>
+              <span className="font-['Pretendard'] text-[10px] font-normal leading-4 text-black">{data.coreValue}</span>
+            </div>
+
+            <RfpSubSectionLabel>디자인 아이디어</RfpSubSectionLabel>
+
+            <RfpRow label="크기" value={data.sizeOrForm} />
+            <RfpDivider />
+            <div className="flex items-start gap-3 py-1.5">
+              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">필수 기능</span>
+              <div className="flex flex-col gap-0.5">
+                {data.mustHaveFeatures.map((f, i) => (
+                  <span key={i} className="font-['Pretendard'] text-[10px] font-normal leading-4 text-black">{f}</span>
+                ))}
+              </div>
+            </div>
+
+            <RfpSubSectionLabel>제작 조건</RfpSubSectionLabel>
+
+            <div className="flex items-start gap-3 py-1.5">
+              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">구현 주의점</span>
+              <div className="flex flex-col gap-0.5">
+                {data.implementationNotes.map((n, i) => (
+                  <span key={i} className="font-['Pretendard'] text-[10px] font-normal leading-4 text-black">{n}</span>
+                ))}
+              </div>
+            </div>
+            <RfpDivider />
+            <div className="flex items-start gap-3 py-1.5">
+              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">완료 기준 / 다음 액션</span>
+              <div className="flex flex-col gap-0.5">
+                {data.successCriteria.map((c, i) => (
+                  <span key={i} className="font-['Pretendard'] text-[10px] font-normal leading-4 text-black">{c}</span>
+                ))}
+                {data.nextActions.map((a, i) => (
+                  <span key={i} className="font-['Pretendard'] text-[10px] font-normal leading-4 text-black">{a}</span>
+                ))}
+              </div>
+            </div>
+
+            {/* Download button */}
+            <div className="mt-6 flex justify-end">
+              <button
+                type="button"
+                onClick={() => void onDownload()}
+                className="rounded-[30px] bg-blue-600 px-5 py-1.5 font-['Pretendard'] text-xs font-semibold text-white transition hover:bg-blue-700"
+              >
+                리포트 다운로드
+              </button>
+            </div>
           </div>
         </div>
       </article>
@@ -3418,6 +4012,189 @@ function PersonaCardModal({
       }}
     >
       <PersonaCardFull data={data} />
+    </div>
+  )
+}
+
+function RenderingImageModal({
+  image,
+  onClose,
+}: {
+  image: string | null
+  onClose: () => void
+}) {
+  useDismissModalOnEscape(Boolean(image), onClose)
+
+  if (!image) return null
+
+  return (
+    <div
+      className="absolute inset-0 z-[80] flex items-center justify-center bg-neutral-900/70 p-4 sm:p-6 lg:p-10"
+      role="dialog"
+      aria-modal="true"
+      aria-label="선택한 3D 디자인 렌더링"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose()
+      }}
+    >
+      <article className="relative aspect-[25/16] w-[min(100%,960px)] overflow-hidden rounded-[20px] bg-zinc-300 shadow-[0px_24px_60px_rgba(0,0,0,0.24)]">
+        <Image
+          src={image}
+          alt="선택한 3D 디자인 렌더링"
+          fill
+          unoptimized
+          className="object-cover"
+        />
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="닫기"
+          className="absolute right-4 top-4 flex h-8 w-8 items-center justify-center rounded-full bg-black/55 font-['Inter'] text-xl text-white transition hover:bg-black/75"
+        >
+          ×
+        </button>
+      </article>
+    </div>
+  )
+}
+
+let modelViewerScriptPromise: Promise<void> | null = null
+
+function loadModelViewerScript() {
+  if (typeof window === 'undefined') return Promise.resolve()
+  if (window.customElements?.get('model-viewer')) return Promise.resolve()
+
+  if (!modelViewerScriptPromise) {
+    modelViewerScriptPromise = new Promise<void>((resolve, reject) => {
+      const script = document.createElement('script')
+      script.type = 'module'
+      script.src =
+        'https://unpkg.com/@google/model-viewer@3.5.0/dist/model-viewer.min.js'
+      script.onload = () => resolve()
+      script.onerror = () => {
+        modelViewerScriptPromise = null
+        reject(new Error('model-viewer load failed'))
+      }
+      document.head.appendChild(script)
+    })
+  }
+
+  return modelViewerScriptPromise
+}
+
+function ModelViewerModal({
+  modelUrl,
+  onClose,
+}: {
+  modelUrl: string | null
+  onClose: () => void
+}) {
+  const [ready, setReady] = useState(false)
+  const [loadError, setLoadError] = useState(false)
+
+  // Meshy's GLB CDN blocks cross-origin fetch — proxy it through same-origin.
+  const proxiedUrl = modelUrl
+    ? `/api/meshy/model?url=${encodeURIComponent(modelUrl)}`
+    : null
+
+  useDismissModalOnEscape(Boolean(modelUrl), onClose)
+
+  useEffect(() => {
+    if (!modelUrl) return
+
+    let active = true
+    loadModelViewerScript()
+      .then(() => {
+        if (active) {
+          setLoadError(false)
+          setReady(true)
+        }
+      })
+      .catch(() => {
+        if (active) setLoadError(true)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [modelUrl])
+
+  if (!modelUrl) return null
+
+  return (
+    <div
+      className="absolute inset-0 z-[80] flex items-center justify-center bg-neutral-900/80 p-4 sm:p-6 lg:p-10"
+      role="dialog"
+      aria-modal="true"
+      aria-label="3D 모델 뷰어"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose()
+      }}
+    >
+      <article className="relative flex aspect-[4/3] w-[min(100%,960px,calc((100svh-5rem)*4/3))] flex-col overflow-hidden rounded-[20px] bg-gradient-to-b from-zinc-800 to-zinc-900 shadow-[0px_24px_60px_rgba(0,0,0,0.4)]">
+        <header className="flex shrink-0 items-center justify-between gap-3 px-6 py-4">
+          <div>
+            <h2 className="font-['Pretendard'] text-lg font-semibold text-white">
+              3D 모델
+            </h2>
+            <p className="font-['Pretendard'] text-xs text-zinc-400">
+              드래그로 회전 · 스크롤로 확대/축소 · 우클릭 드래그로 이동
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <a
+              href={modelUrl}
+              download
+              className="rounded-[30px] bg-white/10 px-4 py-1.5 font-['Pretendard'] text-xs font-semibold text-white transition hover:bg-white/20"
+            >
+              GLB 다운로드
+            </a>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="닫기"
+              className="flex h-8 w-8 items-center justify-center rounded-full bg-black/40 font-['Inter'] text-xl text-white transition hover:bg-black/70"
+            >
+              ×
+            </button>
+          </div>
+        </header>
+
+        <div className="relative min-h-0 flex-1">
+          {loadError ? (
+            <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 text-center">
+              <p className="font-['Pretendard'] text-sm text-zinc-300">
+                3D 뷰어를 불러오지 못했습니다.
+              </p>
+              <a
+                href={modelUrl}
+                download
+                className="rounded-[30px] bg-[#DDF444] px-5 py-2 font-['Pretendard'] text-xs font-semibold text-black"
+              >
+                모델 파일 직접 다운로드
+              </a>
+            </div>
+          ) : !ready ? (
+            <div className="flex h-full w-full items-center justify-center">
+              <span className="font-['Pretendard'] text-sm text-zinc-400">
+                3D 뷰어 로딩 중...
+              </span>
+            </div>
+          ) : (
+            <model-viewer
+              src={proxiedUrl ?? undefined}
+              camera-controls=""
+              auto-rotate=""
+              rotation-per-second="20deg"
+              shadow-intensity="1"
+              exposure="1"
+              touch-action="none"
+              interaction-prompt="none"
+              style={{ width: '100%', height: '100%', backgroundColor: 'transparent' }}
+            />
+          )}
+        </div>
+      </article>
     </div>
   )
 }
@@ -3989,6 +4766,63 @@ function DirectionResearchWidgets({
   )
 }
 
+function StyleKeywordPickerCard({
+  disabled,
+  english,
+  keywords,
+  onToggle,
+  selected,
+}: {
+  disabled: boolean
+  english: string
+  keywords: string[]
+  onToggle: (keyword: string) => void
+  selected: string[]
+}) {
+  const isMaxed = selected.length >= 5
+  const rows: string[][] = []
+  for (let i = 0; i < keywords.length; i += 5) {
+    rows.push(keywords.slice(i, i + 5))
+  }
+  return (
+    <div className="w-full rounded-[20px] bg-slate-200 px-9 py-7 outline outline-[3px] outline-offset-[-3px] outline-zinc-200 flex flex-col gap-6">
+      <div className="flex items-center gap-2">
+        <span className="font-['Inter'] text-xl font-medium leading-7 text-neutral-900">
+          {english}
+        </span>
+        <span className="font-['Inter'] text-[9px] font-semibold leading-7 text-zinc-400">
+          최대 5개까지 선택
+        </span>
+      </div>
+      <div className="flex flex-col gap-3">
+        {rows.map((row, ri) => (
+          <div key={ri} className="flex flex-wrap gap-3">
+            {row.map((keyword) => {
+              const isSelected = selected.includes(keyword)
+              const isDisabled = disabled || (isMaxed && !isSelected)
+              return (
+                <button
+                  key={keyword}
+                  type="button"
+                  disabled={isDisabled}
+                  onClick={() => onToggle(keyword)}
+                  className={`whitespace-nowrap rounded-[30px] px-5 py-[3px] font-['Inter'] text-xs font-normal leading-5 text-white transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                    isSelected
+                      ? 'bg-[#3056FF]'
+                      : 'bg-zinc-400 hover:enabled:bg-zinc-500'
+                  }`}
+                >
+                  {keyword}
+                </button>
+              )
+            })}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function AssistantTypingBubble() {
   return (
     <div className="flex w-full max-w-[800px] flex-col items-start gap-3 lg:w-[69.6%]">
@@ -4203,14 +5037,21 @@ function ChatBubble({
   disabled,
   hasConfirmedPersona,
   hasConfirmedRfp,
+  hasConfirmedCompany,
   hasVisualizedPersona,
   hasVisualizedRfp,
+  hasVisualizedCompany,
   isProblemStatementsConfirmed,
   isLatestEditablePersona,
+  isStyleKeywordsSubmitted,
+  isMoodSelected,
+  latestStyleKeywordPickerMessageId,
+  latestMoodOptionsMessageId,
   latestKeywordMessageIds,
   latestProblemStatementsMessageId,
   latestDirectionMessageIds,
   latestRfpMessageId,
+  latestCompanyMessageId,
   message,
   onChoice,
   onConfirmKeyword,
@@ -4224,6 +5065,11 @@ function ChatBubble({
   onVisualizeProblemStatements,
   onVisualizePersona,
   onVisualizeRfp,
+  onConfirmCompany,
+  onVisualizeCompany,
+  onModelReady,
+  onOpenModelViewer,
+  onSelectDesignRendering,
   projectId,
   userAvatarUrl,
   visualizedKeywordCards,
@@ -4237,14 +5083,21 @@ function ChatBubble({
   disabled: boolean
   hasConfirmedPersona: boolean
   hasConfirmedRfp: boolean
+  hasConfirmedCompany: boolean
   hasVisualizedPersona: boolean
   hasVisualizedRfp: boolean
+  hasVisualizedCompany: boolean
   isProblemStatementsConfirmed: boolean
   isLatestEditablePersona: boolean
+  isStyleKeywordsSubmitted: boolean
+  isMoodSelected: boolean
+  latestStyleKeywordPickerMessageId: string | null
+  latestMoodOptionsMessageId: string | null
   latestKeywordMessageIds: Partial<Record<KeywordArtifactKind, string>>
   latestProblemStatementsMessageId: string | null
   latestDirectionMessageIds: Partial<Record<DirectionArtifactKind, string>>
   latestRfpMessageId: string | null
+  latestCompanyMessageId: string | null
   message: ChatMessageRecord
   onChoice: (value: string) => void
   onConfirmKeyword: (
@@ -4271,6 +5124,11 @@ function ChatBubble({
     personaCard?: PersonaCardData | null
   ) => void
   onVisualizeRfp: (messageId: string, rfp: RfpDocument) => void
+  onConfirmCompany: (messageId: string) => void
+  onVisualizeCompany: () => void
+  onModelReady: (modelUrl: string) => void
+  onOpenModelViewer: () => void
+  onSelectDesignRendering: (image: string) => void
   projectId: string
   userAvatarUrl?: string | null
   visualizedKeywordCards: Partial<
@@ -4284,14 +5142,70 @@ function ChatBubble({
   const [hintModalOpen, setHintModalOpen] = useState(false)
   const [selectedHintIndex, setSelectedHintIndex] = useState<number | null>(null)
   const [selectedDesignIndex, setSelectedDesignIndex] = useState<number | null>(null)
+  const [isSelectedDesignConfirmed, setIsSelectedDesignConfirmed] =
+    useState(false)
   const [confirmedThumbnailUrl, setConfirmedThumbnailUrl] = useState<string | null>(null)
   const [meshyTaskId, setMeshyTaskId] = useState<string | null>(null)
   const [meshyStatus, setMeshyStatus] = useState<
     'idle' | 'uploading' | 'PENDING' | 'IN_PROGRESS' | 'SUCCEEDED' | 'FAILED'
   >('idle')
   const [meshyThumbnail, setMeshyThumbnail] = useState<string | null>(null)
+  const [meshyModelUrl, setMeshyModelUrl] = useState<string | null>(null)
   const [meshyError, setMeshyError] = useState<string | null>(null)
   const [moodboardImages, setMoodboardImages] = useState<MoodboardGridImage[] | null>(null)
+  const [selectedStyleKeywords, setSelectedStyleKeywords] = useState<
+    Partial<Record<keyof StyleKeywordPickerData, string[]>>
+  >({})
+
+  async function startSelectedDesignVisualization() {
+    if (
+      selectedDesignIndex === null ||
+      !message.generatedImageBlock?.images[selectedDesignIndex]
+    ) {
+      return
+    }
+
+    const selectedImage = message.generatedImageBlock.images[selectedDesignIndex]
+    setMeshyStatus('uploading')
+    setMeshyError(null)
+
+    try {
+      const mimeType = selectedImage.startsWith('data:image/png')
+        ? 'image/png'
+        : 'image/jpeg'
+      const res = await fetch('/api/meshy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(
+          confirmedThumbnailUrl
+            ? { thumbnailUrl: confirmedThumbnailUrl, projectId }
+            : { imageBase64: selectedImage, mimeType, projectId }
+        ),
+      })
+      const payload = (await res.json().catch(() => null)) as {
+        error?: string
+        stage?: string
+        taskId?: string
+      } | null
+
+      if (!res.ok || !payload?.taskId) {
+        const stageLabel = payload?.stage ? ` (${payload.stage})` : ''
+        throw new Error(
+          `${payload?.error || '3D 작업을 시작하지 못했습니다.'}${stageLabel}`
+        )
+      }
+
+      setMeshyTaskId(payload.taskId)
+      setMeshyStatus('PENDING')
+    } catch (error) {
+      setMeshyError(
+        error instanceof Error
+          ? error.message
+          : '3D 작업을 시작하지 못했습니다.'
+      )
+      setMeshyStatus('FAILED')
+    }
+  }
   const isUser = message.role === 'user'
   const rfpBlock = extractRfpJsonBlock(message.content)
   const projectDirection = !isUser
@@ -4301,6 +5215,14 @@ function ChatBubble({
     ? splitProjectDirectionContent(rfpBlock.cleanedText)
     : null
   const directionWidgets = !isUser && hasDirectionWidgets(rfpBlock.cleanedText)
+  const styleKeywordPickerData =
+    !isUser && message.id === latestStyleKeywordPickerMessageId
+      ? parseStyleKeywordPickerData(message.content)
+      : null
+  const moodOptionsData =
+    !isUser && message.id === latestMoodOptionsMessageId
+      ? parseMoodOptions(message.content)
+      : null
   const problemStatements = !isUser
     ? extractProblemStatementsData(rfpBlock.cleanedText)
     : null
@@ -4313,10 +5235,16 @@ function ChatBubble({
   const shouldRenderGeneratedImages =
     Boolean(message.generatedImageBlock?.images.length) &&
     message.generatedImageBlock?.purpose !== 'persona' &&
+    !(
+      moodOptionsData &&
+      message.generatedImageBlock?.purpose === 'style_reference'
+    ) &&
     (message.generatedImageBlock?.purpose !== 'moodboard_candidate' ||
       canShowStyleReferences)
-  const cleanedContent = stripInternalBlocksForDisplay(
-    projectDirectionSplit?.after ?? rfpBlock.cleanedText
+  const cleanedContent = stripMoodOptionsPayload(
+    stripInternalBlocksForDisplay(
+      projectDirectionSplit?.after ?? rfpBlock.cleanedText
+    )
   )
   const beforeProjectDirection = projectDirectionSplit
     ? stripInternalBlocksForDisplay(projectDirectionSplit.before)
@@ -4352,8 +5280,15 @@ function ChatBubble({
           return
         }
         setMeshyStatus(task.status)
-        if (task.status === 'SUCCEEDED' && task.thumbnail_url) {
-          setMeshyThumbnail(task.thumbnail_url)
+        if (task.status === 'SUCCEEDED') {
+          if (task.thumbnail_url) {
+            setMeshyThumbnail(task.thumbnail_url)
+          }
+          const glbUrl = task.model_urls?.glb
+          if (glbUrl) {
+            setMeshyModelUrl(glbUrl)
+            onModelReady(glbUrl)
+          }
         }
       } catch {
         // ignore transient errors; keep polling
@@ -4361,7 +5296,7 @@ function ChatBubble({
     }, 5000)
 
     return () => clearInterval(interval)
-  }, [meshyTaskId, meshyStatus])
+  }, [meshyTaskId, meshyStatus, onModelReady])
 
   const isPersonaVisualizationOnly =
     Boolean(message.personaCardBlock?.imageUrl) &&
@@ -4376,6 +5311,8 @@ function ChatBubble({
     !beforeProjectDirection &&
     !projectDirection &&
     !directionWidgets &&
+    !styleKeywordPickerData &&
+    !moodOptionsData &&
     keywordCards.length === 0 &&
     !message.personaCardBlock &&
     !shouldRenderGeneratedImages &&
@@ -4456,6 +5393,246 @@ function ChatBubble({
                     }}
                   />
                 )
+              ) : message.generatedImageBlock.purpose === 'design' ? (
+                <div className="flex w-full max-w-[600px] flex-col gap-3 pt-1">
+                  <p className="font-['Pretendard'] text-xs font-medium text-neutral-400">
+                    생성된 이미지 {message.generatedImageBlock.images.length}장
+                  </p>
+                  <div className="grid aspect-[25/16] w-full grid-cols-2 grid-rows-2 overflow-hidden rounded-[20px]">
+                    {message.generatedImageBlock.images.map((image, index) => (
+                      <button
+                        key={`${message.id}-design-img-${index}`}
+                        type="button"
+                        disabled={disabled}
+                        onClick={() => {
+                          setSelectedDesignIndex(index)
+                          setIsSelectedDesignConfirmed(false)
+                          setConfirmedThumbnailUrl(null)
+                          setMeshyTaskId(null)
+                          setMeshyStatus('idle')
+                          setMeshyThumbnail(null)
+                          setMeshyError(null)
+                          onSelectDesignRendering(image)
+                        }}
+                        aria-label={`${index + 1}번 디자인 시안 선택`}
+                        className={`relative min-h-0 min-w-0 overflow-hidden transition disabled:cursor-not-allowed ${
+                          selectedDesignIndex === index
+                            ? 'z-10 ring-4 ring-inset ring-[#3056FF]'
+                            : 'hover:brightness-95'
+                        }`}
+                      >
+                        <Image
+                          src={image}
+                          alt={`디자인 시안 ${index + 1}`}
+                          fill
+                          unoptimized
+                          className="object-cover"
+                        />
+                        <span
+                          className={`absolute left-3 top-3 flex h-6 min-w-6 items-center justify-center rounded-full px-1.5 font-['Inter'] text-[11px] font-bold shadow-sm ${
+                            selectedDesignIndex === index
+                              ? 'bg-blue-600 text-white'
+                              : 'bg-white/90 text-neutral-800'
+                          }`}
+                        >
+                          {index + 1}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                  {selectedDesignIndex !== null ? (
+                    <div className="mt-4 flex w-full flex-col gap-3">
+                      <p className="font-['Pretendard'] text-sm font-medium leading-7 text-stone-300">
+                        생성된 이미지 1장
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onSelectDesignRendering(
+                            message.generatedImageBlock?.images[
+                              selectedDesignIndex
+                            ] ?? ''
+                          )
+                        }
+                        className="relative aspect-[25/16] w-full overflow-hidden rounded-[20px] bg-zinc-300"
+                        aria-label="선택한 디자인 시안 크게 보기"
+                      >
+                        <Image
+                          src={
+                            message.generatedImageBlock.images[
+                              selectedDesignIndex
+                            ]
+                          }
+                          alt={`선택한 ${selectedDesignIndex + 1}번 디자인 시안`}
+                          fill
+                          unoptimized
+                          className="object-cover"
+                        />
+                      </button>
+
+                      <div className="flex justify-end gap-3 pt-1">
+                        <button
+                          type="button"
+                          disabled={disabled || isSelectedDesignConfirmed}
+                          onClick={() =>
+                            onChoice(
+                              `${selectedDesignIndex + 1}번 디자인 시안을 수정해서 다시 보여주세요`
+                            )
+                          }
+                          className="min-w-24 rounded-[30px] bg-blue-600 px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-white transition hover:bg-blue-700 disabled:bg-neutral-500 disabled:opacity-60"
+                        >
+                          수정하기
+                        </button>
+                        <button
+                          type="button"
+                          disabled={disabled || isSelectedDesignConfirmed}
+                          onClick={() => {
+                            const image =
+                              message.generatedImageBlock?.images[
+                                selectedDesignIndex
+                              ]
+                            if (!image) return
+
+                            setIsSelectedDesignConfirmed(true)
+                            fetch('/api/projects/thumbnail', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ imageBase64: image, projectId }),
+                            })
+                              .then((r) => r.json())
+                              .then((payload: { thumbnailUrl?: string }) => {
+                                if (payload.thumbnailUrl) {
+                                  setConfirmedThumbnailUrl(payload.thumbnailUrl)
+                                }
+                              })
+                              .catch(() => null)
+                          }}
+                          className={`min-w-24 rounded-[30px] px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 transition ${
+                            isSelectedDesignConfirmed
+                              ? 'bg-neutral-500 text-white'
+                              : 'bg-[#DDF444] text-black hover:brightness-95 disabled:opacity-40'
+                          }`}
+                        >
+                          확정하기
+                        </button>
+                      </div>
+
+                      {isSelectedDesignConfirmed ? (
+                        <div className="flex justify-end pt-1">
+                          <button
+                            type="button"
+                            disabled={
+                              disabled ||
+                              meshyStatus === 'uploading' ||
+                              meshyStatus === 'PENDING' ||
+                              meshyStatus === 'IN_PROGRESS' ||
+                              meshyStatus === 'SUCCEEDED'
+                            }
+                            onClick={() => void startSelectedDesignVisualization()}
+                            className="inline-flex items-center gap-1 rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
+                          >
+                            {meshyStatus === 'uploading'
+                              ? '업로드 중'
+                              : meshyStatus === 'PENDING' ||
+                                  meshyStatus === 'IN_PROGRESS'
+                                ? '3D 생성 중'
+                                : meshyStatus === 'SUCCEEDED'
+                                  ? '시각화 완료'
+                                  : '시각화 하기'}
+                            <Image
+                              src="/assets/icons/chat/visualize.svg"
+                              alt=""
+                              width={18}
+                              height={18}
+                              className="ml-0.5 h-[18px] w-[18px]"
+                            />
+                            <span>2</span>
+                          </button>
+                        </div>
+                      ) : null}
+
+                      {(meshyStatus === 'PENDING' ||
+                        meshyStatus === 'IN_PROGRESS') && (
+                        <span className="text-right font-['Pretendard'] text-xs text-zinc-500">
+                          Meshy AI 처리 중...
+                        </span>
+                      )}
+                      {meshyStatus === 'FAILED' && meshyError ? (
+                        <div className="flex flex-wrap items-center justify-end gap-2">
+                          <span className="max-w-full font-['Pretendard'] text-xs text-red-600">
+                            {meshyError}
+                          </span>
+                          <button
+                            type="button"
+                            disabled={disabled}
+                            onClick={() => void startSelectedDesignVisualization()}
+                            className="rounded-[30px] bg-[#DDF444] px-4 py-1 font-['Pretendard'] text-xs font-semibold text-black disabled:opacity-50"
+                          >
+                            다시 시도
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <div className="flex justify-end pt-1">
+                      <button
+                        type="button"
+                        disabled={disabled}
+                        onClick={() =>
+                          onChoice('현재 디자인 시안을 수정해서 다시 보여주세요')
+                        }
+                        className="rounded-[30px] bg-blue-600 px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-white disabled:opacity-50"
+                      >
+                        다시 생성하기
+                      </button>
+                    </div>
+                  )}
+                  {meshyStatus === 'SUCCEEDED' && (meshyThumbnail || meshyModelUrl) && (
+                    <div className="flex flex-col gap-2">
+                      <span className="font-['Pretendard'] text-xs font-semibold text-zinc-600">
+                        3D 모델 미리보기
+                      </span>
+                      {meshyModelUrl ? (
+                        <button
+                          type="button"
+                          onClick={onOpenModelViewer}
+                          className="group relative h-40 w-40 overflow-hidden rounded-lg bg-zinc-100"
+                          aria-label="3D 모델 뷰어 열기"
+                        >
+                          {meshyThumbnail ? (
+                            <Image
+                              src={meshyThumbnail}
+                              alt="3D model thumbnail"
+                              width={160}
+                              height={160}
+                              unoptimized
+                              className="h-full w-full object-cover transition group-hover:brightness-75"
+                            />
+                          ) : (
+                            <div className="flex h-full w-full items-center justify-center bg-zinc-200" />
+                          )}
+                          <span className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-black/30 font-['Pretendard'] text-xs font-semibold text-white opacity-0 transition group-hover:opacity-100">
+                            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M12 2 2 7l10 5 10-5-10-5Z" />
+                              <path d="m2 17 10 5 10-5" />
+                              <path d="m2 12 10 5 10-5" />
+                            </svg>
+                            돌려보기
+                          </span>
+                        </button>
+                      ) : meshyThumbnail ? (
+                        <Image
+                          src={meshyThumbnail}
+                          alt="3D model thumbnail"
+                          width={160}
+                          height={160}
+                          unoptimized
+                          className="rounded-lg object-cover"
+                        />
+                      ) : null}
+                    </div>
+                  )}
+                </div>
               ) : (
                 <>
                   <div className="grid grid-cols-2 gap-3">
@@ -4471,171 +5648,25 @@ function ChatBubble({
                       />
                     ))}
                   </div>
+                  {message.generatedImageBlock.purpose === 'style_reference' ? (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {message.generatedImageBlock.images.map((_, index) => (
+                        <button
+                          key={`${message.id}-style-choice-${index}`}
+                          type="button"
+                          disabled={disabled}
+                          onClick={() =>
+                            onChoice(`${index + 1}번 스타일 레퍼런스를 선택할게요`)
+                          }
+                          className="rounded-full border border-zinc-200 bg-white px-4 py-1.5 font-['Pretendard'] text-xs font-semibold text-neutral-700 shadow-sm transition hover:border-blue-300 hover:bg-blue-50 disabled:opacity-50"
+                        >
+                          {index + 1}번 선택
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
                 </>
               )}
-              {message.generatedImageBlock.purpose === 'style_reference' ? (
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {message.generatedImageBlock.images.map((_, index) => (
-                    <button
-                      key={`${message.id}-style-choice-${index}`}
-                      type="button"
-                      disabled={disabled}
-                      onClick={() =>
-                        onChoice(`${index + 1}번 스타일 레퍼런스를 선택할게요`)
-                      }
-                      className="rounded-full border border-zinc-200 bg-white px-4 py-1.5 font-['Pretendard'] text-xs font-semibold text-neutral-700 shadow-sm transition hover:border-blue-300 hover:bg-blue-50 disabled:opacity-50"
-                    >
-                      {index + 1}번 선택
-                    </button>
-                  ))}
-                </div>
-              ) : message.generatedImageBlock.purpose === 'design' ? (
-                <div className="mt-3 flex flex-col gap-3">
-                  <div className="flex flex-wrap gap-2">
-                    {message.generatedImageBlock.images.map((_, index) => (
-                      <button
-                        key={`${message.id}-design-choice-${index}`}
-                        type="button"
-                        disabled={disabled}
-                        onClick={() => {
-                          setSelectedDesignIndex(index)
-                          onChoice(
-                            `${index + 1}번 디자인 시안을 최종안으로 확정하고 진행할게요`
-                          )
-                          const image = message.generatedImageBlock?.images[index]
-                          if (image) {
-                            fetch('/api/projects/thumbnail', {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ imageBase64: image, projectId }),
-                            })
-                              .then((r) => r.json())
-                              .then((p: { thumbnailUrl?: string }) => {
-                                if (p.thumbnailUrl) setConfirmedThumbnailUrl(p.thumbnailUrl)
-                              })
-                              .catch(() => null)
-                          }
-                        }}
-                        className={`rounded-full px-4 py-1.5 font-['Pretendard'] text-xs font-semibold transition disabled:opacity-50 ${
-                          selectedDesignIndex === index
-                            ? 'bg-blue-700 text-white ring-2 ring-blue-400'
-                            : 'bg-blue-600 text-white hover:bg-blue-700'
-                        }`}
-                      >
-                        {index + 1}번 시안 확정
-                      </button>
-                    ))}
-                    <button
-                      type="button"
-                      disabled={disabled}
-                      onClick={() =>
-                        onChoice('현재 디자인 시안을 수정해서 다시 보여주세요')
-                      }
-                      className="rounded-full border border-zinc-200 bg-white px-4 py-1.5 font-['Pretendard'] text-xs font-semibold text-neutral-700 shadow-sm transition hover:border-blue-300 hover:bg-blue-50 disabled:opacity-50"
-                    >
-                      수정안 다시 생성
-                    </button>
-                  </div>
-
-                  {/* Meshy AI 3D generation — 시안 확정 후 활성화 */}
-                  {selectedDesignIndex !== null && (
-                    <div className="flex flex-wrap items-center gap-2">
-                      <button
-                        type="button"
-                        disabled={
-                          disabled ||
-                          meshyStatus === 'uploading' ||
-                          meshyStatus === 'PENDING' ||
-                          meshyStatus === 'IN_PROGRESS' ||
-                          meshyStatus === 'SUCCEEDED'
-                        }
-                        onClick={async () => {
-                          const selectedImage =
-                            message.generatedImageBlock?.images[selectedDesignIndex]
-                          if (!selectedImage) return
-                          setMeshyStatus('uploading')
-                          setMeshyError(null)
-                          try {
-                            const mimeType = selectedImage.startsWith('data:image/png')
-                              ? 'image/png'
-                              : 'image/jpeg'
-                            const res = await fetch('/api/meshy', {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify(
-                              confirmedThumbnailUrl
-                                ? { thumbnailUrl: confirmedThumbnailUrl, projectId }
-                                : { imageBase64: selectedImage, mimeType, projectId }
-                            ),
-                            })
-                            const payload = (await res.json().catch(() => null)) as {
-                              error?: string
-                              stage?: string
-                              taskId?: string
-                            } | null
-                            if (!res.ok || !payload?.taskId) {
-                              const stageLabel = payload?.stage
-                                ? ` (${payload.stage})`
-                                : ''
-                              throw new Error(
-                                `${payload?.error || '3D 작업을 시작하지 못했습니다.'}${stageLabel}`
-                              )
-                            }
-                            const { taskId } = payload
-                            setMeshyTaskId(taskId)
-                            setMeshyStatus('PENDING')
-                          } catch (error) {
-                            setMeshyError(
-                              error instanceof Error
-                                ? error.message
-                                : '3D 작업을 시작하지 못했습니다.'
-                            )
-                            setMeshyStatus('FAILED')
-                          }
-                        }}
-                        className="rounded-full border border-zinc-300 bg-zinc-900 px-4 py-1.5 font-['Pretendard'] text-xs font-semibold text-white transition hover:bg-zinc-700 disabled:opacity-50"
-                      >
-                        {meshyStatus === 'uploading'
-                          ? '업로드 중...'
-                          : meshyStatus === 'PENDING' || meshyStatus === 'IN_PROGRESS'
-                            ? '3D 생성 중...'
-                            : meshyStatus === 'SUCCEEDED'
-                              ? '3D 모델 완료 ✓'
-                              : meshyStatus === 'FAILED'
-                                ? '3D 생성 실패 — 재시도'
-                                : `${selectedDesignIndex + 1}번 시안 3D 모델 생성하기`}
-                      </button>
-
-                      {(meshyStatus === 'PENDING' || meshyStatus === 'IN_PROGRESS') && (
-                        <span className="font-['Pretendard'] text-xs text-zinc-500">
-                          Meshy AI 처리 중...
-                        </span>
-                      )}
-                      {meshyStatus === 'FAILED' && meshyError ? (
-                        <span className="max-w-full font-['Pretendard'] text-xs text-red-600">
-                          {meshyError}
-                        </span>
-                      ) : null}
-                    </div>
-                  )}
-
-                  {meshyStatus === 'SUCCEEDED' && meshyThumbnail && (
-                    <div className="flex flex-col gap-1">
-                      <span className="font-['Pretendard'] text-xs font-semibold text-zinc-600">
-                        3D 모델 미리보기
-                      </span>
-                      <Image
-                        src={meshyThumbnail}
-                        alt="3D model thumbnail"
-                        width={160}
-                        height={160}
-                        unoptimized
-                        className="rounded-lg object-cover"
-                      />
-                    </div>
-                  )}
-                </div>
-              ) : null}
             </div>
           ) : null}
         </div>
@@ -4654,6 +5685,140 @@ function ChatBubble({
             onChoice(labelMap[kind])
           }}
         />
+      ) : null}
+
+      {styleKeywordPickerData ? (
+        <div className="flex w-full flex-col gap-4">
+          {STYLE_KEYWORD_CATEGORIES.map(({ key, english }) => (
+            <StyleKeywordPickerCard
+              key={key}
+              disabled={disabled || isStyleKeywordsSubmitted}
+              english={english}
+              keywords={styleKeywordPickerData[key]}
+              selected={selectedStyleKeywords[key] ?? []}
+              onToggle={(keyword) => {
+                if (isStyleKeywordsSubmitted) return
+                setSelectedStyleKeywords((prev) => {
+                  const current = prev[key] ?? []
+                  return {
+                    ...prev,
+                    [key]: current.includes(keyword)
+                      ? current.filter((k) => k !== keyword)
+                      : current.length < 5
+                        ? [...current, keyword]
+                        : current,
+                  }
+                })
+              }}
+            />
+          ))}
+          {!isStyleKeywordsSubmitted &&
+          STYLE_KEYWORD_CATEGORIES.every(
+            ({ key }) => (selectedStyleKeywords[key]?.length ?? 0) > 0
+          ) ? (
+            <div className="flex w-full justify-end">
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={() => {
+                  const lines = STYLE_KEYWORD_CATEGORIES.map(
+                    ({ key, korean }) =>
+                      `${korean}: ${(selectedStyleKeywords[key] ?? []).join(', ')}`
+                  )
+                  onChoice(`스타일 키워드를 선택했습니다.\n${lines.join('\n')}`)
+                }}
+                className="rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
+              >
+                선택 완료
+              </button>
+            </div>
+          ) : null}
+          {isStyleKeywordsSubmitted ? (
+            <div className="flex w-full justify-end">
+              <span className="rounded-[30px] bg-zinc-200 px-6 py-[5px] font-['Pretendard'] text-sm font-semibold text-zinc-500">
+                키워드 선택 완료 ✓
+              </span>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {moodOptionsData && moodOptionsData.length > 0 ? (
+        <div className="flex w-full flex-col gap-3">
+          {moodOptionsData.map((mood, i) => {
+            const label = String.fromCharCode(65 + i) // A, B, C
+            const title = mood.title
+              .replace(/^[A-C]\.\s*/, '')
+              .split(/\s*\(/)[0]
+              .trim()
+            const englishTitle = mood.title.match(/\(([^)]+)\)/)?.[1] ?? ''
+            const image =
+              message.generatedImageBlock?.purpose === 'style_reference'
+                ? message.generatedImageBlock.images[i]
+                : null
+            return (
+              <button
+                key={`${mood.title}-${i}`}
+                type="button"
+                disabled={disabled || isMoodSelected}
+                onClick={() =>
+                  onChoice(
+                    `스타일 분위기를 선택했어요: ${mood.title} - ${mood.description}`
+                  )
+                }
+                className={`group w-full overflow-hidden rounded-[20px] border text-left transition disabled:cursor-not-allowed ${
+                  isMoodSelected
+                    ? 'border-zinc-200 bg-zinc-50 opacity-50'
+                    : 'border-zinc-200 bg-white shadow-sm hover:border-[#3056FF] hover:bg-blue-50'
+                }`}
+              >
+                {image ? (
+                  <div className="relative aspect-[16/7] w-full overflow-hidden bg-zinc-100">
+                    <Image
+                      src={image}
+                      alt={`${title} 스타일 레퍼런스`}
+                      fill
+                      unoptimized
+                      className="object-cover transition duration-300 group-hover:scale-[1.02]"
+                    />
+                    <span className="absolute left-4 top-4 flex h-7 w-7 items-center justify-center rounded-full bg-zinc-900 font-['Inter'] text-xs font-bold text-white">
+                      {label}
+                    </span>
+                  </div>
+                ) : null}
+                <div className="flex items-start gap-3 px-5 py-4">
+                  {!image ? (
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-zinc-900 font-['Inter'] text-xs font-bold text-white">
+                      {label}
+                    </span>
+                  ) : null}
+                  <div className="min-w-0 flex flex-col gap-1">
+                    <span className="font-['Pretendard'] text-sm font-semibold text-neutral-900">
+                      {title}
+                    </span>
+                    {englishTitle ? (
+                      <span className="font-['Inter'] text-[11px] font-medium text-blue-600">
+                        {englishTitle}
+                      </span>
+                    ) : null}
+                    {mood.description ? (
+                      <span className="font-['Pretendard'] text-xs leading-5 text-zinc-500">
+                        {mood.description}
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+              </button>
+            )
+          })}
+          {isMoodSelected ? (
+            <div className="flex w-full justify-end">
+              <span className="rounded-[30px] bg-zinc-200 px-6 py-[5px] font-['Pretendard'] text-sm font-semibold text-zinc-500">
+                스타일 분위기 선택 완료 ✓
+              </span>
+            </div>
+          ) : null}
+        </div>
       ) : null}
 
       {choices.length > 0 && !directionArtifactKind ? (
@@ -4959,15 +6124,15 @@ function ChatBubble({
               type="button"
               disabled={disabled}
               onClick={() => onChoice('프로젝트 기획안 수정하기')}
-              className="min-w-24 rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
+              className="min-w-24 rounded-[30px] bg-blue-600 px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-white transition hover:bg-blue-700 disabled:opacity-50"
             >
-              수정하기
+              다시 생성하기
             </button>
             <button
               type="button"
               disabled={disabled || hasConfirmedRfp}
               onClick={() => onChoice('프로젝트 기획안 확정하기')}
-              className="min-w-24 rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
+              className="min-w-24 rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-black transition hover:brightness-95 disabled:opacity-50"
             >
               확정하기
             </button>
@@ -5000,6 +6165,59 @@ function ChatBubble({
               className="rounded-[30px] bg-blue-600 px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-white disabled:opacity-50"
             >
               리포트 다운로드
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
+      {latestCompanyMessageId === message.id ? (
+        <div className="flex w-full flex-col items-end gap-3">
+          <div className="flex items-center justify-end gap-3">
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => onChoice('협력업체 다시 추천해주세요')}
+              className="min-w-24 rounded-[30px] bg-blue-600 px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-white transition hover:bg-blue-700 disabled:opacity-50"
+            >
+              다시 생성하기
+            </button>
+            <button
+              type="button"
+              disabled={disabled || hasConfirmedCompany}
+              onClick={() => onConfirmCompany(message.id)}
+              className="min-w-24 rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-black transition hover:brightness-95 disabled:opacity-50"
+            >
+              확정하기
+            </button>
+          </div>
+
+          {hasConfirmedCompany && !hasVisualizedCompany ? (
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={onVisualizeCompany}
+              className="inline-flex items-center gap-1 rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
+            >
+              시각화 하기
+              <Image
+                src="/assets/icons/chat/visualize.svg"
+                alt=""
+                width={18}
+                height={18}
+                className="ml-0.5 h-[18px] w-[18px]"
+              />
+              <span>3</span>
+            </button>
+          ) : null}
+
+          {hasVisualizedCompany ? (
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={onVisualizeCompany}
+              className="rounded-[30px] bg-blue-600 px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-white disabled:opacity-50"
+            >
+              협력업체 보기
             </button>
           ) : null}
         </div>

@@ -208,9 +208,172 @@ function isDirectionResearchRequest(text: string) {
 }
 
 function isExplicitStep4ProceedRequest(text: string) {
-  return /(?:다음\s*(?:단계|STEP)(?:로)?\s*(?:진행|넘어가|이동|시작)|STEP\s*4(?:로)?\s*(?:진행|넘어가|이동|시작)|스타일\s*(?:컨셉|단계)(?:로)?\s*(?:진행|넘어가|이동|시작))/i.test(
-    text
-  )
+  // Triggers Unsplash moodboard_candidate search — only when user explicitly selects a style mood
+  return /스타일\s*분위기를\s*선택했어요/i.test(text)
+}
+
+type StyleMoodWidget = {
+  description: string
+  title: string
+}
+
+function parseStyleMoodWidgets(text: string): StyleMoodWidget[] {
+  const widgetsMatch = text.match(/\{\s*"widgets"\s*:\s*(\[[\s\S]*?\])\s*\}/i)
+
+  if (widgetsMatch) {
+    try {
+      const parsed = JSON.parse(widgetsMatch[1]) as unknown
+
+      if (Array.isArray(parsed)) {
+        return parsed
+          .filter(
+            (item): item is Record<string, unknown> =>
+              Boolean(item) && typeof item === 'object'
+          )
+          .map((item) => ({
+            description:
+              typeof item.description === 'string' ? item.description.trim() : '',
+            title: typeof item.title === 'string' ? item.title.trim() : '',
+          }))
+          .filter((item) => item.title)
+          .slice(0, 3)
+      }
+    } catch {
+      return []
+    }
+  }
+
+  const moodsMatch = text.match(/\{\s*"moods"\s*:\s*(\[[\s\S]*?\])\s*\}/i)
+
+  if (!moodsMatch) return []
+
+  try {
+    const parsed = JSON.parse(moodsMatch[1]) as unknown
+
+    return Array.isArray(parsed)
+      ? parsed
+          .filter((item): item is string => typeof item === 'string')
+          .map((item) => ({ description: '', title: item.trim() }))
+          .filter((item) => item.title)
+          .slice(0, 3)
+      : []
+  } catch {
+    return []
+  }
+}
+
+function getStyleWidgetSearchQuery(widget: StyleMoodWidget) {
+  const englishTitle = widget.title.match(/\(([^)]+)\)/)?.[1]
+  const title = (englishTitle ?? widget.title)
+    .replace(/[^a-zA-Z0-9\s-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  return `${title || 'modern minimal'} product design`.slice(0, 100)
+}
+
+const STYLE_KEYWORD_FALLBACKS = {
+  emotional: [
+    '차분한', '편안한', '안정적인', '따뜻한', '고요한', '산뜻한', '경쾌한', '정돈된',
+    '활기찬', '몰입감 있는', '섬세한', '부드러운', '세련된', '신뢰감 있는', '친근한',
+    '감각적인', '위로가 되는', '자기주도적인', '특별한', '영감을 주는',
+  ],
+  color: [
+    '맑은', '따뜻한', '차가운', '중성적인', '선명한', '은은한', '깊은', '투명한',
+    '자연스러운', '모던한', '빈티지한', '팝한', '어두운', '밝은', '흙빛의',
+    '금속적인', '파스텔의', '무채색의', '원색적인', '그라데이션의',
+  ],
+  structure: [
+    '단순한', '직선적인', '곡선적인', '기하학적인', '비대칭적인', '대칭적인', '미니멀한',
+    '구조적인', '유기적인', '각진', '둥근', '날카로운', '두꺼운', '얇은',
+    '레이어드된', '모듈형', '컴팩트한', '개방적인', '폐쇄적인', '견고한',
+  ],
+  texture: [
+    '부드러운', '거친', '매끄러운', '따뜻한', '차가운', '무광의', '유광의',
+    '천연의', '인공적인', '금속성의', '나무질의', '고무질의', '섬유질의',
+    '폼 같은', '크리스탈의', '무게감 있는', '가벼운', '탄성 있는', '딱딱한', '유연한',
+  ],
+} as const
+
+async function generateStyleKeywords(
+  apiKey: string,
+  conversation: string
+): Promise<{
+  emotional: string[]
+  color: string[]
+  structure: string[]
+  texture: string[]
+}> {
+  const fallback = {
+    emotional: [...STYLE_KEYWORD_FALLBACKS.emotional],
+    color: [...STYLE_KEYWORD_FALLBACKS.color],
+    structure: [...STYLE_KEYWORD_FALLBACKS.structure],
+    texture: [...STYLE_KEYWORD_FALLBACKS.texture],
+  }
+
+  if (!apiKey) return fallback
+
+  const prompt = [
+    '당신은 제품 디자인 스타일 컨설턴트입니다.',
+    '아래 프로젝트 대화를 분석해 각 스타일 카테고리별 한국어 형용사 키워드를 정확히 20개씩 생성하세요.',
+    '',
+    '반드시 아래 JSON 형식만 출력하세요. 설명·코드블록 없이 { } 로 시작하는 순수 JSON만.',
+    '{"emotional":["키워드1","키워드2",...총20개],"color":[...총20개],"structure":[...총20개],"texture":[...총20개]}',
+    '',
+    '카테고리 설명:',
+    '- emotional: 제품 사용 시 느끼는 감정/분위기 (예: 차분한, 활기찬)',
+    '- color: 색감/색상 분위기 (예: 맑은, 따뜻한)',
+    '- structure: 형태/구조 인상 (예: 단순한, 곡선적인)',
+    '- texture: 표면/촉감 (예: 부드러운, 무광의)',
+    '',
+    '조건: 각 카테고리 정확히 20개, 2~7글자 한국어 형용사, 다양한 스펙트럼 포함.',
+    '',
+    '프로젝트 대화 (참고용):',
+    conversation.slice(0, 2500),
+  ].join('\n')
+
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }], role: 'user' }],
+          generationConfig: { temperature: 0.7, maxOutputTokens: 1024 },
+        }),
+      }
+    )
+    if (!res.ok) return fallback
+
+    const data = (await res.json()) as {
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>
+    }
+    const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
+
+    // Extract JSON object from anywhere in the response
+    const jsonMatch = raw.match(/\{[\s\S]*\}/)
+    if (!jsonMatch) return fallback
+
+    const parsed = JSON.parse(jsonMatch[0]) as Partial<typeof fallback>
+    const emotional = (parsed.emotional ?? []).slice(0, 20)
+    const color = (parsed.color ?? []).slice(0, 20)
+    const structure = (parsed.structure ?? []).slice(0, 20)
+    const texture = (parsed.texture ?? []).slice(0, 20)
+
+    // Only use Gemini result if all categories have at least 10 keywords
+    if (
+      emotional.length >= 10 &&
+      color.length >= 10 &&
+      structure.length >= 10 &&
+      texture.length >= 10
+    ) {
+      return { emotional, color, structure, texture }
+    }
+    return fallback
+  } catch {
+    return fallback
+  }
 }
 
 function appendDirectionCompletionPrompt(text: string) {
@@ -806,11 +969,13 @@ export async function POST(request: Request) {
         referenceImages,
       })
       const conversation = buildConversation(modelMessages)
-      const hasExistingStyleImages = existingMessages.some(
+      const hasExistingMoodboardCandidates = existingMessages.some(
         (existingMessage) =>
-          (existingMessage.generatedImageBlock?.purpose === 'style_reference' ||
-            existingMessage.generatedImageBlock?.purpose === 'moodboard_candidate') &&
+          existingMessage.generatedImageBlock?.purpose === 'moodboard_candidate' &&
           existingMessage.generatedImageBlock.images.length > 0
+      )
+      const hasExistingKeywordPicker = existingMessages.some((m) =>
+        m.content.includes('<<AIDEE_STYLE_KEYWORD_PICKER>>')
       )
       const hasExistingRfp = existingMessages.some(
         (existingMessage) => Boolean(extractRfpJsonBlock(existingMessage.content).rfp)
@@ -819,16 +984,14 @@ export async function POST(request: Request) {
         body.forceImageGeneration === 'persona_card' ||
         isPersonaCardVisualizationRequest(messageForModel)
       const shouldGenerateStyleImages =
-        (body.forceImageGeneration === 'style_reference' ||
-          (currentStageKey === 'step_4_style' &&
-            isExplicitStep4ProceedRequest(messageForModel) &&
-            !hasExistingStyleImages)) &&
-        !hasStyleReferenceSelection(messageForModel)
+        (body.forceImageGeneration === 'style_reference' &&
+          !hasStyleReferenceSelection(messageForModel)) ||
+        (currentStageKey === 'step_4_style' &&
+          isExplicitStep4ProceedRequest(messageForModel) &&
+          !hasExistingMoodboardCandidates)
       const shouldGenerateDesignImages =
         body.forceImageGeneration === 'initial_design' ||
         body.forceImageGeneration === 'design_revision' ||
-        (requestedStageKey === 'step_4_style' &&
-          currentStageKey === 'step_5_design') ||
         (currentStageKey === 'step_5_design' && isImageRequest(messageForModel))
       const shouldGenerateRfp =
         currentStageKey === 'step_6_rfp' &&
@@ -926,17 +1089,22 @@ export async function POST(request: Request) {
             }
           }
         } else if (shouldGenerateDesignImages) {
-          imageBlock = await generateGeminiImages({
-            apiKey: requiredApiKey,
-            count: body.forceImageGeneration === 'design_revision' ? 1 : 4,
-            prompt: buildDesignImagePrompt({
-              conversation,
-              projectTitle: project.title || 'Untitled project',
-              requirements: project.requirements,
-              userRequest: messageForModel,
-            }),
-            purpose: 'design',
-          })
+          try {
+            imageBlock = await generateGeminiImages({
+              apiKey: requiredApiKey,
+              count: body.forceImageGeneration === 'design_revision' ? 1 : 4,
+              prompt: buildDesignImagePrompt({
+                conversation,
+                projectTitle: project.title || 'Untitled project',
+                requirements: project.requirements,
+                userRequest: messageForModel,
+              }),
+              purpose: 'design',
+            })
+          } catch (err) {
+            console.error('Design image generation failed:', err)
+            imageBlock = null
+          }
         }
 
         const text = await generateGeminiText({
@@ -944,6 +1112,42 @@ export async function POST(request: Request) {
           messages: modelMessages,
           system,
         })
+        const styleMoodWidgets =
+          currentStageKey === 'step_4_style' ? parseStyleMoodWidgets(text) : []
+
+        if (!imageBlock && styleMoodWidgets.length > 0) {
+          const unsplashKey = getUnsplashAccessKey()
+
+          if (unsplashKey) {
+            const widgetImages = await Promise.all(
+              styleMoodWidgets.map(async (widget) => {
+                const query = getStyleWidgetSearchQuery(widget)
+                const [image] = await searchUnsplashPhotos({
+                  accessKey: unsplashKey,
+                  orientation: 'landscape',
+                  perPage: 1,
+                  query,
+                }).catch(() => [])
+
+                return image ? { image, query } : null
+              })
+            )
+            const availableImages = widgetImages.filter(
+              (result): result is NonNullable<typeof result> => Boolean(result)
+            )
+
+            if (availableImages.length > 0) {
+              imageBlock = {
+                images: availableImages.map(({ image }) => image.url),
+                model: 'unsplash',
+                prompt: availableImages.map(({ query }) => query).join(' | '),
+                purpose: 'style_reference' as const,
+                selectedImageIndex: null,
+                unsplashMeta: availableImages.map(({ image }) => image),
+              }
+            }
+          }
+        }
         const completedDirectionResearch =
           currentStageKey === 'step_3_direction' &&
           hasDirectionResearch(conversationMessages, text)
@@ -1003,6 +1207,25 @@ export async function POST(request: Request) {
               ? stageMeta.nextStageKey
               : stageMeta.currentStageKey
         }
+      }
+
+      // If the AI included direction widget markers, force stay in step 3
+      // (inferStageMetaFromText can falsely detect "STEP 4" in appendDirectionCompletionPrompt)
+      if (/<<AIDEE_DIRECTION_WIDGETS>>/.test(assistantContent)) {
+        responseStageKey = 'step_3_direction'
+      }
+
+      // Inject style keyword picker only on genuine step_4 entry
+      // Guard with currentStageKey to prevent injection during step 3 direction research
+      if (
+        responseStageKey === 'step_4_style' &&
+        currentStageKey === 'step_4_style' &&
+        !hasExistingKeywordPicker
+      ) {
+        const keywords = await generateStyleKeywords(requiredApiKey, conversation)
+        assistantContent =
+          assistantContent +
+          `\n\n<<AIDEE_STYLE_KEYWORD_PICKER>>\n${JSON.stringify(keywords)}\n<</AIDEE_STYLE_KEYWORD_PICKER>>`
       }
     }
 

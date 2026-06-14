@@ -70,13 +70,25 @@ export async function generateUnsplashSearchQuery({
   apiKey: string
   conversation: string
 }): Promise<string> {
+  // Prefer mood selection (most specific), fall back to keyword selection, then full conversation
+  const moodMatch = conversation.match(
+    /스타일\s*분위기를\s*선택했어요\s*[:：]?\s*([\s\S]{10,400})/i
+  )
+  const keywordMatch = conversation.match(
+    /스타일\s*키워드를\s*선택했습니다[.\n]*([\s\S]{20,400})/i
+  )
+  const context = moodMatch
+    ? `Selected style mood:\n${moodMatch[1].slice(0, 400)}`
+    : keywordMatch
+      ? `Selected style keywords:\n${keywordMatch[1].slice(0, 400)}`
+      : `Conversation:\n${conversation.slice(0, 2000)}`
+
   const prompt = [
-    'Extract a concise English image search query (max 6 words) from this product design conversation.',
-    'Focus on the selected style keywords: color, material, form, emotion, mood.',
-    'Output ONLY the search query, no explanation, no quotes.',
+    'Translate the following Korean product design style description into a concise English Unsplash image search query (max 6 words).',
+    'Focus on emotion, color, texture, and structure to describe a product design mood.',
+    'Output ONLY the search query — no explanation, no quotes, no punctuation.',
     '',
-    'Conversation:',
-    conversation,
+    context,
   ].join('\n')
 
   const res = await fetch(

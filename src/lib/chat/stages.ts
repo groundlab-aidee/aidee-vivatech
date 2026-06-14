@@ -62,6 +62,10 @@ export function getProcessStepIndex(stageKey: StageKey) {
   }
 }
 
+export function getLaterStageKey(left: StageKey, right: StageKey) {
+  return getProcessStepIndex(right) > getProcessStepIndex(left) ? right : left
+}
+
 export function canRequestRfpStage(stageKey: StageKey) {
   return stageKey === 'step_5_design' || stageKey === 'step_6_rfp'
 }
@@ -137,11 +141,22 @@ export function resolveIntentStageKey({
     return 'step_4_style'
   }
 
-  if (currentStageKey === 'step_4_style' && hasStyleReferenceSelection(lastUserMessage)) {
+  if (
+    currentStageKey === 'step_4_style' &&
+    /스타일\s*레퍼런스를\s*선택하고\s*무드보드를\s*만들었어요|STEP\s*5|디자인\s*시안|시안\s*생성/i.test(
+      lastUserMessage
+    )
+  ) {
     return 'step_5_design'
   }
 
-  if (currentStageKey === 'step_5_design' && hasDesignFinalSelection(lastUserMessage)) {
+  if (
+    currentStageKey === 'step_5_design' &&
+    (hasDesignFinalSelection(lastUserMessage) ||
+      /다음\s*(?:단계|STEP)(?:로)?\s*(?:진행|넘어가|이동|시작|가)|STEP\s*6|기획안\s*(?:생성|작성|만들)|다음\s*단계/i.test(
+        lastUserMessage
+      ))
+  ) {
     return 'step_6_rfp'
   }
 
@@ -215,6 +230,20 @@ export function inferStageMetaFromText({
       currentStageKey,
       nextStageKey: 'step_4_style',
       reason: 'text_mentions_step_4',
+      transition: true,
+    }
+  }
+
+  if (
+    currentStageKey === 'step_4_style' &&
+    /STEP\s*5|디자인\s*시안|3D\s*(?:디자인|렌더링)|생성된\s*이미지/i.test(
+      text
+    )
+  ) {
+    return {
+      currentStageKey,
+      nextStageKey: 'step_5_design',
+      reason: 'text_enters_step_5',
       transition: true,
     }
   }
