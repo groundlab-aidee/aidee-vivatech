@@ -1151,10 +1151,10 @@ export const vivatechDemo1: DemoScenario = {
 
         content:
             'I selected the following style keywords:\n\n' +
-            '**Emotion:** Motivating, Trustworthy, Immersive, Self-directed, Refined\n' +
-            '**Color:** Natural, Neutral, Deep, Minimal, Metallic\n' +
-            '**Structure:** Ergonomic, Compact, Lightweight, Streamlined, Balanced\n' +
-            '**Texture:** Silicone, Matte Metal, Soft-touch Polymer, Fabric Texture, Durable Composite',
+            '**Emotion**: Motivating, Trustworthy, Immersive, Self-directed, Refined\n' +
+            '**Color**: Natural, Neutral, Deep, Minimal, Metallic\n' +
+            '**Structure**: Ergonomic, Compact, Lightweight, Streamlined, Balanced\n' +
+            '**Texture**: Silicone, Matte Metal, Soft-touch Polymer, Fabric Texture, Durable Composite',
     },
   ],
 }
