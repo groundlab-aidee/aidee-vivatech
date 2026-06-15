@@ -1223,6 +1223,9 @@ export function ProjectChatContainer({
     useState<ConsumptionKeywordData | null>(null)
   const [isPending, setIsPending] = useState(false)
   const [moodboardModalOpen, setMoodboardModalOpen] = useState(false)
+  // True once a moodboard board has been generated (style reference selected),
+  // which surfaces the Mood Board library badge.
+  const [moodboardReady, setMoodboardReady] = useState(false)
   // Derive demo mode from the project's idea so it survives a page reload (not
   // only the new-project flow). A demo project's idea is a demo trigger string.
   const [isDemoMode, setIsDemoMode] = useState(
@@ -1689,6 +1692,10 @@ export function ProjectChatContainer({
 
     }
 
+    if (moodboardReady) {
+      availableKinds.add('mood_board')
+    }
+
     if (selectedRenderingImage) {
       availableKinds.add('rendering')
     }
@@ -1714,6 +1721,7 @@ export function ProjectChatContainer({
     latestRfp,
     latestDirectionMessageIds,
     meshyModelUrl,
+    moodboardReady,
     selectedRenderingImage,
     visibleMessages,
     visualizedDirectionArtifacts,
@@ -2000,13 +2008,16 @@ export function ProjectChatContainer({
                 action.promptKey
               ]
             : undefined
-          if (!prompt) continue
+          const queries = action.queries ?? []
+          // Need either a single prompt (promptKey lookup) or fixed queries
+          // (STEP 4 style moodboard).
+          if (!prompt && queries.length === 0) continue
 
           try {
             const res = await fetch('/api/demo/visual', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ visualType: action.type, prompt }),
+              body: JSON.stringify({ visualType: action.type, prompt, queries }),
             })
             const payload = (await res.json()) as {
               imageBlock?: GeneratedImageBlock
@@ -2555,14 +2566,20 @@ export function ProjectChatContainer({
                 <ChatBubble
                   key={message.id}
                   message={message}
-                  canShowStyleReferences={visibleMessages.some(
-                    (candidate) =>
-                      candidate.role === 'user' &&
-                      candidate.seq_order < message.seq_order &&
-                      /(?:다음\s*(?:단계|STEP)(?:로)?\s*(?:진행|넘어가|이동|시작)|STEP\s*4(?:로)?\s*(?:진행|넘어가|이동|시작)|스타일\s*(?:컨셉|단계)(?:로)?\s*(?:진행|넘어가|이동|시작)|스타일\s*분위기를\s*선택했어요)/i.test(
-                        candidate.content
-                      )
-                  )}
+                  canShowStyleReferences={
+                    // Demo mode: the STEP 4 moodboard widgets are scripted, so
+                    // bypass the Korean "proceed to STEP 4" gate (demo user
+                    // messages are in English and never match it).
+                    isDemoMode ||
+                    visibleMessages.some(
+                      (candidate) =>
+                        candidate.role === 'user' &&
+                        candidate.seq_order < message.seq_order &&
+                        /(?:다음\s*(?:단계|STEP)(?:로)?\s*(?:진행|넘어가|이동|시작)|STEP\s*4(?:로)?\s*(?:진행|넘어가|이동|시작)|스타일\s*(?:컨셉|단계)(?:로)?\s*(?:진행|넘어가|이동|시작)|스타일\s*분위기를\s*선택했어요)/i.test(
+                          candidate.content
+                        )
+                    )
+                  }
                   isMoodSelected={isMoodSelected}
                   latestMoodOptionsMessageId={latestMoodOptionsMessageId}
                   disabled={isPending}
@@ -2595,6 +2612,7 @@ export function ProjectChatContainer({
                   onConfirmPersona={confirmPersonaCard}
                   onDownloadRfp={downloadRfp}
                   onOpenMoodboardModal={() => setMoodboardModalOpen(true)}
+                  onMoodboardReady={() => setMoodboardReady(true)}
                   onVisualizeKeyword={visualizeKeywordCard}
                   onVisualizeProblemStatements={visualizeProblemStatements}
                   onConfirmProblemStatements={confirmProblemStatements}
@@ -2634,7 +2652,8 @@ export function ProjectChatContainer({
             </p>
           ) : null}
 
-          {effectiveStageKey === 'step_5_design' &&
+          {!isDemoMode &&
+          effectiveStageKey === 'step_5_design' &&
           !hasDesignImages &&
           !isPending ? (
             <div className="mx-auto mb-3 flex w-full max-w-[1171px] justify-end">
@@ -2833,6 +2852,13 @@ export function ProjectChatContainer({
                 ? extractBrandPositioningData(sourceMessage.content)
                 : null
             )
+            return
+          }
+
+          if (kind === 'mood_board') {
+            // Reuse the existing "무드보드 전체보기" modal, which fetches the
+            // saved board from /api/moodboard by projectId.
+            setMoodboardModalOpen(true)
             return
           }
 
@@ -5370,6 +5396,7 @@ function ChatBubble({
   onDownloadRfp,
   onConfirmDirection,
   onOpenMoodboardModal,
+  onMoodboardReady,
   onVisualizeKeyword,
   onVisualizeDirection,
   onVisualizeProblemStatements,
@@ -5423,6 +5450,7 @@ function ChatBubble({
     messageId: string
   ) => void
   onOpenMoodboardModal: () => void
+  onMoodboardReady: () => void
   onVisualizeKeyword: (data: KeywordCardData) => void
   onVisualizeDirection: (
     kind: DirectionArtifactKind,
@@ -5709,7 +5737,14 @@ function ChatBubble({
                     searchQuery={message.generatedImageBlock.prompt}
                     onBoardReady={(imgs) => {
                       setMoodboardImages(imgs)
-                      onChoice('스타일 레퍼런스를 선택하고 무드보드를 만들었어요.')
+                      // Surface the Mood Board library badge.
+                      onMoodboardReady()
+                      // Normal flow hands the result back to Gemini to continue;
+                      // the demo has no scripted follow-up, so skip that to avoid
+                      // a stray live response.
+                      if (!isDemoMode) {
+                        onChoice('스타일 레퍼런스를 선택하고 무드보드를 만들었어요.')
+                      }
                     }}
                   />
                 )
@@ -5826,6 +5861,13 @@ function ChatBubble({
                                 }
                               })
                               .catch(() => null)
+
+                            // Demo mode: confirming a concept immediately kicks off
+                            // Meshy 3D modeling (uses the selected design's base64),
+                            // so no separate "visualize" click is needed.
+                            if (isDemoMode) {
+                              void startSelectedDesignVisualization()
+                            }
                           }}
                           className={`min-w-24 rounded-[30px] px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 transition ${
                             isSelectedDesignConfirmed
@@ -5837,7 +5879,7 @@ function ChatBubble({
                         </button>
                       </div>
 
-                      {isSelectedDesignConfirmed ? (
+                      {isSelectedDesignConfirmed && !isDemoMode ? (
                         <div className="flex justify-end pt-1">
                           <button
                             type="button"

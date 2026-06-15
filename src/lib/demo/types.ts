@@ -24,6 +24,10 @@ export type DemoVisualAction = {
   promptKey?: string
   generate?: boolean
   libraryTitle?: string
+  // STEP 4 style moodboard: one fixed Unsplash search query per style-mood
+  // widget. When present, the demo fetches one image per query (instead of the
+  // single-query `promptKey` lookup) and renders them as moodboard candidates.
+  queries?: string[]
 }
 
 export type DemoMessage = {

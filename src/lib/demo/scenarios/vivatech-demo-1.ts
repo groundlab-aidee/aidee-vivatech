@@ -1,7 +1,5 @@
 import type { DemoScenario } from '../types'
 
-console.log('🔥 VIVATECH DEMO FILE LOADED')
-
 export const vivatechDemo1: DemoScenario = {
   id: 'vivatech_demo_1',
 
@@ -1157,6 +1155,83 @@ export const vivatechDemo1: DemoScenario = {
             '**Color**: Natural, Neutral, Deep, Minimal, Metallic\n' +
             '**Structure**: Ergonomic, Compact, Lightweight, Streamlined, Balanced\n' +
             '**Texture**: Silicone, Matte Metal, Soft-touch Polymer, Fabric Texture, Durable Composite',
+    },
+    {
+        id: 'demo1_assistant_31',
+        role: 'assistant',
+        stageKey: 'step_4_style',
+
+        content: [
+            'I reviewed the style keywords you selected.',
+            '',
+            'You are aiming for a product that feels **motivating, immersive, and refined**, combined with a **natural, neutral, deep, minimal, and metallic** color direction.',
+            '',
+            'The form language should be **ergonomic, compact, lightweight, streamlined, and balanced**, while the material expression should feel **silicone-based, matte metallic, soft-touch, durable, and comfortable for long-term wear**.',
+            '',
+            'Overall, the concept points toward a wearable device that blends naturally into everyday life while delivering a focused and motivating climbing experience.',
+            '',
+            'Now, based on these keywords, I have prepared **three style moodboard directions** for the product.',
+            '',
+            'Please review the options below and select the style direction that best matches your vision.',
+        ].join('\n'),
+
+        visualActions: [
+            {
+                type: 'moodboard',
+                generate: true,
+                queries: [
+                    'minimal metallic sports wearable product design',
+                    'modern climbing gear close up neutral background',
+                    'premium fitness tracker lifestyle minimal design',
+                ],
+            },
+        ],
+    },
+
+    /* -- STEP 5. Design Concept Confirmation -- */
+    {
+        id: 'demo1_user_29',
+        role: 'user',
+        stageKey: 'step_4_style',
+
+        content:
+            'I selected a style reference and created a moodboard.',
+    },
+    {
+        id: 'demo1_assistant_32',
+        role: 'assistant',
+        stageKey: 'step_5_design',
+
+        content: [
+            'The style references and moodboard generation have been completed. The visual direction of the product is now clearly defined.',
+            '',
+            'Next, we will move to **STEP 5. Design Concept Confirmation**.',
+            '',
+            'In this stage, you will review actual product design concepts based on the finalized style direction and select the design concept that best represents your vision.',
+            '',
+            'Once the design concept is confirmed, we will be able to establish the final product design direction and proceed to the next phase of development.',
+        ].join('\n'),
+
+        visualActions: [
+            {
+                type: 'design_rendering',
+                generate: true,
+                promptKey: 'design_rendering',
+            },
+        ],
+    },
+    {
+        id: 'demo1_assistant_33',
+        role: 'assistant',
+        stageKey: 'step_5_design',
+
+        content: [
+            'Take a moment to review the four design concepts above and choose the one that best captures your vision.',
+            '',
+            'When you have found your favorite, press **Confirm** on that concept. I will immediately turn it into an interactive 3D model using Meshy AI.',
+            '',
+            'Once the model is ready, you can rotate it freely and inspect its form, proportions, and details from every angle before we move on.',
+        ].join('\n'),
     },
   ],
 }

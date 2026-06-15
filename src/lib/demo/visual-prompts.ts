@@ -5,7 +5,7 @@ export const demoVisualPrompts = {
     moodboard:
       "premium futuristic lifestyle tech product moodboard, soft blue lighting, translucent material, brushed metal, no visible text, no labels",
     design_rendering:
-      "premium futuristic product design rendering, clean object, soft rounded geometry, no visible text, no labels",
+      "Industrial product design rendering of a premium wrist-worn smart climbing performance wearable for bouldering athletes. Compact, lightweight, ergonomic form with a streamlined and balanced silhouette that wraps naturally around the wrist. Matte metallic main body combined with a soft-touch silicone band and subtle fabric-textured detailing, designed for durability and all-day comfort. Natural, neutral, and deep color palette with refined metallic accents. Minimal clean surfaces, a small understated performance display, no visible branding. The mood feels motivating, trustworthy, immersive, and refined. Studio product photography, soft diffused lighting, neutral seamless background, realistic materials, high detail, 3/4 angle. Negative: no text, no logos, no labels, no UI screen content, no distorted geometry, no extra straps, no clutter, no cartoon style.",
     design_modeling:
       "single clean product object for image-to-3D generation, centered composition, white background, no text"
   },

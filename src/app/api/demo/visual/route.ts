@@ -29,13 +29,17 @@ export async function POST(request: Request) {
       visualType?: DemoVisualType
       prompt?: string
       count?: number
+      queries?: unknown
     }
     const visualType = body.visualType
     const prompt = typeof body.prompt === 'string' ? body.prompt : ''
+    const queries = Array.isArray(body.queries)
+      ? body.queries.filter((q): q is string => typeof q === 'string' && q.trim().length > 0)
+      : []
 
-    if (!visualType || !prompt) {
+    if (!visualType || (!prompt && queries.length === 0)) {
       return NextResponse.json(
-        { error: 'visualType and prompt are required' },
+        { error: 'visualType and prompt (or queries) are required' },
         { status: 400 }
       )
     }
@@ -49,16 +53,34 @@ export async function POST(request: Request) {
           { status: 500 }
         )
       }
-      const candidates: UnsplashImageMeta[] = await searchUnsplashPhotos({
-        accessKey,
-        query: prompt,
-        perPage: body.count ?? 3,
-      }).catch(() => [])
+
+      let candidates: UnsplashImageMeta[] = []
+
+      if (queries.length > 0) {
+        // STEP 4 style moodboard: one image per fixed query, so each widget
+        // reflects a distinct style direction.
+        const perQuery = await Promise.all(
+          queries.map((query) =>
+            searchUnsplashPhotos({ accessKey, query, perPage: 1 })
+              .then((results) => results[0] ?? null)
+              .catch(() => null)
+          )
+        )
+        candidates = perQuery.filter((c): c is UnsplashImageMeta => c !== null)
+      } else {
+        candidates = await searchUnsplashPhotos({
+          accessKey,
+          query: prompt,
+          perPage: body.count ?? 3,
+        }).catch(() => [])
+      }
 
       const imageBlock: GeneratedImageBlock = {
         images: candidates.map((c) => c.url),
         model: 'unsplash',
-        prompt,
+        // The select route uses this query to generate the full board; use the
+        // first style query as the representative direction.
+        prompt: queries[0] ?? prompt,
         purpose: 'moodboard_candidate',
         selectedImageIndex: null,
         unsplashMeta: candidates,
