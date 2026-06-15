@@ -46,4 +46,7 @@ export type DemoScenario = {
   triggerKeywords: string[]
   productCategory: string
   messages: DemoMessage[]
+  // Appended (not auto-played) once Meshy 3D modeling completes — the STEP 6
+  // evaluation / product development proposal bubble.
+  finalProposalMessage?: DemoMessage
 }

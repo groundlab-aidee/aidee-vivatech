@@ -1159,6 +1159,8 @@ export function ProjectChatContainer({
   const { language } = useAppLanguage()
   const { setSidebarState } = useProjectChatSidebar()
   const didRequestInitialResponseRef = useRef(false)
+  // Guards the one-time append of the STEP 6 proposal bubble after 3D modeling.
+  const finalProposalAppendedRef = useRef(false)
   const expertMenuRef = useRef<HTMLDivElement | null>(null)
   const messageScrollRef = useRef<HTMLDivElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
@@ -1704,7 +1706,7 @@ export function ProjectChatContainer({
       availableKinds.add('modeling')
     }
 
-    if (latestRfp && hasVisualizedLatestRfp) {
+    if (latestRfp && (hasVisualizedLatestRfp || isDemoMode)) {
       availableKinds.add('project_report')
     }
 
@@ -2069,6 +2071,28 @@ export function ProjectChatContainer({
       }
     },
     [setMessages, setStageKey, saveDemoMessage]
+  )
+
+  // Append a single scripted demo message outside the initial auto-play (e.g.
+  // the STEP 6 proposal that fires once Meshy 3D modeling finishes).
+  const appendDemoMessage = useCallback(
+    async (demoMessage: DemoMessage) => {
+      let seqOrder = 0
+      setMessages((current) => {
+        seqOrder = current.length
+          ? Math.max(...current.map((m) => m.seq_order)) + 1
+          : 0
+        return current
+      })
+      const saved = await saveDemoMessage(demoMessage, seqOrder)
+      const record =
+        saved ?? buildDemoMessageRecord({ demoMessage, index: seqOrder })
+      setMessages((current) =>
+        current.some((m) => m.id === record.id) ? current : [...current, record]
+      )
+      setStageKey((prev) => getLaterStageKey(prev, demoMessage.stageKey))
+    },
+    [saveDemoMessage, setMessages, setStageKey]
   )
 
   const requestAssistantResponse = useCallback(async ({
@@ -2622,7 +2646,20 @@ export function ProjectChatContainer({
                   onVisualizeRfp={visualizeProjectReport}
                   onConfirmCompany={(id) => setConfirmedCompanyMessageId(id)}
                   onVisualizeCompany={() => setCompanyModalOpen(true)}
-                  onModelReady={(url) => setMeshyModelUrl(url)}
+                  onModelReady={(url) => {
+                    setMeshyModelUrl(url)
+                    // Demo mode: once the 3D model is ready, append the scripted
+                    // STEP 6 proposal bubble (one time).
+                    if (isDemoMode && !finalProposalAppendedRef.current) {
+                      const scenario = initialIdea
+                        ? findDemoScenarioFromText(initialIdea)
+                        : null
+                      if (scenario?.finalProposalMessage) {
+                        finalProposalAppendedRef.current = true
+                        void appendDemoMessage(scenario.finalProposalMessage)
+                      }
+                    }
+                  }}
                   onOpenModelViewer={() => setModelViewerOpen(true)}
                   onSelectDesignRendering={setSelectedRenderingImage}
                   projectId={projectId}
@@ -6380,7 +6417,7 @@ function ChatBubble({
 
       </div>
 
-      {rfpBlock.rfp && latestRfpMessageId === message.id ? (
+      {rfpBlock.rfp && latestRfpMessageId === message.id && !isDemoMode ? (
         <div className="flex w-full flex-col items-end gap-3">
           <div className="flex items-center justify-end gap-3">
             <button
