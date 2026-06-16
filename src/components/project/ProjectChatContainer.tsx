@@ -25,7 +25,10 @@ import {
   type ExpertKey,
 } from '@/lib/chat/experts'
 import {
+  appendGeneratedImagesBlock,
+  appendDemoVisualActions,
   extractGeneratedImagesBlock,
+  extractDemoVisualActions,
   type GeneratedImageBlock,
   type GeneratedImagePurpose,
   type UnsplashImageMeta,
@@ -260,15 +263,15 @@ function extractProjectDirectionCard(content: string): ProjectDirectionData | nu
   }
 
   const fieldLabels = [
-    '프로젝트명',
-    '프로젝트 목표',
-    '제품 카테고리',
-    '예산/기간 범위',
-    '예상 크기',
-    '주요 기능',
-    '최종 활용 목적',
-    '아이디어 정리',
-    '참고 자료',
+    'Project Name',
+    'Project Goal',
+    'Product Category',
+    'Budget / Timeline',
+    'Expected Size',
+    'Key Features',
+    'Final Use Case',
+    'Idea Summary',
+    'Reference Materials',
   ]
   const labelSet = new Set(fieldLabels)
   const values = new Map<string, string>()
@@ -303,17 +306,17 @@ function extractProjectDirectionCard(content: string): ProjectDirectionData | nu
     )
   }
 
-  const getValue = (label: string) => values.get(label)?.trim() || '미정'
+  const getValue = (label: string) => values.get(label)?.trim() || 'Not Set'
   const data = {
-    budgetAndDuration: getValue('예산/기간 범위'),
-    category: getValue('제품 카테고리'),
-    features: getValue('주요 기능'),
-    goal: getValue('프로젝트 목표'),
-    ideaSummary: getValue('아이디어 정리'),
-    referenceSummary: getValue('참고 자료'),
-    size: getValue('예상 크기'),
-    title: getValue('프로젝트명'),
-    usage: getValue('최종 활용 목적'),
+    budgetAndDuration: getValue('Budget / Timeline'),
+    category: getValue('Product Category'),
+    features: getValue('Key Features'),
+    goal: getValue('Project Goal'),
+    ideaSummary: getValue('Idea Summary'),
+    referenceSummary: getValue('Reference Materials'),
+    size: getValue('Expected Size'),
+    title: getValue('Project Name'),
+    usage: getValue('Final Use Case'),
   }
   const hasMinimumData =
     data.title !== '미정' ||
@@ -355,6 +358,7 @@ function stripInternalBlocksForDisplay(text: string) {
       /\n?<<AIDEE_DIRECTION_WIDGETS>>[\s\S]*?<<\/AIDEE_DIRECTION_WIDGETS>>/g,
       ''
     )
+    .replace(/\n?<<\s*AIDEE[-_ ]?PARTNER[-_ ]?CONNECTION\s*>>/gi, '')
     .replace(
       /\n?<<AIDEE_DIRECTION_CARD:[\s\S]*?<<\/AIDEE_DIRECTION_CARD>>/g,
       ''
@@ -643,24 +647,24 @@ function extractConsumptionKeywordData(
   return {
     description:
       descriptiveLines.slice(0, 4).join(' ') ||
-      '사용자의 구매 동기와 선택 기준을 바탕으로 제품이 제공해야 할 소비 경험과 시장 방향을 정리했습니다.',
+      'Based on user motivations and selection criteria, we have summarized the consumption experience and market direction the product should provide.',
     keywords:
       keywords.length > 0
         ? keywords
         : [
-            '직관적 선택',
-            '신뢰성',
-            '편리한 사용',
-            '가치 소비',
-            '개인화',
-            '지속가능성',
-            '품질 중심',
-            '효율성',
-            '브랜드 경험',
+            'Intuitive Selection',
+            'Reliability',
+            'Convenient Use',
+            'Value Consumption',
+            'Personalization',
+            'Sustainability',
+            'Quality Focus',
+            'Efficiency',
+            'Brand Experience',
           ],
     summary:
       stripLabel(summaryLine) ||
-      '명확한 가치와 신뢰를 바탕으로 지속 가능한 소비 경험을 제공하는 제품',
+      'A product that provides a sustainable consumption experience based on clear value and trust.',
   }
 }
 
@@ -729,18 +733,18 @@ function extractBrandPositioningData(
     brands: brands.length >= 4 ? brands : fallbackBrands,
     description:
       descriptiveLines.slice(-2).join(' ') ||
-      '합리적인 가격대 안에서 기능과 라이프스타일 가치를 함께 제공하는 브랜드 포지션이 적합합니다.',
+      'A brand position that provides both functionality and lifestyle value at a reasonable price is suitable.',
     goal:
       goalLine.replace(/^(?:OUR\s*BRAND|자사\s*브랜드|목표\s*포지션)\s*[:：-]\s*/i, '') ||
-      '기능과 감성을 연결하는 라이프스타일 브랜드',
+      'A lifestyle brand connecting functionality and emotion',
   }
 }
 
 function getDirectionArtifactLabel(kind: DirectionArtifactKind) {
   const labels: Record<DirectionArtifactKind, string> = {
-    brand_positioning: '경쟁사 리서치',
-    consumption_keywords: '소비 트렌드 리서치',
-    market_size: '시장 규모 리서치',
+    brand_positioning: 'Competitor Research',
+    consumption_keywords: 'Consumption Trends Research',
+    market_size: 'Market Size Research',
   }
 
   return labels[kind]
@@ -880,9 +884,13 @@ function extractProblemStatementsData(content: string): ProblemStatementsData | 
 function extractKeywordCardsData(content: string): KeywordCardData[] {
   const normalized = stripInternalBlocksForDisplay(content).replace(/\r\n/g, '\n')
 
-  // More flexible pattern: find "Keywords: Experience/Relationship" with optional heading markers
+  // Match a real "Keywords: Experience/Relationship" card header — the kind must
+  // sit at the END of its line (optionally wrapped in ** or # markers). This
+  // excludes conversational mentions like "Keywords: Experience have been
+  // finalized." or "shall we explore **Keywords: Relationship**?" from being
+  // parsed as cards, which would otherwise hijack the latest-card lookup.
   const cardMatches = normalized.matchAll(
-    /(?:^|\n)#{0,3}\s*Keywords:\s*(Experience|Relationship)[\s\S]*?(?=\n#{0,3}\s*Keywords:\s*(?:Experience|Relationship)|$)/gi
+    /(?:^|\n)#{0,3}\s*(?:\*\*)?Keywords:\s*(Experience|Relationship)\*{0,2}\s*(?=\n|$)[\s\S]*?(?=\n#{0,3}\s*(?:\*\*)?Keywords:\s*(?:Experience|Relationship)\*{0,2}\s*(?:\n|$)|$)/gi
   )
 
   return Array.from(cardMatches, (match) => {
@@ -951,8 +959,8 @@ function extractKeywordCardsData(content: string): KeywordCardData[] {
       description:
         description ||
         (kind === 'experience_keywords'
-          ? `${keywords.slice(0, 3).join(', ')} 중심의 경험 키워드를 정리했습니다.`
-          : `${keywords.slice(0, 3).join(', ')} 중심의 관계 키워드를 정리했습니다.`),
+          ? `Experience keywords focused on ${keywords.slice(0, 3).join(', ')} have been organized.`
+          : `Relationship keywords focused on ${keywords.slice(0, 3).join(', ')} have been organized.`),
       keywords: keywords.length > 0 ? keywords : lines.slice(0, 15),
       kind,
       title: `Keywords: ${match[1]}`,
@@ -1043,32 +1051,32 @@ function buildFallbackHintChoices(content: string): ChatChoice[] {
 
   if (/구체적인\s*모습|추가\s*설명|형태|색감|재질|사용\s*장면/.test(normalized)) {
     return makeChoices([
-      '형태나 재질 중심으로 설명할게요',
-      '사용 장면과 분위기 중심으로 설명할게요',
-      '아직 구체적인 모습은 없어요',
+      'Please explain focusing on form and materials',
+      'Please explain focusing on usage scenarios and mood',
+      'I don\'t have a specific appearance yet',
     ])
   }
 
   if (/누가|사용자|타겟|나이|직업|페르소나/.test(normalized)) {
     return makeChoices([
-      'Aidee가 적합한 사용자를 추천해주세요',
-      '제가 생각한 사용자층을 설명할게요',
-      '아직 모르겠어요',
+      'Please recommend suitable users for this product',
+      'I\'ll describe the user group I\'m thinking of',
+      'I\'m not sure yet',
     ])
   }
 
   if (/우선|기준|고를|선택|중요|가치/.test(normalized)) {
     return makeChoices([
-      '실용성과 기능을 우선하고 싶어요',
-      '디자인과 감성을 우선하고 싶어요',
-      '아직 우선순위를 정하지 못했어요',
+      'I want to prioritize practicality and functionality',
+      'I want to prioritize design and emotion',
+      'I haven\'t determined priorities yet',
     ])
   }
 
   return makeChoices([
-    '아직 잘 모르겠어요. Aidee가 추천해주세요',
-    '현재 정보만으로 진행해주세요',
-    '제가 직접 설명을 더 추가할게요',
+    'I\'m not sure yet. Please recommend, Aidee',
+    'Please proceed with current information only',
+    'I\'ll add more explanation directly',
   ])
 }
 
@@ -1130,7 +1138,22 @@ function buildDemoMessageRecord({
   const { cleanedText: afterImages, imageBlock } = extractGeneratedImagesBlock(
     demoMessage.content
   )
-  const { cleanedText, personaCardBlock } = extractPersonaCardBlock(afterImages)
+
+  // Remove visualActions markup FIRST. Both the visualActions and persona-card
+  // cleanup regexes are anchored to end-of-string ($), so the persona card can
+  // only be stripped once the visualActions block (which is appended after it)
+  // is gone — otherwise the persona JSON leaks into the rendered message.
+  let working = afterImages
+  if (extractDemoVisualActions(working).length > 0) {
+    working = working
+      .replace(
+        /\n?<<\s*AIDEE[-_ ]?VISUAL[-_ ]?ACTIONS\s*>>[\s\S]*?<<\s*\/\s*AIDEE[-_ ]?VISUAL[-_ ]?ACTIONS\s*>>\s*$/i,
+        ''
+      )
+      .trim()
+  }
+
+  const { cleanedText, personaCardBlock } = extractPersonaCardBlock(working)
 
   return {
     content: cleanedText,
@@ -1159,12 +1182,12 @@ export function ProjectChatContainer({
   const { language } = useAppLanguage()
   const { setSidebarState } = useProjectChatSidebar()
   const didRequestInitialResponseRef = useRef(false)
-  // Guards the one-time append of the STEP 6 proposal bubble after 3D modeling.
-  const finalProposalAppendedRef = useRef(false)
   const expertMenuRef = useRef<HTMLDivElement | null>(null)
   const messageScrollRef = useRef<HTMLDivElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
-  const [messages, setMessages] = useState(initialMessages)
+  const [messages, setMessages] = useState(() =>
+    [...initialMessages].sort((a, b) => a.seq_order - b.seq_order)
+  )
   const [stageKey, setStageKey] = useState(initialStageKey)
   const [activeExpert, setActiveExpert] = useState<ExpertKey>('aidee')
   const [isExpertMenuOpen, setIsExpertMenuOpen] = useState(false)
@@ -1626,11 +1649,31 @@ export function ProjectChatContainer({
       const sourceMessage = messageId
         ? visibleMessages.find((m) => m.id === messageId)
         : null
-      const card = sourceMessage
-        ? extractKeywordCardsData(sourceMessage.content).find(
+
+      let card: KeywordCardData | undefined
+
+      if (sourceMessage) {
+        // Extract visualActions from content (demo mode)
+        const visualActions = extractDemoVisualActions(sourceMessage.content)
+        const demoCardData = visualActions.find(
+          (action: any) =>
+            (action.type === 'keywords_experience' && kind === 'experience_keywords') ||
+            (action.type === 'keywords_relationship' && kind === 'relationship_keywords')
+        )?.cardData
+
+        if (demoCardData) {
+          card = {
+            ...demoCardData,
+            kind,
+          }
+        } else {
+          // Fall back to parsing content
+          card = extractKeywordCardsData(sourceMessage.content).find(
             (c) => c.kind === kind
           )
-        : null
+        }
+      }
+
       if (card) {
         cards[kind] = card
       }
@@ -1941,27 +1984,57 @@ export function ProjectChatContainer({
   const saveDemoMessage = useCallback(
     async (
       demoMessage: DemoMessage,
-      seqOrder: number
+      seqOrder: number,
+      generatedImageBlock?: GeneratedImageBlock | null
     ): Promise<ChatMessageRecord | null> => {
       try {
+        let content = demoMessage.content
+
+        // Strip the persona-card block before saving. We can't use
+        // extractPersonaCardBlock here: its cleanup is anchored to end-of-string,
+        // but the visualActions block (which we must keep) is appended after the
+        // persona card. So remove the persona block wherever it sits.
+        content = content
+          .replace(
+            /\n?<<\s*AIDEE[-_ ]?PERSONA[-_ ]?CARD\s*>>[\s\S]*?<<\s*\/\s*AIDEE[-_ ]?PERSONA[-_ ]?CARD\s*>>/i,
+            ''
+          )
+          .trim()
+
+        // Append generated image block to content if provided
+        // (visualActions already embedded by appendDemoMessage)
+        if (generatedImageBlock) {
+          content = appendGeneratedImagesBlock({
+            payload: generatedImageBlock,
+            text: content,
+          })
+        }
+
         const response = await fetch('/api/project/message', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             projectId,
             role: demoMessage.role,
-            content: demoMessage.content,
+            content,
             seq_order: seqOrder,
             stageKey: demoMessage.stageKey,
+            generatedImageBlock,
           }),
         })
 
         if (!response.ok) {
-          console.error('[demo] failed to save message:', response.statusText)
+          const errorData = await response.json().catch(() => ({}))
+          console.error('[demo] failed to save message:', {
+            status: response.statusText,
+            error: errorData,
+            content: content.slice(0, 100),
+          })
           return null
         }
 
         const data = (await response.json()) as { message?: ChatMessageRecord }
+        console.log('[demo] message saved successfully:', data.message?.id)
         return data.message ?? null
       } catch (error) {
         console.error('[demo] error saving message:', error)
@@ -1988,10 +2061,21 @@ export function ProjectChatContainer({
         const demoMessage = scenario.messages[i]!
         const seqOrder = baseSeqOrder + i
 
-        // Save to database first
-        const savedRecord = await saveDemoMessage(demoMessage, seqOrder)
-        const record = savedRecord ?? buildDemoMessageRecord({
-          demoMessage,
+        // Enrich demoMessage with visualActions in content before building record
+        const enrichedMessage: DemoMessage = {
+          ...demoMessage,
+          content:
+            demoMessage.visualActions && demoMessage.visualActions.length > 0
+              ? appendDemoVisualActions({
+                  payload: demoMessage.visualActions as any,
+                  text: demoMessage.content,
+                })
+              : demoMessage.content,
+        }
+
+        // Build record for local state (don't save to DB yet)
+        const record = buildDemoMessageRecord({
+          demoMessage: enrichedMessage,
           index: seqOrder,
         })
 
@@ -2002,6 +2086,8 @@ export function ProjectChatContainer({
         const generateActions = (demoMessage.visualActions ?? []).filter(
           (action) => action.generate
         )
+        let finalGeneratedImageBlock: GeneratedImageBlock | null = null
+
         for (const action of generateActions) {
           const promptMap =
             demoVisualPrompts[scenario.id as keyof typeof demoVisualPrompts]
@@ -2011,11 +2097,63 @@ export function ProjectChatContainer({
               ]
             : undefined
           const queries = action.queries ?? []
-          // Need either a single prompt (promptKey lookup) or fixed queries
-          // (STEP 4 style moodboard).
-          if (!prompt && queries.length === 0) continue
+          const prompts = action.prompts ?? []
+
+          // Need either a single prompt (promptKey lookup), multiple prompts (direct array),
+          // or fixed queries (STEP 4 style moodboard).
+          if (!prompt && prompts.length === 0 && queries.length === 0) continue
 
           try {
+            // Handle direct prompts array (e.g., 4 design concepts)
+            if (prompts.length > 0) {
+              // Generate all prompts in parallel
+              const results = await Promise.all(
+                prompts.map((p) =>
+                  fetch('/api/demo/visual', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      visualType: action.type,
+                      prompt: p,
+                      count: 1,
+                    }),
+                  }).then((res) => res.json() as Promise<{ imageBlock?: GeneratedImageBlock }>)
+                )
+              )
+
+              // Merge all image blocks
+              const allImages: GeneratedImageBlock['images'] = []
+              let mergedBlock: GeneratedImageBlock | null = null
+              for (const result of results) {
+                if (result.imageBlock?.images) {
+                  allImages.push(...result.imageBlock.images)
+                  // Use first result as template for model/purpose
+                  if (!mergedBlock) {
+                    mergedBlock = result.imageBlock
+                  }
+                }
+              }
+
+              if (allImages.length > 0 && mergedBlock) {
+                finalGeneratedImageBlock = {
+                  ...mergedBlock,
+                  images: allImages,
+                }
+                setMessages((current) =>
+                  current.map((m) =>
+                    m.id === record.id
+                      ? {
+                          ...m,
+                          generatedImageBlock: finalGeneratedImageBlock,
+                        }
+                      : m
+                  )
+                )
+              }
+              continue
+            }
+
+            // Handle single prompt or queries
             const res = await fetch('/api/demo/visual', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -2054,6 +2192,7 @@ export function ProjectChatContainer({
             }
 
             if (payload.imageBlock) {
+              finalGeneratedImageBlock = payload.imageBlock
               setMessages((current) =>
                 current.map((m) =>
                   m.id === record.id
@@ -2066,6 +2205,16 @@ export function ProjectChatContainer({
             // Demo continues even if a single visual fails.
           }
         }
+
+        // Save message to database after visual processing
+        // Include generated image block if any
+        console.log('[playDemoScenario] saving message:', {
+          id: record.id,
+          hasVisualActions: Boolean(demoMessage.visualActions?.length),
+          hasGeneratedImageBlock: Boolean(finalGeneratedImageBlock),
+          imageCount: finalGeneratedImageBlock?.images.length ?? 0,
+        })
+        void saveDemoMessage(enrichedMessage, seqOrder, finalGeneratedImageBlock)
 
         await sleep(demoMessage.delayMs ?? 900)
       }
@@ -2082,15 +2231,30 @@ export function ProjectChatContainer({
         seqOrder = current.length
           ? Math.max(...current.map((m) => m.seq_order)) + 1
           : 0
+        console.log('[appendDemoMessage] calculated seqOrder:', seqOrder, 'for message:', demoMessage.id)
         return current
       })
-      const saved = await saveDemoMessage(demoMessage, seqOrder)
-      const record =
-        saved ?? buildDemoMessageRecord({ demoMessage, index: seqOrder })
+
+      // Enrich demoMessage with visualActions in content before building record
+      const enrichedMessage: DemoMessage = {
+        ...demoMessage,
+        content:
+          demoMessage.visualActions && demoMessage.visualActions.length > 0
+            ? appendDemoVisualActions({
+                payload: demoMessage.visualActions as any,
+                text: demoMessage.content,
+              })
+            : demoMessage.content,
+      }
+
+      const record = buildDemoMessageRecord({ demoMessage: enrichedMessage, index: seqOrder })
       setMessages((current) =>
         current.some((m) => m.id === record.id) ? current : [...current, record]
       )
       setStageKey((prev) => getLaterStageKey(prev, demoMessage.stageKey))
+
+      // Save to database (visualActions already in content)
+      await saveDemoMessage(enrichedMessage, seqOrder, undefined)
     },
     [saveDemoMessage, setMessages, setStageKey]
   )
@@ -2156,7 +2320,7 @@ export function ProjectChatContainer({
       const result = (await response.json()) as ChatApiResponse
 
       if (!response.ok) {
-        throw new Error(result.error || '채팅 응답 생성에 실패했습니다.')
+        throw new Error(result.error || 'Failed to generate chat response.')
       }
 
       const savedUserMessage = result.userMessage ?? null
@@ -2537,7 +2701,7 @@ export function ProjectChatContainer({
           error?: string
         } | null
         throw new Error(
-          result?.error || '프로젝트 기획안 다운로드에 실패했습니다.'
+          result?.error || 'Failed to download project plan.'
         )
       }
 
@@ -2586,7 +2750,7 @@ export function ProjectChatContainer({
         >
           <div className="mx-auto flex w-full max-w-[1150px] flex-col gap-[clamp(14px,1.85svh,20px)]">
             {visibleMessages.length > 0 ? (
-              visibleMessages.map((message) => (
+              [...visibleMessages].sort((a, b) => a.seq_order - b.seq_order).map((message) => (
                 <ChatBubble
                   key={message.id}
                   message={message}
@@ -2650,15 +2814,6 @@ export function ProjectChatContainer({
                     setMeshyModelUrl(url)
                     // Demo mode: once the 3D model is ready, append the scripted
                     // STEP 6 proposal bubble (one time).
-                    if (isDemoMode && !finalProposalAppendedRef.current) {
-                      const scenario = initialIdea
-                        ? findDemoScenarioFromText(initialIdea)
-                        : null
-                      if (scenario?.finalProposalMessage) {
-                        finalProposalAppendedRef.current = true
-                        void appendDemoMessage(scenario.finalProposalMessage)
-                      }
-                    }
                   }}
                   onOpenModelViewer={() => setModelViewerOpen(true)}
                   onSelectDesignRendering={setSelectedRenderingImage}
@@ -2674,7 +2829,7 @@ export function ProjectChatContainer({
               <div className="flex min-h-[420px] items-center justify-center text-sm font-medium text-zinc-400">
                 {isPending
                   ? ' '
-                  : '첫 메시지를 입력하면 프로젝트 requirements 기반 대화가 시작됩니다.'}
+                  : 'Enter your first message to start a requirements-based conversation.'}
               </div>
             )}
 
@@ -2792,7 +2947,7 @@ export function ProjectChatContainer({
               <button
                 type="submit"
                 disabled={isPending || !input.trim()}
-                aria-label="메시지 전송"
+                aria-label="Send message"
                 className="mb-0.5 flex h-[clamp(28px,2.96svh,32px)] w-[clamp(28px,2.96svh,32px)] shrink-0 items-center justify-center rounded-full text-stone-300 transition hover:bg-blue-50 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 <Image
@@ -3643,40 +3798,43 @@ function LibraryPlaceholderCard({ artifact }: { artifact: LibraryArtifact }) {
 
 const COMPANY_CATEGORIES = [
   {
-    title: '제품 디자인',
-    subtitle: '제품의 형태, 사용성, CMF, 렌더링을 구체화합니다.',
+    title: 'Product Design',
+    subtitle: "Refine the product's form, usability, CMF, and rendering.",
     partnerIndices: [0, 1, 2, 3],
   },
   {
-    title: '하드웨어 · 전자개발',
-    subtitle: 'LED 제어, 버튼, 배터리, 회로, 펌웨어 개발을 지원합니다.',
+    title: 'Hardware · Electronics',
+    subtitle:
+      'Support LED control, buttons, battery, circuitry, and firmware development.',
     partnerIndices: [4, 5, 6, 7],
   },
   {
-    title: '시제품 제작 · 제조',
-    subtitle: '외형 목업과 작동 시제품을 제작하고, 양산 가능성을 검토합니다.',
+    title: 'Prototyping · Manufacturing',
+    subtitle:
+      'Build appearance mockups and working prototypes, and review mass-production feasibility.',
     partnerIndices: [8, 9, 10, 11],
   },
   {
-    title: '브랜딩 · 패키지 · 출시',
-    subtitle: '브랜드 메시지, 패키지, 상세페이지, 크라우드펀딩 준비를 지원합니다.',
+    title: 'Branding · Package · Launch',
+    subtitle:
+      'Support brand messaging, packaging, detail pages, and crowdfunding preparation.',
     partnerIndices: [0, 3, 5, 7],
   },
 ] as const
 
 const DASHBOARD_PARTNERS = [
-  { accent: 'from-blue-100 to-indigo-200', image: '/assets/images/partner1png.png', name: '프로토랩스 코리아', rating: 4.8 },
-  { accent: 'from-cyan-100 to-sky-200', image: '/assets/images/partner2.png', name: '(주)테크윈 솔루션', rating: 4.6 },
-  { accent: 'from-violet-100 to-fuchsia-200', image: '/assets/images/partner3.png', name: '라인웍스 디렉션', rating: 4.7 },
-  { accent: 'from-[#DDF444]/30 to-[#DDF444]/70', image: '/assets/images/partner4.png', name: '픽셀 투 프로덕트', rating: 4.5 },
-  { accent: 'from-emerald-100 to-teal-200', image: '/assets/images/partner5.png', name: '오브젝트 랩', rating: 4.9 },
-  { accent: 'from-rose-100 to-pink-200', image: '/assets/images/partner6.png', name: '볼드앤브레이브', rating: 4.4 },
-  { accent: 'from-slate-100 to-slate-300', image: '/assets/images/partner7.png', name: '마인드브릿지 컨설팅', rating: 4.7 },
-  { accent: 'from-[#DDF444]/30 to-[#DDF444]/70', image: '/assets/images/partner8.png', name: '(주)맥스텍', rating: 4.6 },
-  { accent: 'from-orange-100 to-amber-200', image: '/assets/images/partner9.png', name: '오렌지 팩토리', rating: 4.8 },
-  { accent: 'from-zinc-100 to-zinc-200', image: '/assets/images/partner10.png', name: '퓨처 프로덕션', rating: 4.5 },
-  { accent: 'from-slate-100 to-gray-200', image: '/assets/images/partner11.png', name: '그린 하드웨어', rating: 4.7 },
-  { accent: 'from-stone-100 to-neutral-200', image: '/assets/images/partner12.png', name: '아이디어 플러스', rating: 4.6 },
+  { accent: 'from-blue-100 to-indigo-200', image: '/assets/images/partner1png.png', name: 'ProtoLabs Korea', rating: 4.8 },
+  { accent: 'from-cyan-100 to-sky-200', image: '/assets/images/partner2.png', name: 'Techwin Solution', rating: 4.6 },
+  { accent: 'from-violet-100 to-fuchsia-200', image: '/assets/images/partner3.png', name: 'Lineworks Direction', rating: 4.7 },
+  { accent: 'from-[#DDF444]/30 to-[#DDF444]/70', image: '/assets/images/partner4.png', name: 'Pixel to Product', rating: 4.5 },
+  { accent: 'from-emerald-100 to-teal-200', image: '/assets/images/partner5.png', name: 'Object Lab', rating: 4.9 },
+  { accent: 'from-rose-100 to-pink-200', image: '/assets/images/partner6.png', name: 'Bold & Brave', rating: 4.4 },
+  { accent: 'from-slate-100 to-slate-300', image: '/assets/images/partner7.png', name: 'Mindbridge Consulting', rating: 4.7 },
+  { accent: 'from-[#DDF444]/30 to-[#DDF444]/70', image: '/assets/images/partner8.png', name: 'Maxtech', rating: 4.6 },
+  { accent: 'from-orange-100 to-amber-200', image: '/assets/images/partner9.png', name: 'Orange Factory', rating: 4.8 },
+  { accent: 'from-zinc-100 to-zinc-200', image: '/assets/images/partner10.png', name: 'Future Production', rating: 4.5 },
+  { accent: 'from-slate-100 to-gray-200', image: '/assets/images/partner11.png', name: 'Green Hardware', rating: 4.7 },
+  { accent: 'from-stone-100 to-neutral-200', image: '/assets/images/partner12.png', name: 'Idea Plus', rating: 4.6 },
 ]
 
 function CompanyPartnerCard({ partner }: { partner: typeof DASHBOARD_PARTNERS[number] }) {
@@ -3723,6 +3881,34 @@ function CompanyPartnerCard({ partner }: { partner: typeof DASHBOARD_PARTNERS[nu
         </div>
       </div>
     </article>
+  )
+}
+
+// Inline partner-connection surface rendered directly below the final demo
+// message (mirrors CompanyModal's categories, but sits in the chat flow).
+function PartnerConnectionBlock() {
+  return (
+    <div className="w-full max-w-[780px] rounded-[20px] bg-slate-200 px-6 pb-6 pt-7 outline outline-[3px] outline-offset-[-3px] outline-zinc-200 sm:px-8">
+      <div className="flex flex-col gap-10">
+        {COMPANY_CATEGORIES.map((category) => (
+          <section key={category.title}>
+            <div className="mb-4">
+              <h2 className="font-['Pretendard'] text-2xl font-medium leading-tight text-black">
+                {category.title}
+              </h2>
+              <p className="mt-2 font-['Pretendard'] text-xs font-medium leading-5 text-zinc-600">
+                {category.subtitle}
+              </p>
+            </div>
+            <div className="grid grid-cols-4 gap-2.5">
+              {category.partnerIndices.map((idx) => (
+                <CompanyPartnerCard key={idx} partner={DASHBOARD_PARTNERS[idx]} />
+              ))}
+            </div>
+          </section>
+        ))}
+      </div>
+    </div>
   )
 }
 
@@ -3864,7 +4050,7 @@ function ProjectReportModal({
           <div className="relative flex flex-1 flex-col justify-center gap-2 bg-blue-600 px-8 py-6">
             <div className="flex items-baseline gap-3">
               <span className="font-['Pretendard'] text-2xl font-medium text-white">
-                제품 개발 기획안
+                Product Development Proposal
               </span>
               <span className="font-['Inter'] text-base font-medium text-white/70">
                 Project Report
@@ -3876,7 +4062,7 @@ function ProjectReportModal({
             <button
               type="button"
               onClick={onClose}
-              aria-label="닫기"
+              aria-label="Close"
               className="absolute right-4 top-4 flex h-7 w-7 items-center justify-center rounded-full text-xl text-white/70 transition hover:bg-white/10 hover:text-white"
             >
               ×
@@ -3888,28 +4074,28 @@ function ProjectReportModal({
         <div className="flex divide-x divide-zinc-200 overflow-y-auto" style={{ maxHeight: 'calc(90svh - 160px)' }}>
           {/* Left column: 프로젝트 개요 */}
           <div className="w-[45%] shrink-0 px-6 py-5">
-            <RfpSectionLabel>프로젝트 개요</RfpSectionLabel>
+            <RfpSectionLabel>Project Overview</RfpSectionLabel>
 
             <div className="flex items-start gap-3 py-1.5">
-              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">제품 정의</span>
+              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">Definition</span>
               <span className="font-['Pretendard'] text-[10px] font-normal leading-4 text-black">{data.oneLineDefinition}</span>
             </div>
             <RfpDivider />
 
             <div className="grid grid-cols-2">
-              <RfpRow label="목표" value={data.projectGoal} />
-              <RfpRow label="예산" value={data.budgetRange} />
+              <RfpRow label="Goal" value={data.projectGoal} />
+              <RfpRow label="Budget" value={data.budgetRange} />
             </div>
             <RfpDivider />
 
             <div className="grid grid-cols-2">
-              <RfpRow label="활용 목적" value={data.finalPurpose} />
-              <RfpRow label="기간" value={data.timeline} />
+              <RfpRow label="Purpose" value={data.finalPurpose} />
+              <RfpRow label="Timeline" value={data.timeline} />
             </div>
             <RfpDivider />
 
             <div className="flex items-start gap-3 py-1.5">
-              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">스타일 키워드</span>
+              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">Style</span>
               <div className="flex flex-wrap gap-1">
                 {data.styleKeywords.map((kw, i) => (
                   <span
@@ -3924,13 +4110,13 @@ function ProjectReportModal({
             <RfpDivider />
 
             <div className="flex items-start gap-3 py-1.5">
-              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">레퍼런스 요약</span>
+              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">Reference</span>
               <span className="font-['Pretendard'] text-[10px] font-normal leading-4 text-black">{data.referenceSummary}</span>
             </div>
             <RfpDivider />
 
             <div className="flex items-start gap-3 py-1.5">
-              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">제외 방향</span>
+              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">Avoid</span>
               <div className="flex flex-col gap-0.5">
                 {data.avoidDirections.map((d, i) => (
                   <span key={i} className="font-['Pretendard'] text-[10px] font-normal leading-4 text-black">{d}</span>
@@ -3941,31 +4127,31 @@ function ProjectReportModal({
 
           {/* Right column: 타겟 + 디자인 + 제작 */}
           <div className="flex-1 px-6 py-5">
-            <RfpSectionLabel>타겟과 핵심 가치</RfpSectionLabel>
+            <RfpSectionLabel>Target & Core Value</RfpSectionLabel>
 
-            <RfpRow label="메인 타겟" value={data.mainTarget} />
+            <RfpRow label="Main Target" value={data.mainTarget} />
             <RfpDivider />
             <div className="flex items-start gap-3 py-1.5">
-              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">사용 상황</span>
+              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">Usage</span>
               <span className="font-['Pretendard'] text-[10px] font-normal leading-4 text-black">{data.usageContext}</span>
             </div>
             <RfpDivider />
             <div className="flex items-start gap-3 py-1.5">
-              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">니즈</span>
+              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">Needs</span>
               <span className="font-['Pretendard'] text-[10px] font-normal leading-4 text-black">{data.coreNeeds}</span>
             </div>
             <RfpDivider />
             <div className="flex items-start gap-3 py-1.5">
-              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">핵심 가치</span>
+              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">Core Value</span>
               <span className="font-['Pretendard'] text-[10px] font-normal leading-4 text-black">{data.coreValue}</span>
             </div>
 
-            <RfpSubSectionLabel>디자인 아이디어</RfpSubSectionLabel>
+            <RfpSubSectionLabel>Design Concept</RfpSubSectionLabel>
 
-            <RfpRow label="크기" value={data.sizeOrForm} />
+            <RfpRow label="Size" value={data.sizeOrForm} />
             <RfpDivider />
             <div className="flex items-start gap-3 py-1.5">
-              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">필수 기능</span>
+              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">Features</span>
               <div className="flex flex-col gap-0.5">
                 {data.mustHaveFeatures.map((f, i) => (
                   <span key={i} className="font-['Pretendard'] text-[10px] font-normal leading-4 text-black">{f}</span>
@@ -3973,10 +4159,10 @@ function ProjectReportModal({
               </div>
             </div>
 
-            <RfpSubSectionLabel>제작 조건</RfpSubSectionLabel>
+            <RfpSubSectionLabel>Implementation</RfpSubSectionLabel>
 
             <div className="flex items-start gap-3 py-1.5">
-              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">구현 주의점</span>
+              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">Notes</span>
               <div className="flex flex-col gap-0.5">
                 {data.implementationNotes.map((n, i) => (
                   <span key={i} className="font-['Pretendard'] text-[10px] font-normal leading-4 text-black">{n}</span>
@@ -3985,7 +4171,7 @@ function ProjectReportModal({
             </div>
             <RfpDivider />
             <div className="flex items-start gap-3 py-1.5">
-              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">완료 기준 / 다음 액션</span>
+              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">Success / Next</span>
               <div className="flex flex-col gap-0.5">
                 {data.successCriteria.map((c, i) => (
                   <span key={i} className="font-['Pretendard'] text-[10px] font-normal leading-4 text-black">{c}</span>
@@ -3996,16 +4182,6 @@ function ProjectReportModal({
               </div>
             </div>
 
-            {/* Download button */}
-            <div className="mt-6 flex justify-end">
-              <button
-                type="button"
-                onClick={() => void onDownload()}
-                className="rounded-[30px] bg-blue-600 px-5 py-1.5 font-['Pretendard'] text-xs font-semibold text-white transition hover:bg-blue-700"
-              >
-                리포트 다운로드
-              </button>
-            </div>
           </div>
         </div>
       </article>
@@ -4213,20 +4389,20 @@ function BrandPositioningModal({
           <div className="absolute left-1/2 top-1/2 aspect-square w-[24%] -translate-x-1/2 -translate-y-1/2 rounded-full border border-indigo-300/30" />
           <div className="absolute left-1/2 top-1/2 aspect-square w-[12%] -translate-x-1/2 -translate-y-1/2 rounded-full border border-indigo-300/50" />
 
-          <div className="absolute inset-x-0 top-1/2 h-px bg-[#DDF444]" />
-          <div className="absolute inset-y-0 left-1/2 w-px bg-[#DDF444]" />
+          <div className="absolute inset-x-[8%] top-1/2 h-px bg-[#DDF444]" />
+          <div className="absolute inset-y-[8%] left-1/2 w-px bg-[#DDF444]" />
 
           <span className="absolute left-0 top-1/2 -translate-y-1/2 font-['Pretendard'] text-[clamp(9px,1.19cqw,14px)] font-medium text-stone-300">
-            프리미엄 가격
+            Premium Price
           </span>
           <span className="absolute right-0 top-1/2 -translate-y-1/2 font-['Pretendard'] text-[clamp(9px,1.19cqw,14px)] font-medium text-stone-300">
-            합리적인 가격
+            Affordable Price
           </span>
           <span className="absolute left-1/2 top-0 -translate-x-1/2 font-['Pretendard'] text-[clamp(9px,1.19cqw,14px)] font-medium text-stone-300">
-            라이프스타일 중심
+            Lifestyle-Focused
           </span>
           <span className="absolute bottom-0 left-1/2 -translate-x-1/2 font-['Pretendard'] text-[clamp(9px,1.19cqw,14px)] font-medium text-stone-300">
-            기능 중심
+            Feature-Focused
           </span>
 
           <div className="absolute inset-[7%_10%] grid grid-cols-2 grid-rows-2 gap-x-[18%] gap-y-[14%]">
@@ -4495,7 +4671,7 @@ function ModelViewerModal({
       className="absolute inset-0 z-[80] flex items-center justify-center bg-neutral-900/80 p-4 sm:p-6 lg:p-10"
       role="dialog"
       aria-modal="true"
-      aria-label="3D 모델 뷰어"
+      aria-label="3D Model Viewer"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose()
       }}
@@ -4504,10 +4680,10 @@ function ModelViewerModal({
         <header className="flex shrink-0 items-center justify-between gap-3 px-6 py-4">
           <div>
             <h2 className="font-['Pretendard'] text-lg font-semibold text-white">
-              3D 모델
+              3D Model
             </h2>
             <p className="font-['Pretendard'] text-xs text-zinc-400">
-              드래그로 회전 · 스크롤로 확대/축소 · 우클릭 드래그로 이동
+              Drag to rotate · Scroll to zoom · Right-click drag to pan
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -4516,12 +4692,12 @@ function ModelViewerModal({
               download
               className="rounded-[30px] bg-white/10 px-4 py-1.5 font-['Pretendard'] text-xs font-semibold text-white transition hover:bg-white/20"
             >
-              GLB 다운로드
+              Download GLB
             </a>
             <button
               type="button"
               onClick={onClose}
-              aria-label="닫기"
+              aria-label="Close"
               className="flex h-8 w-8 items-center justify-center rounded-full bg-black/40 font-['Inter'] text-xl text-white transition hover:bg-black/70"
             >
               ×
@@ -4540,13 +4716,13 @@ function ModelViewerModal({
                 download
                 className="rounded-[30px] bg-[#DDF444] px-5 py-2 font-['Pretendard'] text-xs font-semibold text-black"
               >
-                모델 파일 직접 다운로드
+                Download Model File
               </a>
             </div>
           ) : !ready ? (
             <div className="flex h-full w-full items-center justify-center">
               <span className="font-['Pretendard'] text-sm text-zinc-400">
-                3D 뷰어 로딩 중...
+                Loading 3D Viewer...
               </span>
             </div>
           ) : (
@@ -4590,11 +4766,11 @@ function PersonaCardFull({ data }: { data: PersonaCardData }) {
     '관계 키워드 정리 필요'
   )
   const demographicLabels = [
-    '이름 & 나이',
-    '상태',
-    '주요 환경',
-    '생활 패턴',
-    '핵심 특징',
+    'Name & Age',
+    'Status',
+    'Environment',
+    'Lifestyle',
+    'Key Traits',
   ]
   const tags = problemNeeds
     .flatMap((item) => item.split(/,|\/|·/))
@@ -4899,15 +5075,7 @@ function KeywordCardModal({
 }
 
 function getKeywordCardSubtitle(data: KeywordCardData) {
-  const [first, second, third] = data.keywords
-
-  if (first && second && third) {
-    return `${first}, ${second}, ${third} 중심의 경험 방향`
-  }
-
-  return data.kind === 'experience_keywords'
-    ? '사용자가 느끼는 경험 가치를 정리한 키워드'
-    : '제품과 사용자 맥락의 관계를 정리한 키워드'
+  return data.description
 }
 
 function KeywordCard({ data }: { data: KeywordCardData }) {
@@ -5160,7 +5328,7 @@ function StyleKeywordPickerCard({
           {english}
         </span>
         <span className="font-['Inter'] text-[9px] font-semibold leading-7 text-zinc-400">
-          최대 5개까지 선택
+          Up to 5 selections
         </span>
       </div>
       <div className="flex flex-col gap-3">
@@ -5554,17 +5722,33 @@ function ChatBubble({
     setMeshyError(null)
 
     try {
-      const mimeType = selectedImage.startsWith('data:image/png')
-        ? 'image/png'
-        : 'image/jpeg'
+      // Check if image is a URL or base64 data URL
+      const isDataUrl = selectedImage.startsWith('data:')
+      const isHttpUrl = selectedImage.startsWith('http://') || selectedImage.startsWith('https://')
+
+      let meshyPayload: Record<string, string>
+
+      if (confirmedThumbnailUrl) {
+        // Use confirmed thumbnail if available
+        meshyPayload = { thumbnailUrl: confirmedThumbnailUrl, projectId }
+      } else if (isHttpUrl) {
+        // Direct URL from API — use as thumbnail
+        meshyPayload = { thumbnailUrl: selectedImage, projectId }
+      } else if (isDataUrl) {
+        // Base64 data URL — extract mime type and send as imageBase64
+        const mimeType = selectedImage.startsWith('data:image/png')
+          ? 'image/png'
+          : 'image/jpeg'
+        meshyPayload = { imageBase64: selectedImage, mimeType, projectId }
+      } else {
+        // Fallback: treat as base64 string without data URL prefix
+        meshyPayload = { imageBase64: selectedImage, mimeType: 'image/jpeg', projectId }
+      }
+
       const res = await fetch('/api/meshy', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(
-          confirmedThumbnailUrl
-            ? { thumbnailUrl: confirmedThumbnailUrl, projectId }
-            : { imageBase64: selectedImage, mimeType, projectId }
-        ),
+        body: JSON.stringify(meshyPayload),
       })
       const payload = (await res.json().catch(() => null)) as {
         error?: string
@@ -5575,7 +5759,7 @@ function ChatBubble({
       if (!res.ok || !payload?.taskId) {
         const stageLabel = payload?.stage ? ` (${payload.stage})` : ''
         throw new Error(
-          `${payload?.error || '3D 작업을 시작하지 못했습니다.'}${stageLabel}`
+          `${payload?.error || 'Failed to start 3D task.'}${stageLabel}`
         )
       }
 
@@ -5616,6 +5800,8 @@ function ChatBubble({
   const keywordCards = !isUser
     ? extractKeywordCardsData(rfpBlock.cleanedText)
     : []
+  const hasPartnerConnection =
+    !isUser && /<<\s*AIDEE[-_ ]?PARTNER[-_ ]?CONNECTION\s*>>/i.test(message.content)
   const shouldRenderGeneratedImages =
     Boolean(message.generatedImageBlock?.images.length) &&
     message.generatedImageBlock?.purpose !== 'persona' &&
@@ -5660,7 +5846,7 @@ function ChatBubble({
         const res = await fetch(`/api/meshy?taskId=${meshyTaskId}`)
         const task = await res.json()
         if (!res.ok) {
-          setMeshyError(task.error || '3D 작업 상태를 확인하지 못했습니다.')
+          setMeshyError(task.error || 'Could not check 3D task status.')
           setMeshyStatus('FAILED')
           return
         }
@@ -5701,7 +5887,8 @@ function ChatBubble({
     keywordCards.length === 0 &&
     !message.personaCardBlock &&
     !shouldRenderGeneratedImages &&
-    !rfpBlock.rfp
+    !rfpBlock.rfp &&
+    !hasPartnerConnection
   ) {
     return null
   }
@@ -5780,7 +5967,7 @@ function ChatBubble({
                       // the demo has no scripted follow-up, so skip that to avoid
                       // a stray live response.
                       if (!isDemoMode) {
-                        onChoice('스타일 레퍼런스를 선택하고 무드보드를 만들었어요.')
+                        onChoice('I selected a style reference and created a moodboard.')
                       }
                     }}
                   />
@@ -5788,7 +5975,7 @@ function ChatBubble({
               ) : message.generatedImageBlock.purpose === 'design' ? (
                 <div className="flex w-full max-w-[600px] flex-col gap-3 pt-1">
                   <p className="font-['Pretendard'] text-xs font-medium text-neutral-400">
-                    생성된 이미지 {message.generatedImageBlock.images.length}장
+                    Generated Images ({message.generatedImageBlock.images.length})
                   </p>
                   <div className="grid aspect-[25/16] w-full grid-cols-2 grid-rows-2 overflow-hidden rounded-[20px]">
                     {message.generatedImageBlock.images.map((image, index) => (
@@ -5835,7 +6022,7 @@ function ChatBubble({
                   {selectedDesignIndex !== null ? (
                     <div className="mt-4 flex w-full flex-col gap-3">
                       <p className="font-['Pretendard'] text-sm font-medium leading-7 text-stone-300">
-                        생성된 이미지 1장
+                        Selected Design (1)
                       </p>
                       <button
                         type="button"
@@ -5847,7 +6034,7 @@ function ChatBubble({
                           )
                         }
                         className="relative aspect-[25/16] w-full overflow-hidden rounded-[20px] bg-zinc-300"
-                        aria-label="선택한 디자인 시안 크게 보기"
+                        aria-label="View selected design concept"
                       >
                         <Image
                           src={
@@ -5873,7 +6060,7 @@ function ChatBubble({
                           }
                           className="min-w-24 rounded-[30px] bg-blue-600 px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-white transition hover:bg-blue-700 disabled:bg-neutral-500 disabled:opacity-60"
                         >
-                          수정하기
+                          Edit
                         </button>
                         <button
                           type="button"
@@ -5912,7 +6099,7 @@ function ChatBubble({
                               : 'bg-[#DDF444] text-black hover:brightness-95 disabled:opacity-40'
                           }`}
                         >
-                          확정하기
+                          Confirm
                         </button>
                       </div>
 
@@ -5931,13 +6118,13 @@ function ChatBubble({
                             className="inline-flex items-center gap-1 rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
                           >
                             {meshyStatus === 'uploading'
-                              ? '업로드 중'
+                              ? 'Uploading'
                               : meshyStatus === 'PENDING' ||
                                   meshyStatus === 'IN_PROGRESS'
-                                ? '3D 생성 중'
+                                ? '3D Generating'
                                 : meshyStatus === 'SUCCEEDED'
-                                  ? '시각화 완료'
-                                  : '시각화 하기'}
+                                  ? 'Visualization Complete'
+                                  : 'Visualize'}
                             <Image
                               src="/assets/icons/chat/visualize.svg"
                               alt=""
@@ -5953,7 +6140,7 @@ function ChatBubble({
                       {(meshyStatus === 'PENDING' ||
                         meshyStatus === 'IN_PROGRESS') && (
                         <span className="text-right font-['Pretendard'] text-xs text-zinc-500">
-                          Meshy AI 처리 중...
+                          Meshy AI Processing...
                         </span>
                       )}
                       {meshyStatus === 'FAILED' && meshyError ? (
@@ -5978,25 +6165,25 @@ function ChatBubble({
                         type="button"
                         disabled={disabled}
                         onClick={() =>
-                          onChoice('현재 디자인 시안을 수정해서 다시 보여주세요')
+                          onChoice('Please refine the current design concept and show it again')
                         }
                         className="rounded-[30px] bg-blue-600 px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-white disabled:opacity-50"
                       >
-                        다시 생성하기
+                        Regenerate
                       </button>
                     </div>
                   )}
                   {meshyStatus === 'SUCCEEDED' && (meshyThumbnail || meshyModelUrl) && (
                     <div className="flex flex-col gap-2">
                       <span className="font-['Pretendard'] text-xs font-semibold text-zinc-600">
-                        3D 모델 미리보기
+                        3D Model Preview
                       </span>
                       {meshyModelUrl ? (
                         <button
                           type="button"
                           onClick={onOpenModelViewer}
                           className="group relative h-40 w-40 overflow-hidden rounded-lg bg-zinc-100"
-                          aria-label="3D 모델 뷰어 열기"
+                          aria-label="Open 3D Model Viewer"
                         >
                           {meshyThumbnail ? (
                             <Image
@@ -6016,7 +6203,7 @@ function ChatBubble({
                               <path d="m2 17 10 5 10-5" />
                               <path d="m2 12 10 5 10-5" />
                             </svg>
-                            돌려보기
+                            Rotate
                           </span>
                         </button>
                       ) : meshyThumbnail ? (
@@ -6055,7 +6242,7 @@ function ChatBubble({
                           type="button"
                           disabled={disabled}
                           onClick={() =>
-                            onChoice(`${index + 1}번 스타일 레퍼런스를 선택할게요`)
+                            onChoice(`I'll select style reference ${index + 1}`)
                           }
                           className="rounded-full border border-zinc-200 bg-white px-4 py-1.5 font-['Pretendard'] text-xs font-semibold text-neutral-700 shadow-sm transition hover:border-blue-300 hover:bg-blue-50 disabled:opacity-50"
                         >
@@ -6124,18 +6311,18 @@ function ChatBubble({
                     ({ key, korean }) =>
                       `${korean}: ${(selectedStyleKeywords[key] ?? []).join(', ')}`
                   )
-                  onChoice(`스타일 키워드를 선택했습니다.\n${lines.join('\n')}`)
+                  onChoice(`I selected the style keywords.\n${lines.join('\n')}`)
                 }}
                 className="rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
               >
-                선택 완료
+                Done
               </button>
             </div>
           ) : null}
           {isStyleKeywordsSubmitted ? (
             <div className="flex w-full justify-end">
               <span className="rounded-[30px] bg-zinc-200 px-6 py-[5px] font-['Pretendard'] text-sm font-semibold text-zinc-500">
-                키워드 선택 완료 ✓
+                Keywords Selected ✓
               </span>
             </div>
           ) : null}
@@ -6213,7 +6400,7 @@ function ChatBubble({
           {isMoodSelected ? (
             <div className="flex w-full justify-end">
               <span className="rounded-[30px] bg-zinc-200 px-6 py-[5px] font-['Pretendard'] text-sm font-semibold text-zinc-500">
-                스타일 분위기 선택 완료 ✓
+                Style Mood Selected ✓
               </span>
             </div>
           ) : null}
@@ -6242,10 +6429,10 @@ function ChatBubble({
             <button
               type="button"
               disabled={disabled}
-              onClick={() => onChoice('페르소나 카드 다시 생성하기')}
+              onClick={() => onChoice('Regenerate Persona Card')}
               className="min-w-24 rounded-[30px] bg-blue-600 px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-white disabled:opacity-50"
             >
-              다시 생성하기
+              Regenerate
             </button>
             <button
               type="button"
@@ -6257,7 +6444,7 @@ function ChatBubble({
                   : 'bg-[#DDF444] text-black disabled:opacity-50'
               }`}
             >
-              확정하기
+              Confirm
             </button>
           </div>
 
@@ -6272,7 +6459,7 @@ function ChatBubble({
               }
               className="inline-flex items-center gap-1 rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
             >
-              시각화 하기
+              Visualize
               <Image
                 src="/assets/icons/chat/visualize.svg"
                 alt=""
@@ -6322,12 +6509,12 @@ function ChatBubble({
               disabled={disabled}
               onClick={() =>
                 onChoice(
-                  `${getDirectionArtifactLabel(directionArtifactKind)} 다시 생성하기`
+                  `Regenerate ${getDirectionArtifactLabel(directionArtifactKind)}`
                 )
               }
               className="min-w-24 rounded-[30px] bg-blue-600 px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-white disabled:opacity-50"
             >
-              다시 생성하기
+              Regenerate
             </button>
             <button
               type="button"
@@ -6343,7 +6530,7 @@ function ChatBubble({
                   : 'bg-[#DDF444] text-black disabled:opacity-50'
               }`}
             >
-              확정하기
+              Confirm
             </button>
           </div>
 
@@ -6361,7 +6548,7 @@ function ChatBubble({
               }
               className="inline-flex items-center gap-1 rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
             >
-              시각화 하기
+              Visualize
               <Image
                 src="/assets/icons/chat/visualize.svg"
                 alt=""
@@ -6380,7 +6567,7 @@ function ChatBubble({
           <button
             type="button"
             disabled={disabled}
-            onClick={() => onChoice('프로세스 확인하기')}
+            onClick={() => onChoice('Review Process')}
             className="rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
           >
             프로세스 확인하기
@@ -6395,21 +6582,21 @@ function ChatBubble({
               onClick={() =>
                 onChoice(
                   isStep1EntryPrompt(displayContent)
-                    ? 'STEP 1 시작할게요'
-                    : '다음 단계로 진행할게요'
+                    ? 'Start STEP 1'
+                    : 'Proceed to Next Step'
                 )
               }
               className="rounded-[30px] bg-blue-600 px-[clamp(16px,1.85svh,20px)] py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-white disabled:opacity-50"
             >
-              {isStep1EntryPrompt(displayContent) ? 'STEP 1 시작할게요' : '다음 단계로'}
+              {isStep1EntryPrompt(displayContent) ? 'Start STEP 1' : 'Next Step'}
             </button>
             <button
               type="button"
               disabled={disabled}
-              onClick={() => onChoice('더 하고 싶은 말이 있어요')}
+              onClick={() => onChoice('I have more to add')}
               className="rounded-[30px] bg-[#DDF444] px-[clamp(16px,1.85svh,20px)] py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
             >
-              더 하고 싶은 말이 있어요
+              I have more to add
             </button>
           </>
         ) : null}
@@ -6417,24 +6604,30 @@ function ChatBubble({
 
       </div>
 
+      {hasPartnerConnection ? (
+        <div className="mt-4 flex w-full justify-start">
+          <PartnerConnectionBlock />
+        </div>
+      ) : null}
+
       {rfpBlock.rfp && latestRfpMessageId === message.id && !isDemoMode ? (
         <div className="flex w-full flex-col items-end gap-3">
           <div className="flex items-center justify-end gap-3">
             <button
               type="button"
               disabled={disabled}
-              onClick={() => onChoice('프로젝트 기획안 수정하기')}
+              onClick={() => onChoice('Revise Project Plan')}
               className="min-w-24 rounded-[30px] bg-blue-600 px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-white transition hover:bg-blue-700 disabled:opacity-50"
             >
-              다시 생성하기
+              Regenerate
             </button>
             <button
               type="button"
               disabled={disabled || hasConfirmedRfp}
-              onClick={() => onChoice('프로젝트 기획안 확정하기')}
+              onClick={() => onChoice('Confirm Project Plan')}
               className="min-w-24 rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-black transition hover:brightness-95 disabled:opacity-50"
             >
-              확정하기
+              Confirm
             </button>
           </div>
 
@@ -6445,7 +6638,7 @@ function ChatBubble({
               onClick={() => onVisualizeRfp(message.id, rfpBlock.rfp!)}
               className="inline-flex items-center gap-1 rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
             >
-              시각화 하기
+              Visualize
               <Image
                 src="/assets/icons/chat/visualize.svg"
                 alt=""
@@ -6476,10 +6669,10 @@ function ChatBubble({
             <button
               type="button"
               disabled={disabled}
-              onClick={() => onChoice('협력업체 다시 추천해주세요')}
+              onClick={() => onChoice('Recommend partners again')}
               className="min-w-24 rounded-[30px] bg-blue-600 px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-white transition hover:bg-blue-700 disabled:opacity-50"
             >
-              다시 생성하기
+              Regenerate
             </button>
             <button
               type="button"
@@ -6487,7 +6680,7 @@ function ChatBubble({
               onClick={() => onConfirmCompany(message.id)}
               className="min-w-24 rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-black transition hover:brightness-95 disabled:opacity-50"
             >
-              확정하기
+              Confirm
             </button>
           </div>
 
@@ -6498,7 +6691,7 @@ function ChatBubble({
               onClick={onVisualizeCompany}
               className="inline-flex items-center gap-1 rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
             >
-              시각화 하기
+              Visualize
               <Image
                 src="/assets/icons/chat/visualize.svg"
                 alt=""

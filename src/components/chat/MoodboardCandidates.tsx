@@ -38,7 +38,7 @@ export function MoodboardCandidates({
         method: 'POST',
       })
 
-      if (!res.ok) throw new Error('무드보드 생성 실패')
+      if (!res.ok) throw new Error('Failed to generate moodboard')
       const data = (await res.json()) as { board: MoodboardBoardImage[] }
       onBoardReady(data.board)
     } catch {
@@ -49,7 +49,7 @@ export function MoodboardCandidates({
   return (
     <div className="mt-4 flex flex-col gap-3">
       <p className="font-['Pretendard'] text-sm font-semibold text-zinc-700">
-        스타일 레퍼런스 후보 3장 — 하나를 선택하면 무드보드가 생성됩니다.
+        Select one of the 3 style reference candidates to generate a moodboard.
       </p>
       <div className="grid grid-cols-3 gap-2">
         {candidates.map((img, i) => (
@@ -57,7 +57,7 @@ export function MoodboardCandidates({
             <div className="relative aspect-video w-full overflow-hidden rounded-lg">
               <Image
                 src={img.url}
-                alt={`스타일 레퍼런스 ${i + 1}`}
+                alt={`Style Reference ${i + 1}`}
                 fill
                 unoptimized
                 className="object-cover"
@@ -88,7 +88,7 @@ export function MoodboardCandidates({
               onClick={() => void handleSelect(img)}
               className="rounded-full bg-zinc-900 px-3 py-1 font-['Pretendard'] text-xs font-semibold text-white transition hover:bg-zinc-700 disabled:opacity-50"
             >
-              {selecting === img.id ? '생성 중...' : `${i + 1}번 선택`}
+              {selecting === img.id ? 'Generating...' : `Select #${i + 1}`}
             </button>
           </div>
         ))}

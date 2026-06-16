@@ -66,7 +66,7 @@ export function MoodboardModal({ isOpen, onClose, projectId }: Props) {
       >
         <div className="flex items-center justify-between border-b border-zinc-100 px-6 py-4">
           <h2 className="font-['Pretendard'] text-base font-bold text-zinc-900">
-            무드보드
+            Moodboard
           </h2>
           <button
             type="button"
@@ -81,13 +81,13 @@ export function MoodboardModal({ isOpen, onClose, projectId }: Props) {
           {loading ? (
             <div className="flex h-40 items-center justify-center">
               <span className="font-['Pretendard'] text-sm text-zinc-400">
-                불러오는 중...
+                Loading...
               </span>
             </div>
           ) : images.length === 0 ? (
             <div className="flex h-40 items-center justify-center">
               <span className="font-['Pretendard'] text-sm text-zinc-400">
-                무드보드 이미지가 없습니다.
+                No moodboard images available.
               </span>
             </div>
           ) : (
@@ -97,7 +97,7 @@ export function MoodboardModal({ isOpen, onClose, projectId }: Props) {
                   <div className="relative aspect-video w-full overflow-hidden rounded-lg">
                     <Image
                       src={img.url}
-                      alt={`무드보드 ${i + 1}`}
+                      alt={`Moodboard ${i + 1}`}
                       fill
                       unoptimized
                       className="object-cover"

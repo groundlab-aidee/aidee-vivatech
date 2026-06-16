@@ -32,7 +32,7 @@ function resolveLoginLanguage(
     ?.trim()
     .toLowerCase()
 
-  return preferredLanguage?.startsWith('en') ? 'ENG' : 'KOR'
+  return preferredLanguage?.startsWith('ko') ? 'KOR' : 'ENG'
 }
 
 function getSafeNextPath(next: string | string[] | undefined) {

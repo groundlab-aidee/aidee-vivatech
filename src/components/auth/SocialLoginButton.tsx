@@ -33,7 +33,7 @@ export function SocialLoginButton({
   provider,
   next = '/workspace',
   disabled = false,
-  language = 'KOR',
+  language = 'ENG',
 }: SocialLoginButtonProps) {
   const config = providerConfig[provider]
 

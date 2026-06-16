@@ -260,6 +260,19 @@ export async function POST(request: Request) {
     }
 
     const generated = await generateProjectInfo(survey)
+
+    // Override title for demo scenarios
+    const ideaText = survey.idea?.trim()
+    const demoScenario = ideaText ? findDemoScenarioFromText(ideaText) : null
+
+    const demoTitleOverrides: Record<string, string> = {
+      'vivatech_demo_2': 'Desk Speaker as Design Object',
+    }
+
+    const projectTitle = demoScenario
+      ? (demoTitleOverrides[demoScenario.id] || generated.title)
+      : generated.title
+
     const requirements = {
       generated,
       source: 'workspace_survey',
@@ -270,7 +283,7 @@ export async function POST(request: Request) {
       .from('projects')
       .insert({
         requirements,
-        title: generated.title,
+        title: projectTitle,
         user_id: user.id,
       })
       .select('id, title, created_at, requirements')
@@ -299,10 +312,7 @@ export async function POST(request: Request) {
     }
 
     // Don't save user message if demo scenario is triggered
-    const ideaText = survey.idea?.trim()
-    const isDemoScenario = ideaText ? findDemoScenarioFromText(ideaText) : null
-
-    if (ideaText && !isDemoScenario) {
+    if (ideaText && !demoScenario) {
       try {
         await insertProjectMessage({
           content: ideaText,

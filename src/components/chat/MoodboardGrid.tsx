@@ -24,7 +24,7 @@ export function MoodboardGrid({ images, onOpenModal }: Props) {
     <div className="mt-4 flex flex-col gap-3">
       <div className="flex items-center justify-between">
         <p className="font-['Pretendard'] text-sm font-semibold text-zinc-700">
-          무드보드
+          Moodboard
         </p>
         {onOpenModal ? (
           <button
@@ -32,7 +32,7 @@ export function MoodboardGrid({ images, onOpenModal }: Props) {
             onClick={onOpenModal}
             className="font-['Pretendard'] text-xs text-blue-600 hover:underline"
           >
-            전체 보기
+            View All
           </button>
         ) : null}
       </div>
@@ -42,7 +42,7 @@ export function MoodboardGrid({ images, onOpenModal }: Props) {
             <div className="relative aspect-video w-full overflow-hidden rounded-md">
               <Image
                 src={img.url}
-                alt={`무드보드 ${i + 1}`}
+                alt={`Moodboard ${i + 1}`}
                 fill
                 unoptimized
                 className="object-cover"

@@ -28,6 +28,16 @@ export type DemoVisualAction = {
   // widget. When present, the demo fetches one image per query (instead of the
   // single-query `promptKey` lookup) and renders them as moodboard candidates.
   queries?: string[]
+  // Direct prompt array for multi-image generation (e.g. 4 design concepts)
+  prompts?: string[]
+  count?: number
+  // Pre-defined card data to override content parsing (for keyword cards, etc.)
+  cardData?: {
+    title?: string
+    description?: string
+    keywords?: string[]
+    [key: string]: unknown
+  }
 }
 
 export type DemoMessage = {

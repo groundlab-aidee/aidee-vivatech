@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 
+import { appendGeneratedImagesBlock, type GeneratedImageBlock } from '@/lib/chat/image-blocks'
 import { insertProjectMessage } from '@/lib/chat/persistence'
 import type { StageKey } from '@/lib/chat/stages'
 import { createClient } from '@/lib/supabase/server'
@@ -10,6 +11,7 @@ type SaveMessageRequest = {
   content: string
   seq_order: number
   stageKey: StageKey
+  generatedImageBlock?: GeneratedImageBlock | null
 }
 
 export async function POST(request: NextRequest) {
@@ -24,7 +26,15 @@ export async function POST(request: NextRequest) {
     }
 
     const body = (await request.json()) as SaveMessageRequest
-    const { projectId, role, content, seq_order: seqOrder, stageKey } = body
+    const { projectId, role, content, seq_order: seqOrder, stageKey, generatedImageBlock } = body
+
+    console.log('[api/project/message] Received:', {
+      projectId,
+      role,
+      seqOrder,
+      hasContent: !!content,
+      hasImageBlock: !!generatedImageBlock,
+    })
 
     // Verify project ownership
     const { data: project, error: projectError } = await supabase
@@ -38,9 +48,18 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Project not found' }, { status: 404 })
     }
 
+    // Append generated image block to content if provided
+    let finalContent = content
+    if (generatedImageBlock) {
+      finalContent = appendGeneratedImagesBlock({
+        payload: generatedImageBlock,
+        text: content,
+      })
+    }
+
     // Insert message using existing persistence function
     const message = await insertProjectMessage({
-      content,
+      content: finalContent,
       projectId,
       role,
       seqOrder,
@@ -49,11 +68,16 @@ export async function POST(request: NextRequest) {
       userId: user.id,
     })
 
+    console.log('[api/project/message] Message saved:', message?.id)
     return NextResponse.json({ message })
   } catch (error) {
-    console.error('[api/project/message] error:', error)
+    const errorMessage = error instanceof Error ? error.message : String(error)
+    console.error('[api/project/message] error:', {
+      message: errorMessage,
+      stack: error instanceof Error ? error.stack : undefined,
+    })
     return NextResponse.json(
-      { error: 'Failed to save message' },
+      { error: errorMessage || 'Failed to save message' },
       { status: 500 }
     )
   }

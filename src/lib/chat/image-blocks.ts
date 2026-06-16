@@ -96,3 +96,45 @@ export function extractGeneratedImagesBlock(text: string) {
     return { cleanedText, imageBlock: null }
   }
 }
+
+export type DemoVisualActionData = {
+  type: string
+  libraryTitle?: string
+  cardData?: {
+    title: string
+    description: string
+    keywords: string[]
+  }
+  [key: string]: unknown
+}
+
+export function appendDemoVisualActions({
+  payload,
+  text,
+}: {
+  payload: DemoVisualActionData[]
+  text: string
+}) {
+  return `${text}
+
+<<AIDEE_VISUAL_ACTIONS>>
+${JSON.stringify(payload)}
+<</AIDEE_VISUAL_ACTIONS>>`
+}
+
+export function extractDemoVisualActions(text: string): DemoVisualActionData[] {
+  const match = text.match(
+    /<<\s*AIDEE[-_ ]?VISUAL[-_ ]?ACTIONS\s*>>[\s\n]*([\s\S]*?)[\s\n]*<<\s*\/\s*AIDEE[-_ ]?VISUAL[-_ ]?ACTIONS\s*>>/i
+  )
+
+  if (!match) {
+    return []
+  }
+
+  try {
+    const parsed = JSON.parse(match[1])
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
