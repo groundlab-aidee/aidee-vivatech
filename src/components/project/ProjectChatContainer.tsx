@@ -17,7 +17,10 @@ import {
   defaultProjectChatSidebarState,
   useProjectChatSidebar,
 } from '@/components/app-shell/ProjectChatSidebarContext'
-import { useAppLanguage } from '@/components/i18n/AppLanguageContext'
+import {
+  useAppLanguage,
+  type AppLanguage,
+} from '@/components/i18n/AppLanguageContext'
 import { ProjectFavoriteButton } from '@/components/project/ProjectFavoriteButton'
 import { ProjectMoreMenu } from '@/components/project/ProjectMoreMenu'
 import {
@@ -207,6 +210,55 @@ const EXPERT_MENU_ITEMS: Array<{
   },
 ]
 
+const CHAT_COPY = {
+  ENG: {
+    chatError: 'Failed to generate a chat response.',
+    close: 'Close',
+    confirm: 'Confirm',
+    downloadError: 'Failed to download the project plan.',
+    downloadReport: 'Download report',
+    empty: 'Enter your first message to start a conversation based on the project requirements.',
+    generateConcepts: 'Generate concepts',
+    hint: 'View hints',
+    moreToAdd: 'I have more to add',
+    nextStep: 'Next step',
+    process: 'Review process',
+    regenerate: 'Regenerate',
+    select: 'Select',
+    send: 'Send message',
+    startStep1: 'Start STEP 1',
+    visualize: 'Visualize',
+    viewPartners: 'View partners',
+  },
+  KOR: {
+    chatError: '채팅 응답 생성에 실패했습니다.',
+    close: '닫기',
+    confirm: '확정하기',
+    downloadError: '프로젝트 기획안 다운로드에 실패했습니다.',
+    downloadReport: '리포트 다운로드',
+    empty: '첫 메시지를 입력하면 프로젝트 requirements 기반 대화가 시작됩니다.',
+    generateConcepts: '시안 생성하기',
+    hint: '힌트 보기',
+    moreToAdd: '더 하고 싶은 말이 있어요',
+    nextStep: '다음 단계로',
+    process: '프로세스 확인하기',
+    regenerate: '다시 생성하기',
+    select: '선택하기',
+    send: '메시지 전송',
+    startStep1: 'STEP 1 시작할게요',
+    visualize: '시각화 하기',
+    viewPartners: '협력업체 보기',
+  },
+} as const
+
+const EXPERT_INPUT_COPY: Record<ExpertKey, Record<AppLanguage, string>> = {
+  aidee: { ENG: 'Ask Aidee', KOR: 'Aidee에게 물어보세요' },
+  planner: { ENG: 'Ask the strategist', KOR: '기획 전략가에게 물어보세요' },
+  style_designer: { ENG: 'Ask the designer', KOR: '디자이너에게 물어보세요' },
+  engineer: { ENG: 'Ask the engineer', KOR: '엔지니어에게 물어보세요' },
+  marketer: { ENG: 'Ask the marketer', KOR: '마케터에게 물어보세요' },
+}
+
 const STAGE_EXPERTS: Record<StageKey, ExpertKey[]> = {
   step_0_start: ['planner'],
   step_1_idea: ['planner'],
@@ -244,18 +296,18 @@ function extractProjectDirectionCard(content: string): ProjectDirectionData | nu
     return null
   }
 
-  const fieldLabels = [
-    '프로젝트명',
-    '프로젝트 목표',
-    '제품 카테고리',
-    '예산/기간 범위',
-    '예상 크기',
-    '주요 기능',
-    '최종 활용 목적',
-    '아이디어 정리',
-    '참고 자료',
-  ]
-  const labelSet = new Set(fieldLabels)
+  const fieldAliases: Record<string, keyof ProjectDirectionData> = {
+    프로젝트명: 'title', 'Project Name': 'title',
+    '프로젝트 목표': 'goal', 'Project Goal': 'goal',
+    '제품 카테고리': 'category', 'Product Category': 'category',
+    '예산/기간 범위': 'budgetAndDuration', 'Budget / Timeline': 'budgetAndDuration',
+    '예상 크기': 'size', 'Estimated Size': 'size',
+    '주요 기능': 'features', 'Key Features': 'features',
+    '최종 활용 목적': 'usage', 'Final Purpose': 'usage',
+    '아이디어 정리': 'ideaSummary', 'Idea Summary': 'ideaSummary',
+    '참고 자료': 'referenceSummary', References: 'referenceSummary',
+  }
+  const labelSet = new Set(Object.keys(fieldAliases))
   const values = new Map<string, string>()
   const cleanLine = (line: string) =>
     line
@@ -288,24 +340,31 @@ function extractProjectDirectionCard(content: string): ProjectDirectionData | nu
     )
   }
 
-  const getValue = (label: string) => values.get(label)?.trim() || '미정'
-  const data = {
-    budgetAndDuration: getValue('예산/기간 범위'),
-    category: getValue('제품 카테고리'),
-    features: getValue('주요 기능'),
-    goal: getValue('프로젝트 목표'),
-    ideaSummary: getValue('아이디어 정리'),
-    referenceSummary: getValue('참고 자료'),
-    size: getValue('예상 크기'),
-    title: getValue('프로젝트명'),
-    usage: getValue('최종 활용 목적'),
+  const getAliasedValue = (key: keyof ProjectDirectionData) =>
+    Object.entries(fieldAliases)
+      .find(([label, fieldKey]) => fieldKey === key && values.get(label)?.trim())
+      ?.[0]
+  const valueFor = (key: keyof ProjectDirectionData) => {
+    const label = getAliasedValue(key)
+    return label ? values.get(label)?.trim() : undefined
+  }
+  const normalizedData: ProjectDirectionData = {
+    budgetAndDuration: valueFor('budgetAndDuration') || 'Not decided',
+    category: valueFor('category') || 'Not decided',
+    features: valueFor('features') || 'Not decided',
+    goal: valueFor('goal') || 'Not decided',
+    ideaSummary: valueFor('ideaSummary') || 'Not decided',
+    referenceSummary: valueFor('referenceSummary') || 'Not decided',
+    size: valueFor('size') || 'Not decided',
+    title: valueFor('title') || 'Not decided',
+    usage: valueFor('usage') || 'Not decided',
   }
   const hasMinimumData =
-    data.title !== '미정' ||
-    data.goal !== '미정' ||
-    data.ideaSummary !== '미정'
+    normalizedData.title !== 'Not decided' ||
+    normalizedData.goal !== 'Not decided' ||
+    normalizedData.ideaSummary !== 'Not decided'
 
-  return hasMinimumData ? data : null
+  return hasMinimumData ? normalizedData : null
 }
 
 function splitProjectDirectionContent(content: string) {
@@ -714,12 +773,21 @@ function extractBrandPositioningData(
   }
 }
 
-function getDirectionArtifactLabel(kind: DirectionArtifactKind) {
-  const labels: Record<DirectionArtifactKind, string> = {
-    brand_positioning: '경쟁사 리서치',
-    consumption_keywords: '소비 트렌드 리서치',
-    market_size: '시장 규모 리서치',
-  }
+function getDirectionArtifactLabel(
+  kind: DirectionArtifactKind,
+  language: AppLanguage = 'KOR'
+) {
+  const labels: Record<DirectionArtifactKind, string> = language === 'ENG'
+    ? {
+        brand_positioning: 'Competitor Research',
+        consumption_keywords: 'Consumer Trend Research',
+        market_size: 'Market Sizing Research',
+      }
+    : {
+        brand_positioning: '경쟁사 리서치',
+        consumption_keywords: '소비 트렌드 리서치',
+        market_size: '시장 규모 리서치',
+      }
 
   return labels[kind]
 }
@@ -888,13 +956,13 @@ function extractKeywordCardsData(content: string): KeywordCardData[] {
       .flatMap((line) => {
         // "감정: kw1, kw2" or "감정\nkw1, kw2" (category-only line → skip, next line has keywords)
         const withoutCategory = line.replace(
-          /^(?:감정|행동|공간|관계|사용자|환경|기존\s*도구|시간|방해\s*요소|사용\s*시간|타인)\s*[:：]\s*/i,
+          /^(?:감정|행동|공간|관계|사용자|환경|기존\s*도구|시간|방해\s*요소|사용\s*시간|타인|emotion|behavior|space|relationship|users?|environment|existing\s*tools?|time|distractions?|usage\s*time|others?)\s*[:：]\s*/i,
           ''
         )
         // if stripping changed nothing and line is a bare category word → skip
         if (
           withoutCategory === line &&
-          /^(?:감정|행동|공간|관계|사용자|환경|기존\s*도구|시간|방해\s*요소|사용\s*시간|타인)$/i.test(
+          /^(?:감정|행동|공간|관계|사용자|환경|기존\s*도구|시간|방해\s*요소|사용\s*시간|타인|emotion|behavior|space|relationship|users?|environment|existing\s*tools?|time|distractions?|usage\s*time|others?)$/i.test(
             line
           )
         ) {
@@ -915,7 +983,7 @@ function extractKeywordCardsData(content: string): KeywordCardData[] {
       )
     const keywords = Array.from(new Set(keywordCandidates)).slice(0, 30)
     const description = rawLines
-      .filter((line) => line.length > 18 && !/확정|할까요/i.test(line))
+      .filter((line) => line.length > 18 && !/확정|할까요|confirm|shall we|would you/i.test(line))
       .slice(0, 4)
       .join(' ')
       .replace(/\s+/g, ' ')
@@ -1000,7 +1068,10 @@ function splitAssistantChoices(content: string): {
   }
 }
 
-function buildFallbackHintChoices(content: string): ChatChoice[] {
+function buildFallbackHintChoices(
+  content: string,
+  language: AppLanguage
+): ChatChoice[] {
   const normalized = content.replace(/\s+/g, ' ')
   const makeChoices = (labels: [string, string, string]): ChatChoice[] =>
     labels.map((label, index) => {
@@ -1012,6 +1083,35 @@ function buildFallbackHintChoices(content: string): ChatChoice[] {
         value: `${key}. ${label}`,
       }
     })
+
+  if (language === 'ENG') {
+    if (/specific (?:form|appearance)|additional detail|color|material|usage scene/i.test(normalized)) {
+      return makeChoices([
+        'I will describe the form and materials',
+        'I will describe the usage scene and mood',
+        'I do not have a specific appearance in mind yet',
+      ])
+    }
+    if (/who|user|target|age|job|persona/i.test(normalized)) {
+      return makeChoices([
+        'Please recommend a suitable target user',
+        'I will describe the user group I have in mind',
+        'I am not sure yet',
+      ])
+    }
+    if (/priority|criterion|choose|select|important|value/i.test(normalized)) {
+      return makeChoices([
+        'I want to prioritize practicality and function',
+        'I want to prioritize design and emotion',
+        'I have not decided on the priority yet',
+      ])
+    }
+    return makeChoices([
+      'I am not sure yet. Please recommend an option',
+      'Continue with the current information',
+      'I will add more details myself',
+    ])
+  }
 
   if (/구체적인\s*모습|추가\s*설명|형태|색감|재질|사용\s*장면/.test(normalized)) {
     return makeChoices([
@@ -1045,14 +1145,14 @@ function buildFallbackHintChoices(content: string): ChatChoice[] {
 }
 
 function isAssistantQuestion(content: string) {
-  return /[?？]\s*$|알려주세요|말씀해주세요|선택해주세요|확인해주세요|진행할까요|있나요|어떤.+요\?/m.test(
+  return /[?？]\s*$|알려주세요|말씀해주세요|선택해주세요|확인해주세요|진행할까요|있나요|어떤.+요\?|please (?:tell|describe|choose|select|confirm)|would you|do you|which|what|how/m.test(
     content.trim()
   )
 }
 
 function isStageProceedPrompt(content: string) {
   const normalized = content.replace(/\s+/g, ' ').trim()
-  const mentionsProceedQuestion = /진행할까요[?？]?|시작할까요[?？]?/.test(
+  const mentionsProceedQuestion = /진행할까요[?？]?|시작할까요[?？]?|would you like to (?:continue|proceed|start|move on|move into)|shall we (?:continue|proceed|start|move)/i.test(
     normalized
   )
   const mentionsStageTransition =
@@ -1061,11 +1161,11 @@ function isStageProceedPrompt(content: string) {
     ) ||
     /다음\s*단계로\s*(?:넘어가겠습니다|진행하겠습니다|이동하겠습니다)/i.test(
       normalized
-    )
+    ) || /(?:move|proceed|continue) (?:on )?to (?:the )?(?:next step|STEP\s*\d+)|(?:begin|start) STEP\s*\d+/i.test(normalized)
   const mentionsNextStage =
     mentionsStageTransition ||
-    /다음(?:으로| 단계| STEP)/i.test(normalized) ||
-    /STEP\s*\d+[\s\S]*(?:넘어|진행|이동|들어가|시작)/i.test(normalized)
+    /다음(?:으로| 단계| STEP)|next (?:step|STEP)/i.test(normalized) ||
+    /STEP\s*\d+[\s\S]*(?:넘어|진행|이동|들어가|시작|proceed|continue|move|start|begin)/i.test(normalized)
 
   return mentionsNextStage && (mentionsProceedQuestion || mentionsStageTransition)
 }
@@ -1073,7 +1173,7 @@ function isStageProceedPrompt(content: string) {
 function isProcessCheckPrompt(content: string) {
   const normalized = content.replace(/\s+/g, ' ').trim()
 
-  return /프로세스/.test(normalized) && /확인하기|확인해\s*볼까요|확인할까요/i.test(normalized)
+  return /프로세스|process/i.test(normalized) && /확인하기|확인해\s*볼까요|확인할까요|review|check|walk through|go through|look at/i.test(normalized)
 }
 
 // STEP 1 진입 요청 (프로세스 소개 후 "STEP 1 시작할까요?" 맥락)
@@ -1082,8 +1182,8 @@ function isStep1EntryPrompt(content: string) {
   const normalized = content.replace(/\s+/g, ' ').trim()
   return (
     /STEP\s*1/i.test(normalized) &&
-    /진행할까요|시작할까요|넘어가겠습니다/i.test(normalized) &&
-    !/핵심\s*아이디어와\s*개발\s*조건이\s*정리|STEP\s*2\s*[.로]|사용자\s*명확화/i.test(normalized)
+    /진행할까요|시작할까요|넘어가겠습니다|start|begin|proceed/i.test(normalized) &&
+    !/핵심\s*아이디어와\s*개발\s*조건이\s*정리|STEP\s*2\s*[.로]|사용자\s*명확화|core idea and development requirements|User Clarification/i.test(normalized)
   )
 }
 
@@ -1099,6 +1199,7 @@ export function ProjectChatContainer({
   userTokenCount = 400,
 }: ProjectChatContainerProps) {
   const { language } = useAppLanguage()
+  const copy = CHAT_COPY[language]
   const { setSidebarState } = useProjectChatSidebar()
   const didRequestInitialResponseRef = useRef(false)
   const expertMenuRef = useRef<HTMLDivElement | null>(null)
@@ -1212,7 +1313,7 @@ export function ProjectChatContainer({
 
       if (
         message.role === 'user' &&
-        /스타일\s*레퍼런스를\s*선택하고\s*무드보드를\s*만들었어요/i.test(
+        /스타일\s*레퍼런스를\s*선택하고\s*무드보드를\s*만들었어요|selected (?:the )?style references? and (?:created|made) (?:the )?moodboard/i.test(
           message.content
         )
       ) {
@@ -1268,7 +1369,7 @@ export function ProjectChatContainer({
       (message) =>
         message.role === 'user' &&
         message.seq_order > latestEditablePersonaMessage.seq_order &&
-        /페르소나\s*카드.*확정|persona\s*card.*confirm/i.test(
+        /페르소나\s*카드.*확정|persona\s*card.*confirm|confirm.*persona\s*card/i.test(
           message.content
         )
     )
@@ -1289,7 +1390,7 @@ export function ProjectChatContainer({
       (m) =>
         m.role === 'user' &&
         m.seq_order > source.seq_order &&
-        /스타일\s*키워드를\s*선택했습니다/i.test(m.content)
+        /스타일\s*키워드를\s*선택했습니다|I selected (?:the )?style keywords/i.test(m.content)
     )
   }, [latestStyleKeywordPickerMessageId, visibleMessages])
   const latestMoodOptionsMessageId = useMemo(() => {
@@ -1308,7 +1409,7 @@ export function ProjectChatContainer({
       (m) =>
         m.role === 'user' &&
         m.seq_order > source.seq_order &&
-        /스타일\s*분위기를\s*선택했어요/i.test(m.content)
+        /스타일\s*분위기를\s*선택했어요|I selected (?:a|the) style mood/i.test(m.content)
     )
   }, [latestMoodOptionsMessageId, visibleMessages])
   const hasDesignImages = useMemo(
@@ -1377,8 +1478,8 @@ export function ProjectChatContainer({
 
       const confirmationPattern =
         kind === 'experience_keywords'
-          ? /Keywords:\s*Experience\s*확정|Experience\s*키워드.*확정/i
-          : /Keywords:\s*Relationship\s*확정|Relationship\s*키워드.*확정/i
+          ? /Keywords:\s*Experience.*(?:확정|confirm)|confirm.*Keywords:\s*Experience/i
+          : /Keywords:\s*Relationship.*(?:확정|confirm)|confirm.*Keywords:\s*Relationship/i
 
       if (
         visibleMessages.some(
@@ -1401,19 +1502,19 @@ export function ProjectChatContainer({
     for (const message of visibleMessages) {
       if (message.role === 'user') {
         if (
-          /소비\s*트렌드\s*리서치\s*(?:보기|다시\s*생성하기)/i.test(
+          /소비\s*트렌드\s*리서치\s*(?:보기|다시\s*생성하기)|consumer trends?\s*(?:research)?\s*(?:view|open|regenerate)/i.test(
             message.content
           )
         ) {
           requestedKind = 'consumption_keywords'
         } else if (
-          /시장\s*규모\s*리서치\s*(?:보기|다시\s*생성하기)/i.test(
+          /시장\s*규모\s*리서치\s*(?:보기|다시\s*생성하기)|market sizing\s*(?:research)?\s*(?:view|open|regenerate)/i.test(
             message.content
           )
         ) {
           requestedKind = 'market_size'
         } else if (
-          /경쟁사\s*리서치\s*(?:보기|다시\s*생성하기)/i.test(
+          /경쟁사\s*리서치\s*(?:보기|다시\s*생성하기)|competitor\s*(?:research)?\s*(?:view|open|regenerate)/i.test(
             message.content
           )
         ) {
@@ -1491,7 +1592,7 @@ export function ProjectChatContainer({
       (message) =>
         message.role === 'user' &&
         message.seq_order > latestRfpMessage.seq_order &&
-        /(?:프로젝트\s*)?기획안.*확정|project\s*(?:plan|report).*confirm/i.test(
+        /(?:프로젝트\s*)?기획안.*확정|project\s*(?:plan|report).*confirm|confirm.*project\s*(?:plan|report)/i.test(
           message.content
         )
     )
@@ -1835,6 +1936,7 @@ export function ProjectChatContainer({
           activeExpert,
           currentStageKey: effectiveStageKey,
           forceImageGeneration,
+          language,
           message: trimmed,
           projectId,
         }),
@@ -1844,7 +1946,7 @@ export function ProjectChatContainer({
       const result = (await response.json()) as ChatApiResponse
 
       if (!response.ok) {
-        throw new Error(result.error || '채팅 응답 생성에 실패했습니다.')
+        throw new Error(result.error || copy.chatError)
       }
 
       const savedUserMessage = result.userMessage ?? null
@@ -1898,13 +2000,13 @@ export function ProjectChatContainer({
       }
 
       setErrorMessage(
-        error instanceof Error ? error.message : '채팅 응답 생성에 실패했습니다.'
+        error instanceof Error ? error.message : copy.chatError
       )
       return null
     } finally {
       setIsPending(false)
     }
-  }, [activeExpert, effectiveStageKey, isPending, messages, projectId])
+  }, [activeExpert, copy.chatError, effectiveStageKey, isPending, language, messages, projectId])
 
   async function submitMessage(
     message: string,
@@ -2162,7 +2264,7 @@ export function ProjectChatContainer({
   useEffect(() => {
     const hasConfirmedProcess = visibleMessages.some(
       (message) =>
-        message.role === 'user' && /프로세스\s*확인하기/.test(message.content)
+        message.role === 'user' && /프로세스\s*확인하기|review (?:the )?process/i.test(message.content)
     )
 
     setSidebarState({
@@ -2178,7 +2280,7 @@ export function ProjectChatContainer({
   async function downloadRfp() {
     try {
       const response = await fetch('/api/rfp/download', {
-        body: JSON.stringify({ projectId }),
+        body: JSON.stringify({ language, projectId }),
         headers: { 'Content-Type': 'application/json' },
         method: 'POST',
       })
@@ -2188,7 +2290,7 @@ export function ProjectChatContainer({
           error?: string
         } | null
         throw new Error(
-          result?.error || '프로젝트 기획안 다운로드에 실패했습니다.'
+          result?.error || copy.downloadError
         )
       }
 
@@ -2205,7 +2307,7 @@ export function ProjectChatContainer({
       setErrorMessage(
         error instanceof Error
           ? error.message
-          : '프로젝트 기획안 다운로드에 실패했습니다.'
+          : copy.downloadError
       )
     }
   }
@@ -2241,11 +2343,12 @@ export function ProjectChatContainer({
                 <ChatBubble
                   key={message.id}
                   message={message}
+                  language={language}
                   canShowStyleReferences={visibleMessages.some(
                     (candidate) =>
                       candidate.role === 'user' &&
                       candidate.seq_order < message.seq_order &&
-                      /(?:다음\s*(?:단계|STEP)(?:로)?\s*(?:진행|넘어가|이동|시작)|STEP\s*4(?:로)?\s*(?:진행|넘어가|이동|시작)|스타일\s*(?:컨셉|단계)(?:로)?\s*(?:진행|넘어가|이동|시작)|스타일\s*분위기를\s*선택했어요)/i.test(
+                      /(?:다음\s*(?:단계|STEP)(?:로)?\s*(?:진행|넘어가|이동|시작)|STEP\s*4(?:로)?\s*(?:진행|넘어가|이동|시작)|스타일\s*(?:컨셉|단계)(?:로)?\s*(?:진행|넘어가|이동|시작)|스타일\s*분위기를\s*선택했어요|next (?:step|STEP)|(?:move|proceed) to STEP\s*4|style concept|I selected (?:a|the) style mood)/i.test(
                         candidate.content
                       )
                   )}
@@ -2304,11 +2407,11 @@ export function ProjectChatContainer({
               <div className="flex min-h-[420px] items-center justify-center text-sm font-medium text-zinc-400">
                 {isPending
                   ? ' '
-                  : '첫 메시지를 입력하면 프로젝트 requirements 기반 대화가 시작됩니다.'}
+                  : copy.empty}
               </div>
             )}
 
-            {isPending ? <AssistantTypingBubble /> : null}
+            {isPending ? <AssistantTypingBubble language={language} /> : null}
           </div>
         </section>
 
@@ -2330,7 +2433,7 @@ export function ProjectChatContainer({
                 }
                 className="rounded-[30px] bg-blue-600 px-6 py-2 font-['Pretendard'] text-sm font-semibold text-white shadow transition hover:bg-blue-700"
               >
-                시안 생성하기
+                {copy.generateConcepts}
               </button>
             </div>
           ) : null}
@@ -2415,13 +2518,13 @@ export function ProjectChatContainer({
                     submitMessage(input)
                   }
                 }}
-                placeholder={activeExpertDefinition.inputLabel}
+                placeholder={EXPERT_INPUT_COPY[activeExpertDefinition.key][language]}
                 className="max-h-28 min-h-6 min-w-0 flex-1 resize-none overflow-y-auto bg-transparent font-['Pretendard'] text-[clamp(13px,1.3svh,14px)] font-medium leading-6 text-neutral-900 outline-none placeholder:text-stone-300"
               />
               <button
                 type="submit"
                 disabled={isPending || !input.trim()}
-                aria-label="메시지 전송"
+                aria-label={copy.send}
                 className="mb-0.5 flex h-[clamp(28px,2.96svh,32px)] w-[clamp(28px,2.96svh,32px)] shrink-0 items-center justify-center rounded-full text-stone-300 transition hover:bg-blue-50 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 <Image
@@ -2530,49 +2633,58 @@ export function ProjectChatContainer({
 
       <LibraryArtifactModal
         artifact={selectedArtifact}
+        language={language}
         onClose={() => setSelectedArtifactKind(null)}
         projectDirection={latestProjectDirection}
       />
 
       <PersonaCardModal
         data={personaCardModalData}
+        language={language}
         onClose={() => setPersonaCardModalData(null)}
       />
 
       <ProblemStatementsModal
         data={problemStatementsModalData}
+        language={language}
         onClose={() => setProblemStatementsModalData(null)}
       />
 
       <KeywordCardModal
         data={keywordCardModalData}
+        language={language}
         onClose={() => setKeywordCardModalData(null)}
       />
 
       <ProjectReportModal
         data={projectReportModalData}
         imageUrl={latestMoodboardImageUrl}
+        language={language}
         onClose={() => setProjectReportModalData(null)}
         onDownload={downloadRfp}
       />
 
       <CompanyModal
+        language={language}
         open={companyModalOpen}
         onClose={() => setCompanyModalOpen(false)}
       />
 
       <MarketSizingModal
         data={marketSizingModalData}
+        language={language}
         onClose={() => setMarketSizingModalData(null)}
       />
 
       <ConsumptionKeywordModal
         data={consumptionKeywordModalData}
+        language={language}
         onClose={() => setConsumptionKeywordModalData(null)}
       />
 
       <BrandPositioningModal
         data={brandPositioningModalData}
+        language={language}
         onClose={() => setBrandPositioningModalData(null)}
       />
 
@@ -2584,10 +2696,12 @@ export function ProjectChatContainer({
 
       <RenderingImageModal
         image={renderingModalImage}
+        language={language}
         onClose={() => setRenderingModalImage(null)}
       />
 
       <ModelViewerModal
+        language={language}
         modelUrl={modelViewerOpen ? meshyModelUrl : null}
         onClose={() => setModelViewerOpen(false)}
       />
@@ -3004,13 +3118,18 @@ function LibraryPanel({
 function getBudgetHeadline(value: string) {
   const normalized = value.replace(/\s+/g, ' ').trim()
 
-  if (!normalized || normalized === '미정') {
+  if (!normalized || normalized === '미정' || normalized === 'Not decided') {
     return 'Scope'
   }
 
   const dollarBudget = normalized.match(/\$\s*([\d,.]+)\s*([KMB])?/i)
   if (dollarBudget) {
     return `$${dollarBudget[1]}${dollarBudget[2]?.toUpperCase() ?? ''}+`
+  }
+
+  const wonBudget = normalized.match(/₩\s*([\d,.]+)\s*([KMB])?/i)
+  if (wonBudget) {
+    return `₩${wonBudget[1]}${wonBudget[2]?.toUpperCase() ?? ''}+`
   }
 
   const manwonBudget = normalized.match(/([\d,]+)\s*만\s*원/)
@@ -3040,7 +3159,7 @@ function formatDurationEn(raw: string): string {
   return raw
 }
 
-function getFeatureSummary(features: string) {
+function getFeatureSummary(features: string, language: AppLanguage = 'KOR') {
   const selectedFeatures = features
     .split(/,|\n/)
     .map((item) => item.trim())
@@ -3048,9 +3167,9 @@ function getFeatureSummary(features: string) {
 
   if (
     selectedFeatures.length === 0 ||
-    selectedFeatures.every((feature) => feature === '미정')
+    selectedFeatures.every((feature) => feature === '미정' || feature === 'Not decided')
   ) {
-    return '핵심 기능 정리 필요'
+    return language === 'ENG' ? 'Key features to be defined' : '핵심 기능 정리 필요'
   }
 
   return selectedFeatures.join(' · ')
@@ -3073,11 +3192,20 @@ function getFeatureTextSize(features: string) {
   return 'text-[clamp(7px,1.5cqw,12px)] leading-[1.3]'
 }
 
-function formatProjectIdea(ideaSummary: string) {
+function formatProjectIdea(
+  ideaSummary: string,
+  language: AppLanguage = 'KOR'
+) {
   const idea = ideaSummary.replace(/\s+/g, ' ').trim()
 
-  if (!idea || idea === '미정') {
-    return '제품 아이디어를 구체화하는 것이 목표입니다.'
+  if (!idea || idea === '미정' || idea === 'Not decided') {
+    return language === 'ENG'
+      ? 'The goal is to define and develop the product idea.'
+      : '제품 아이디어를 구체화하는 것이 목표입니다.'
+  }
+
+  if (language === 'ENG') {
+    return /[.!?]$/.test(idea) ? idea : `${idea}.`
   }
 
   if (/개발이\s*목표입니다[.!]?$/.test(idea)) {
@@ -3103,7 +3231,13 @@ function formatProjectIdea(ideaSummary: string) {
     : `${conciseIdea} 개발이 목표입니다.`
 }
 
-function ProjectDirectionCard({ data }: { data: ProjectDirectionData }) {
+function ProjectDirectionCard({
+  data,
+  language = 'KOR',
+}: {
+  data: ProjectDirectionData
+  language?: AppLanguage
+}) {
   const duration = formatDurationEn(
     data.budgetAndDuration.split('/')[1]?.trim() ?? ''
   )
@@ -3131,7 +3265,7 @@ function ProjectDirectionCard({ data }: { data: ProjectDirectionData }) {
               {data.category}
             </h3>
             <p className="line-clamp-3 max-w-full font-['Pretendard'] text-[clamp(10px,1.75cqw,14px)] font-medium leading-[1.45] text-black">
-              {formatProjectIdea(data.ideaSummary)}
+              {formatProjectIdea(data.ideaSummary, language)}
             </p>
           </div>
         </div>
@@ -3165,7 +3299,7 @@ function ProjectDirectionCard({ data }: { data: ProjectDirectionData }) {
                 Project Scope
               </div>
               <div className="w-full truncate font-['Pretendard'] text-[clamp(8px,1.5cqw,12px)] font-medium leading-tight text-black">
-                {data.budgetAndDuration.split('/')[0]?.trim() || '미정'}
+                {data.budgetAndDuration.split('/')[0]?.trim() || (language === 'ENG' ? 'Not decided' : '미정')}
               </div>
             </div>
           </div>
@@ -3186,7 +3320,7 @@ function ProjectDirectionCard({ data }: { data: ProjectDirectionData }) {
             <div
               className={`w-full break-keep text-center font-['Pretendard'] font-medium text-black ${getFeatureTextSize(data.features)}`}
             >
-              {getFeatureSummary(data.features)}
+              {getFeatureSummary(data.features, language)}
             </div>
           </div>
         </div>
@@ -3215,10 +3349,12 @@ function useDismissModalOnEscape(isOpen: boolean, onClose: () => void) {
 
 function LibraryArtifactModal({
   artifact,
+  language,
   onClose,
   projectDirection,
 }: {
   artifact: LibraryArtifact | null
+  language: AppLanguage
   onClose: () => void
   projectDirection: ProjectDirectionData | null
 }) {
@@ -3246,7 +3382,7 @@ function LibraryArtifactModal({
       <div className="max-h-[calc(100svh-48px)] w-full max-w-[920px] overflow-y-auto rounded-[24px] bg-white p-6 shadow-[0px_24px_60px_0px_rgba(0,0,0,0.24)]">
         <div className="flex justify-center">
           {hasProjectDirection ? (
-            <ProjectDirectionCard data={projectDirection} />
+            <ProjectDirectionCard data={projectDirection} language={language} />
           ) : (
             <LibraryPlaceholderCard artifact={artifact} />
           )}
@@ -3357,7 +3493,15 @@ function CompanyPartnerCard({ partner }: { partner: typeof DASHBOARD_PARTNERS[nu
   )
 }
 
-function CompanyModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+function CompanyModal({
+  language,
+  open,
+  onClose,
+}: {
+  language: AppLanguage
+  open: boolean
+  onClose: () => void
+}) {
   useDismissModalOnEscape(open, onClose)
 
   if (!open) return null
@@ -3367,7 +3511,7 @@ function CompanyModal({ open, onClose }: { open: boolean; onClose: () => void })
       className="absolute inset-0 z-[80] flex items-start justify-center overflow-y-auto bg-neutral-900/70 p-6 sm:p-10"
       role="dialog"
       aria-modal="true"
-      aria-label="협력업체 추천"
+      aria-label={language === 'ENG' ? 'Recommended partners' : '협력업체 추천'}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose()
       }}
@@ -3376,30 +3520,40 @@ function CompanyModal({ open, onClose }: { open: boolean; onClose: () => void })
         <button
           type="button"
           onClick={onClose}
-          aria-label="닫기"
+          aria-label={language === 'ENG' ? 'Close' : '닫기'}
           className="absolute right-5 top-5 flex h-8 w-8 items-center justify-center rounded-full text-xl text-zinc-500 transition hover:bg-zinc-300"
         >
           ×
         </button>
 
         <div className="flex flex-col gap-10">
-          {COMPANY_CATEGORIES.map((category) => (
-            <section key={category.title}>
+          {COMPANY_CATEGORIES.map((category, categoryIndex) => {
+            const englishCategory = [
+              { title: 'Product Design', subtitle: 'Develop product form, usability, CMF, and rendering.' },
+              { title: 'Hardware & Electronics', subtitle: 'Support LED control, buttons, batteries, circuits, and firmware.' },
+              { title: 'Prototyping & Manufacturing', subtitle: 'Build appearance and functional prototypes and assess manufacturability.' },
+              { title: 'Branding, Packaging & Launch', subtitle: 'Prepare brand messaging, packaging, product pages, and crowdfunding.' },
+            ][categoryIndex]
+            const displayedCategory = language === 'ENG' && englishCategory
+              ? { ...category, ...englishCategory }
+              : category
+            return (
+            <section key={displayedCategory.title}>
               <div className="mb-4">
                 <h2 className="font-['Pretendard'] text-3xl font-medium leading-6 text-black">
-                  {category.title}
+                  {displayedCategory.title}
                 </h2>
                 <p className="mt-3 font-['Pretendard'] text-xs font-medium leading-6 text-black">
-                  {category.subtitle}
+                  {displayedCategory.subtitle}
                 </p>
               </div>
               <div className="grid grid-cols-4 gap-2.5">
-                {category.partnerIndices.map((idx) => (
+                {displayedCategory.partnerIndices.map((idx) => (
                   <CompanyPartnerCard key={idx} partner={DASHBOARD_PARTNERS[idx]} />
                 ))}
               </div>
             </section>
-          ))}
+          )})}
         </div>
       </div>
     </div>
@@ -3448,11 +3602,13 @@ function RfpDivider() {
 function ProjectReportModal({
   data,
   imageUrl,
+  language,
   onClose,
   onDownload,
 }: {
   data: RfpDocument | null
   imageUrl?: string | null
+  language: AppLanguage
   onClose: () => void
   onDownload: () => void
 }) {
@@ -3461,6 +3617,7 @@ function ProjectReportModal({
   if (!data) {
     return null
   }
+  const en = language === 'ENG'
 
   return (
     <div
@@ -3495,7 +3652,7 @@ function ProjectReportModal({
           <div className="relative flex flex-1 flex-col justify-center gap-2 bg-blue-600 px-8 py-6">
             <div className="flex items-baseline gap-3">
               <span className="font-['Pretendard'] text-2xl font-medium text-white">
-                제품 개발 기획안
+                {en ? 'Product Development Plan' : '제품 개발 기획안'}
               </span>
               <span className="font-['Inter'] text-base font-medium text-white/70">
                 Project Report
@@ -3507,7 +3664,7 @@ function ProjectReportModal({
             <button
               type="button"
               onClick={onClose}
-              aria-label="닫기"
+              aria-label={en ? 'Close' : '닫기'}
               className="absolute right-4 top-4 flex h-7 w-7 items-center justify-center rounded-full text-xl text-white/70 transition hover:bg-white/10 hover:text-white"
             >
               ×
@@ -3519,28 +3676,28 @@ function ProjectReportModal({
         <div className="flex divide-x divide-zinc-200 overflow-y-auto" style={{ maxHeight: 'calc(90svh - 160px)' }}>
           {/* Left column: 프로젝트 개요 */}
           <div className="w-[45%] shrink-0 px-6 py-5">
-            <RfpSectionLabel>프로젝트 개요</RfpSectionLabel>
+            <RfpSectionLabel>{en ? 'Project Overview' : '프로젝트 개요'}</RfpSectionLabel>
 
             <div className="flex items-start gap-3 py-1.5">
-              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">제품 정의</span>
+              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">{en ? 'Definition' : '제품 정의'}</span>
               <span className="font-['Pretendard'] text-[10px] font-normal leading-4 text-black">{data.oneLineDefinition}</span>
             </div>
             <RfpDivider />
 
             <div className="grid grid-cols-2">
-              <RfpRow label="목표" value={data.projectGoal} />
-              <RfpRow label="예산" value={data.budgetRange} />
+              <RfpRow label={en ? 'Goal' : '목표'} value={data.projectGoal} />
+              <RfpRow label={en ? 'Budget' : '예산'} value={data.budgetRange} />
             </div>
             <RfpDivider />
 
             <div className="grid grid-cols-2">
-              <RfpRow label="활용 목적" value={data.finalPurpose} />
-              <RfpRow label="기간" value={data.timeline} />
+              <RfpRow label={en ? 'Purpose' : '활용 목적'} value={data.finalPurpose} />
+              <RfpRow label={en ? 'Timeline' : '기간'} value={data.timeline} />
             </div>
             <RfpDivider />
 
             <div className="flex items-start gap-3 py-1.5">
-              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">스타일 키워드</span>
+              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">{en ? 'Style keywords' : '스타일 키워드'}</span>
               <div className="flex flex-wrap gap-1">
                 {data.styleKeywords.map((kw, i) => (
                   <span
@@ -3555,13 +3712,13 @@ function ProjectReportModal({
             <RfpDivider />
 
             <div className="flex items-start gap-3 py-1.5">
-              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">레퍼런스 요약</span>
+              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">{en ? 'References' : '레퍼런스 요약'}</span>
               <span className="font-['Pretendard'] text-[10px] font-normal leading-4 text-black">{data.referenceSummary}</span>
             </div>
             <RfpDivider />
 
             <div className="flex items-start gap-3 py-1.5">
-              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">제외 방향</span>
+              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">{en ? 'Avoid' : '제외 방향'}</span>
               <div className="flex flex-col gap-0.5">
                 {data.avoidDirections.map((d, i) => (
                   <span key={i} className="font-['Pretendard'] text-[10px] font-normal leading-4 text-black">{d}</span>
@@ -3572,31 +3729,31 @@ function ProjectReportModal({
 
           {/* Right column: 타겟 + 디자인 + 제작 */}
           <div className="flex-1 px-6 py-5">
-            <RfpSectionLabel>타겟과 핵심 가치</RfpSectionLabel>
+            <RfpSectionLabel>{en ? 'Target & Core Value' : '타겟과 핵심 가치'}</RfpSectionLabel>
 
-            <RfpRow label="메인 타겟" value={data.mainTarget} />
+            <RfpRow label={en ? 'Target' : '메인 타겟'} value={data.mainTarget} />
             <RfpDivider />
             <div className="flex items-start gap-3 py-1.5">
-              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">사용 상황</span>
+              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">{en ? 'Usage' : '사용 상황'}</span>
               <span className="font-['Pretendard'] text-[10px] font-normal leading-4 text-black">{data.usageContext}</span>
             </div>
             <RfpDivider />
             <div className="flex items-start gap-3 py-1.5">
-              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">니즈</span>
+              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">{en ? 'Needs' : '니즈'}</span>
               <span className="font-['Pretendard'] text-[10px] font-normal leading-4 text-black">{data.coreNeeds}</span>
             </div>
             <RfpDivider />
             <div className="flex items-start gap-3 py-1.5">
-              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">핵심 가치</span>
+              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">{en ? 'Core value' : '핵심 가치'}</span>
               <span className="font-['Pretendard'] text-[10px] font-normal leading-4 text-black">{data.coreValue}</span>
             </div>
 
-            <RfpSubSectionLabel>디자인 아이디어</RfpSubSectionLabel>
+            <RfpSubSectionLabel>{en ? 'Design Idea' : '디자인 아이디어'}</RfpSubSectionLabel>
 
-            <RfpRow label="크기" value={data.sizeOrForm} />
+            <RfpRow label={en ? 'Size' : '크기'} value={data.sizeOrForm} />
             <RfpDivider />
             <div className="flex items-start gap-3 py-1.5">
-              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">필수 기능</span>
+              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">{en ? 'Must-have' : '필수 기능'}</span>
               <div className="flex flex-col gap-0.5">
                 {data.mustHaveFeatures.map((f, i) => (
                   <span key={i} className="font-['Pretendard'] text-[10px] font-normal leading-4 text-black">{f}</span>
@@ -3604,10 +3761,10 @@ function ProjectReportModal({
               </div>
             </div>
 
-            <RfpSubSectionLabel>제작 조건</RfpSubSectionLabel>
+            <RfpSubSectionLabel>{en ? 'Production Constraints' : '제작 조건'}</RfpSubSectionLabel>
 
             <div className="flex items-start gap-3 py-1.5">
-              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">구현 주의점</span>
+              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">{en ? 'Implementation' : '구현 주의점'}</span>
               <div className="flex flex-col gap-0.5">
                 {data.implementationNotes.map((n, i) => (
                   <span key={i} className="font-['Pretendard'] text-[10px] font-normal leading-4 text-black">{n}</span>
@@ -3616,7 +3773,7 @@ function ProjectReportModal({
             </div>
             <RfpDivider />
             <div className="flex items-start gap-3 py-1.5">
-              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">완료 기준 / 다음 액션</span>
+              <span className="w-16 shrink-0 font-['Pretendard'] text-[10px] font-medium leading-4 text-black">{en ? 'Criteria / Next' : '완료 기준 / 다음 액션'}</span>
               <div className="flex flex-col gap-0.5">
                 {data.successCriteria.map((c, i) => (
                   <span key={i} className="font-['Pretendard'] text-[10px] font-normal leading-4 text-black">{c}</span>
@@ -3634,7 +3791,7 @@ function ProjectReportModal({
                 onClick={() => void onDownload()}
                 className="rounded-[30px] bg-blue-600 px-5 py-1.5 font-['Pretendard'] text-xs font-semibold text-white transition hover:bg-blue-700"
               >
-                리포트 다운로드
+                {en ? 'Download report' : '리포트 다운로드'}
               </button>
             </div>
           </div>
@@ -3646,9 +3803,11 @@ function ProjectReportModal({
 
 function MarketSizingModal({
   data,
+  language,
   onClose,
 }: {
   data: MarketSizingData | null
+  language: AppLanguage
   onClose: () => void
 }) {
   useDismissModalOnEscape(Boolean(data), onClose)
@@ -3679,7 +3838,7 @@ function MarketSizingModal({
 
         <Image
           src="/assets/icons/chat-modal/tamsamsom-contents.svg"
-          alt="TAM SAM SOM 시장 규모 분석"
+          alt={language === 'ENG' ? 'TAM SAM SOM market sizing analysis' : 'TAM SAM SOM 시장 규모 분석'}
           width={1066}
           height={558}
           unoptimized
@@ -3692,9 +3851,11 @@ function MarketSizingModal({
 
 function ConsumptionKeywordModal({
   data,
+  language,
   onClose,
 }: {
   data: ConsumptionKeywordData | null
+  language: AppLanguage
   onClose: () => void
 }) {
   useDismissModalOnEscape(Boolean(data), onClose)
@@ -3714,7 +3875,7 @@ function ConsumptionKeywordModal({
       className="absolute inset-0 z-[80] flex items-center justify-center bg-neutral-900/70 p-4 sm:p-6 lg:p-10"
       role="dialog"
       aria-modal="true"
-      aria-label="Keywords: Consumption"
+      aria-label={language === 'ENG' ? 'Consumption Keywords' : 'Keywords: Consumption'}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) {
           onClose()
@@ -3804,9 +3965,11 @@ function ConsumptionKeywordChip({
 
 function BrandPositioningModal({
   data,
+  language,
   onClose,
 }: {
   data: BrandPositioningData | null
+  language: AppLanguage
   onClose: () => void
 }) {
   useDismissModalOnEscape(Boolean(data), onClose)
@@ -3848,16 +4011,16 @@ function BrandPositioningModal({
           <div className="absolute inset-y-0 left-1/2 w-px bg-[#DDF444]" />
 
           <span className="absolute left-0 top-1/2 -translate-y-1/2 font-['Pretendard'] text-[clamp(9px,1.19cqw,14px)] font-medium text-stone-300">
-            프리미엄 가격
+            {language === 'ENG' ? 'Premium Price' : '프리미엄 가격'}
           </span>
           <span className="absolute right-0 top-1/2 -translate-y-1/2 font-['Pretendard'] text-[clamp(9px,1.19cqw,14px)] font-medium text-stone-300">
-            합리적인 가격
+            {language === 'ENG' ? 'Accessible Price' : '합리적인 가격'}
           </span>
           <span className="absolute left-1/2 top-0 -translate-x-1/2 font-['Pretendard'] text-[clamp(9px,1.19cqw,14px)] font-medium text-stone-300">
-            라이프스타일 중심
+            {language === 'ENG' ? 'Lifestyle-focused' : '라이프스타일 중심'}
           </span>
           <span className="absolute bottom-0 left-1/2 -translate-x-1/2 font-['Pretendard'] text-[clamp(9px,1.19cqw,14px)] font-medium text-stone-300">
-            기능 중심
+            {language === 'ENG' ? 'Function-focused' : '기능 중심'}
           </span>
 
           <div className="absolute inset-[7%_10%] grid grid-cols-2 grid-rows-2 gap-x-[18%] gap-y-[14%]">
@@ -3988,9 +4151,11 @@ function ReportTags({ label, items }: { label: string; items: string[] }) {
 
 function PersonaCardModal({
   data,
+  language,
   onClose,
 }: {
   data: PersonaCardData | null
+  language: AppLanguage
   onClose: () => void
 }) {
   useDismissModalOnEscape(Boolean(data), onClose)
@@ -4011,16 +4176,18 @@ function PersonaCardModal({
         }
       }}
     >
-      <PersonaCardFull data={data} />
+      <PersonaCardFull data={data} language={language} />
     </div>
   )
 }
 
 function RenderingImageModal({
   image,
+  language,
   onClose,
 }: {
   image: string | null
+  language: AppLanguage
   onClose: () => void
 }) {
   useDismissModalOnEscape(Boolean(image), onClose)
@@ -4032,7 +4199,7 @@ function RenderingImageModal({
       className="absolute inset-0 z-[80] flex items-center justify-center bg-neutral-900/70 p-4 sm:p-6 lg:p-10"
       role="dialog"
       aria-modal="true"
-      aria-label="선택한 3D 디자인 렌더링"
+      aria-label={language === 'ENG' ? 'Selected 3D design rendering' : '선택한 3D 디자인 렌더링'}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose()
       }}
@@ -4040,7 +4207,7 @@ function RenderingImageModal({
       <article className="relative aspect-[25/16] w-[min(100%,960px)] overflow-hidden rounded-[20px] bg-zinc-300 shadow-[0px_24px_60px_rgba(0,0,0,0.24)]">
         <Image
           src={image}
-          alt="선택한 3D 디자인 렌더링"
+          alt={language === 'ENG' ? 'Selected 3D design rendering' : '선택한 3D 디자인 렌더링'}
           fill
           unoptimized
           className="object-cover"
@@ -4048,7 +4215,7 @@ function RenderingImageModal({
         <button
           type="button"
           onClick={onClose}
-          aria-label="닫기"
+          aria-label={language === 'ENG' ? 'Close' : '닫기'}
           className="absolute right-4 top-4 flex h-8 w-8 items-center justify-center rounded-full bg-black/55 font-['Inter'] text-xl text-white transition hover:bg-black/75"
         >
           ×
@@ -4083,9 +4250,11 @@ function loadModelViewerScript() {
 }
 
 function ModelViewerModal({
+  language,
   modelUrl,
   onClose,
 }: {
+  language: AppLanguage
   modelUrl: string | null
   onClose: () => void
 }) {
@@ -4126,7 +4295,7 @@ function ModelViewerModal({
       className="absolute inset-0 z-[80] flex items-center justify-center bg-neutral-900/80 p-4 sm:p-6 lg:p-10"
       role="dialog"
       aria-modal="true"
-      aria-label="3D 모델 뷰어"
+      aria-label={language === 'ENG' ? '3D model viewer' : '3D 모델 뷰어'}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose()
       }}
@@ -4135,10 +4304,12 @@ function ModelViewerModal({
         <header className="flex shrink-0 items-center justify-between gap-3 px-6 py-4">
           <div>
             <h2 className="font-['Pretendard'] text-lg font-semibold text-white">
-              3D 모델
+              {language === 'ENG' ? '3D Model' : '3D 모델'}
             </h2>
             <p className="font-['Pretendard'] text-xs text-zinc-400">
-              드래그로 회전 · 스크롤로 확대/축소 · 우클릭 드래그로 이동
+              {language === 'ENG'
+                ? 'Drag to rotate · Scroll to zoom · Right-drag to pan'
+                : '드래그로 회전 · 스크롤로 확대/축소 · 우클릭 드래그로 이동'}
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -4147,12 +4318,12 @@ function ModelViewerModal({
               download
               className="rounded-[30px] bg-white/10 px-4 py-1.5 font-['Pretendard'] text-xs font-semibold text-white transition hover:bg-white/20"
             >
-              GLB 다운로드
+              {language === 'ENG' ? 'Download GLB' : 'GLB 다운로드'}
             </a>
             <button
               type="button"
               onClick={onClose}
-              aria-label="닫기"
+              aria-label={language === 'ENG' ? 'Close' : '닫기'}
               className="flex h-8 w-8 items-center justify-center rounded-full bg-black/40 font-['Inter'] text-xl text-white transition hover:bg-black/70"
             >
               ×
@@ -4164,20 +4335,20 @@ function ModelViewerModal({
           {loadError ? (
             <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 text-center">
               <p className="font-['Pretendard'] text-sm text-zinc-300">
-                3D 뷰어를 불러오지 못했습니다.
+                {language === 'ENG' ? 'The 3D viewer could not be loaded.' : '3D 뷰어를 불러오지 못했습니다.'}
               </p>
               <a
                 href={modelUrl}
                 download
                 className="rounded-[30px] bg-[#DDF444] px-5 py-2 font-['Pretendard'] text-xs font-semibold text-black"
               >
-                모델 파일 직접 다운로드
+                {language === 'ENG' ? 'Download model file' : '모델 파일 직접 다운로드'}
               </a>
             </div>
           ) : !ready ? (
             <div className="flex h-full w-full items-center justify-center">
               <span className="font-['Pretendard'] text-sm text-zinc-400">
-                3D 뷰어 로딩 중...
+                {language === 'ENG' ? 'Loading 3D viewer...' : '3D 뷰어 로딩 중...'}
               </span>
             </div>
           ) : (
@@ -4207,20 +4378,23 @@ function getPersonaList(items: string[], fallback: string) {
   return cleaned.length > 0 ? cleaned : [fallback]
 }
 
-function PersonaCardFull({ data }: { data: PersonaCardData }) {
-  const demographic = getPersonaList(data.demographicInfo, '사용자 정보 정리 필요')
-  const personaStory = getPersonaList(data.personaStory, '사용 맥락 정리 필요')
-  const problemNeeds = getPersonaList(data.problemNeeds, '핵심 문제 정리 필요')
-  const currentBehavior = getPersonaList(data.currentBehavior, '현재 행동 정리 필요')
+function PersonaCardFull({ data, language }: { data: PersonaCardData; language: AppLanguage }) {
+  const en = language === 'ENG'
+  const demographic = getPersonaList(data.demographicInfo, en ? 'User details needed' : '사용자 정보 정리 필요')
+  const personaStory = getPersonaList(data.personaStory, en ? 'Usage context needed' : '사용 맥락 정리 필요')
+  const problemNeeds = getPersonaList(data.problemNeeds, en ? 'Core problem needed' : '핵심 문제 정리 필요')
+  const currentBehavior = getPersonaList(data.currentBehavior, en ? 'Current behavior needed' : '현재 행동 정리 필요')
   const lifestyleContext = getPersonaList(
     data.lifestyleContext,
-    '생활 맥락 정리 필요'
+    en ? 'Lifestyle context needed' : '생활 맥락 정리 필요'
   )
   const relationshipKeyword = getPersonaList(
     data.relationshipKeyword,
-    '관계 키워드 정리 필요'
+    en ? 'Relationship keywords needed' : '관계 키워드 정리 필요'
   )
-  const demographicLabels = [
+  const demographicLabels = en ? [
+    'Name & Age', 'Status', 'Environment', 'Daily Pattern', 'Key Trait',
+  ] : [
     '이름 & 나이',
     '상태',
     '주요 환경',
@@ -4269,7 +4443,7 @@ function PersonaCardFull({ data }: { data: PersonaCardData }) {
                 <FragmentPair
                   key={label}
                   label={label}
-                  value={demographic[index] ?? '정리 필요'}
+                  value={demographic[index] ?? (en ? 'To be defined' : '정리 필요')}
                 />
               ))}
             </div>
@@ -4397,9 +4571,11 @@ function splitProblemStatementSection(value: string, fallbackTitle: string) {
 
 function ProblemStatementsModal({
   data,
+  language,
   onClose,
 }: {
   data: ProblemStatementsData | null
+  language: AppLanguage
   onClose: () => void
 }) {
   useDismissModalOnEscape(Boolean(data), onClose)
@@ -4408,25 +4584,25 @@ function ProblemStatementsModal({
 
   const cards = [
     {
-      body: splitProblemStatementSection(data.situation, '사용 환경과 맥락').body,
+      body: splitProblemStatementSection(data.situation, language === 'ENG' ? 'Usage Environment and Context' : '사용 환경과 맥락').body,
       icon: '/assets/icons/chat-modal/problem-statements-context.svg',
       label: 'Context',
       number: '01',
-      title: splitProblemStatementSection(data.situation, '사용 환경과 맥락').title,
+      title: splitProblemStatementSection(data.situation, language === 'ENG' ? 'Usage Environment and Context' : '사용 환경과 맥락').title,
     },
     {
-      body: splitProblemStatementSection(data.pain, '반복되는 핵심 문제').body,
+      body: splitProblemStatementSection(data.pain, language === 'ENG' ? 'Recurring Core Problem' : '반복되는 핵심 문제').body,
       icon: '/assets/icons/chat-modal/problem-statements-problems.svg',
       label: 'Problems',
       number: '02',
-      title: splitProblemStatementSection(data.pain, '반복되는 핵심 문제').title,
+      title: splitProblemStatementSection(data.pain, language === 'ENG' ? 'Recurring Core Problem' : '반복되는 핵심 문제').title,
     },
     {
-      body: splitProblemStatementSection(data.need, '필요한 변화와 경험').body,
+      body: splitProblemStatementSection(data.need, language === 'ENG' ? 'Needed Change and Experience' : '필요한 변화와 경험').body,
       icon: '/assets/icons/chat-modal/problem-statements-needs.svg',
       label: 'Needs',
       number: '03',
-      title: splitProblemStatementSection(data.need, '필요한 변화와 경험').title,
+      title: splitProblemStatementSection(data.need, language === 'ENG' ? 'Needed Change and Experience' : '필요한 변화와 경험').title,
     },
   ]
 
@@ -4501,9 +4677,11 @@ function ProblemStatementsModal({
 
 function KeywordCardModal({
   data,
+  language,
   onClose,
 }: {
   data: KeywordCardData | null
+  language: AppLanguage
   onClose: () => void
 }) {
   useDismissModalOnEscape(Boolean(data), onClose)
@@ -4524,24 +4702,26 @@ function KeywordCardModal({
         }
       }}
     >
-      <KeywordCard data={data} />
+      <KeywordCard data={data} language={language} />
     </div>
   )
 }
 
-function getKeywordCardSubtitle(data: KeywordCardData) {
+function getKeywordCardSubtitle(data: KeywordCardData, language: AppLanguage) {
   const [first, second, third] = data.keywords
 
   if (first && second && third) {
-    return `${first}, ${second}, ${third} 중심의 경험 방향`
+    return language === 'ENG'
+      ? `An experience direction centered on ${first}, ${second}, and ${third}`
+      : `${first}, ${second}, ${third} 중심의 경험 방향`
   }
 
   return data.kind === 'experience_keywords'
-    ? '사용자가 느끼는 경험 가치를 정리한 키워드'
-    : '제품과 사용자 맥락의 관계를 정리한 키워드'
+    ? language === 'ENG' ? 'Keywords defining the user experience value' : '사용자가 느끼는 경험 가치를 정리한 키워드'
+    : language === 'ENG' ? 'Keywords defining the product-user relationship' : '제품과 사용자 맥락의 관계를 정리한 키워드'
 }
 
-function KeywordCard({ data }: { data: KeywordCardData }) {
+function KeywordCard({ data, language }: { data: KeywordCardData; language: AppLanguage }) {
   const keywords = data.keywords.slice(0, 30)
   const featuredKeywords = new Set(
     keywords.filter((_, index) => index % 3 === 1 || index % 5 === 0).slice(0, 12)
@@ -4552,6 +4732,7 @@ function KeywordCard({ data }: { data: KeywordCardData }) {
       data={data}
       featuredKeywords={featuredKeywords}
       keywords={keywords}
+      language={language}
       lowerBackground={
         data.kind === 'experience_keywords'
           ? 'bg-[rgba(217,217,217,0.4)]'
@@ -4568,12 +4749,14 @@ function StructuredKeywordCard({
   data,
   featuredKeywords,
   keywords,
+  language,
   lowerBackground,
   suffix,
 }: {
   data: KeywordCardData
   featuredKeywords: Set<string>
   keywords: string[]
+  language: AppLanguage
   lowerBackground: string
   suffix: 'Experience' | 'Relationship'
 }) {
@@ -4588,7 +4771,7 @@ function StructuredKeywordCard({
 
       <div className="absolute left-[4.7%] top-[23.7%] w-[55%]">
         <p className="mb-[clamp(12px,1.9cqw,22px)] font-['Pretendard'] text-[clamp(14px,1.7cqw,20px)] font-bold leading-6 text-blue-600">
-          {getKeywordCardSubtitle(data)}
+          {getKeywordCardSubtitle(data, language)}
         </p>
         <p className="font-['Pretendard'] text-[clamp(11px,1.19cqw,14px)] font-medium leading-[clamp(17px,2.04cqw,24px)] text-black">
           {data.description}
@@ -4710,9 +4893,11 @@ function KeywordChip({
 
 function DirectionResearchWidgets({
   disabled,
+  language,
   onSelect,
 }: {
   disabled: boolean
+  language: AppLanguage
   onSelect: (kind: DirectionArtifactKind) => void
 }) {
   const widgets: Array<{
@@ -4720,7 +4905,11 @@ function DirectionResearchWidgets({
     index: string
     kind: DirectionArtifactKind
     title: string
-  }> = [
+  }> = language === 'ENG' ? [
+    { description: 'Assess the addressable market through TAM, SAM, and SOM.', index: '1', kind: 'market_size', title: 'Market Size' },
+    { description: 'Define purchase motivations and consumption keywords.', index: '2', kind: 'consumption_keywords', title: 'Consumer Trends' },
+    { description: 'Compare competitors and brand positioning.', index: '3', kind: 'brand_positioning', title: 'Competitors' },
+  ] : [
     {
       description: 'TAM/SAM/SOM 관점으로 진입 시장을 봅니다.',
       index: '1',
@@ -4770,12 +4959,14 @@ function StyleKeywordPickerCard({
   disabled,
   english,
   keywords,
+  language,
   onToggle,
   selected,
 }: {
   disabled: boolean
   english: string
   keywords: string[]
+  language: AppLanguage
   onToggle: (keyword: string) => void
   selected: string[]
 }) {
@@ -4791,7 +4982,7 @@ function StyleKeywordPickerCard({
           {english}
         </span>
         <span className="font-['Inter'] text-[9px] font-semibold leading-7 text-zinc-400">
-          최대 5개까지 선택
+          {language === 'ENG' ? 'Select up to 5' : '최대 5개까지 선택'}
         </span>
       </div>
       <div className="flex flex-col gap-3">
@@ -4823,12 +5014,12 @@ function StyleKeywordPickerCard({
   )
 }
 
-function AssistantTypingBubble() {
+function AssistantTypingBubble({ language }: { language: AppLanguage }) {
   return (
     <div className="flex w-full max-w-[800px] flex-col items-start gap-3 lg:w-[69.6%]">
       <div
         className="flex min-h-6 items-center px-[clamp(24px,3.33svh,36px)] py-1"
-        aria-label="Aidee가 답변을 생성하고 있습니다"
+        aria-label={language === 'ENG' ? 'Aidee is generating a response' : 'Aidee가 답변을 생성하고 있습니다'}
       >
         <div className="flex items-center gap-1.5">
           <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-zinc-400 [animation-delay:-0.24s]" />
@@ -5052,6 +5243,7 @@ function ChatBubble({
   latestDirectionMessageIds,
   latestRfpMessageId,
   latestCompanyMessageId,
+  language,
   message,
   onChoice,
   onConfirmKeyword,
@@ -5098,6 +5290,7 @@ function ChatBubble({
   latestDirectionMessageIds: Partial<Record<DirectionArtifactKind, string>>
   latestRfpMessageId: string | null
   latestCompanyMessageId: string | null
+  language: AppLanguage
   message: ChatMessageRecord
   onChoice: (value: string) => void
   onConfirmKeyword: (
@@ -5139,6 +5332,7 @@ function ChatBubble({
   >
   visualizedProblemStatements: ProblemStatementsData | null
 }) {
+  const copy = CHAT_COPY[language]
   const [hintModalOpen, setHintModalOpen] = useState(false)
   const [selectedHintIndex, setSelectedHintIndex] = useState<number | null>(null)
   const [selectedDesignIndex, setSelectedDesignIndex] = useState<number | null>(null)
@@ -5191,7 +5385,7 @@ function ChatBubble({
       if (!res.ok || !payload?.taskId) {
         const stageLabel = payload?.stage ? ` (${payload.stage})` : ''
         throw new Error(
-          `${payload?.error || '3D 작업을 시작하지 못했습니다.'}${stageLabel}`
+          `${payload?.error || (language === 'ENG' ? 'Failed to start the 3D task.' : '3D 작업을 시작하지 못했습니다.')}${stageLabel}`
         )
       }
 
@@ -5201,7 +5395,7 @@ function ChatBubble({
       setMeshyError(
         error instanceof Error
           ? error.message
-          : '3D 작업을 시작하지 못했습니다.'
+          : language === 'ENG' ? 'Failed to start the 3D task.' : '3D 작업을 시작하지 못했습니다.'
       )
       setMeshyStatus('FAILED')
     }
@@ -5264,7 +5458,7 @@ function ChatBubble({
     : choiceSplit.choices.length > 0
       ? choiceSplit.choices
       : shouldShowHints
-        ? buildFallbackHintChoices(displayContent)
+        ? buildFallbackHintChoices(displayContent, language)
         : []
 
   useEffect(() => {
@@ -5275,7 +5469,7 @@ function ChatBubble({
         const res = await fetch(`/api/meshy?taskId=${meshyTaskId}`)
         const task = await res.json()
         if (!res.ok) {
-          setMeshyError(task.error || '3D 작업 상태를 확인하지 못했습니다.')
+          setMeshyError(task.error || (language === 'ENG' ? 'Failed to retrieve the 3D task status.' : '3D 작업 상태를 확인하지 못했습니다.'))
           setMeshyStatus('FAILED')
           return
         }
@@ -5296,7 +5490,7 @@ function ChatBubble({
     }, 5000)
 
     return () => clearInterval(interval)
-  }, [meshyTaskId, meshyStatus, onModelReady])
+  }, [language, meshyTaskId, meshyStatus, onModelReady])
 
   const isPersonaVisualizationOnly =
     Boolean(message.personaCardBlock?.imageUrl) &&
@@ -5356,7 +5550,7 @@ function ChatBubble({
         </div>
       ) : null}
 
-      {projectDirection ? <ProjectDirectionCard data={projectDirection} /> : null}
+      {projectDirection ? <ProjectDirectionCard data={projectDirection} language={language} /> : null}
       {displayContent || shouldRenderGeneratedImages ? (
         <div className="w-full rounded-[20px] bg-slate-200 px-[clamp(24px,3.33svh,36px)] py-[clamp(20px,2.59svh,28px)]">
           {displayContent ? (
@@ -5369,6 +5563,7 @@ function ChatBubble({
                 moodboardImages ? (
                   <MoodboardGrid
                     images={moodboardImages}
+                    language={language}
                     onOpenModal={onOpenMoodboardModal}
                   />
                 ) : (
@@ -5385,18 +5580,23 @@ function ChatBubble({
                       }))
                     }
                     disabled={disabled}
+                    language={language}
                     projectId={projectId}
                     searchQuery={message.generatedImageBlock.prompt}
                     onBoardReady={(imgs) => {
                       setMoodboardImages(imgs)
-                      onChoice('스타일 레퍼런스를 선택하고 무드보드를 만들었어요.')
+                      onChoice(language === 'ENG'
+                        ? 'I selected the style references and created the moodboard.'
+                        : '스타일 레퍼런스를 선택하고 무드보드를 만들었어요.')
                     }}
                   />
                 )
               ) : message.generatedImageBlock.purpose === 'design' ? (
                 <div className="flex w-full max-w-[600px] flex-col gap-3 pt-1">
                   <p className="font-['Pretendard'] text-xs font-medium text-neutral-400">
-                    생성된 이미지 {message.generatedImageBlock.images.length}장
+                    {language === 'ENG'
+                      ? `${message.generatedImageBlock.images.length} generated images`
+                      : `생성된 이미지 ${message.generatedImageBlock.images.length}장`}
                   </p>
                   <div className="grid aspect-[25/16] w-full grid-cols-2 grid-rows-2 overflow-hidden rounded-[20px]">
                     {message.generatedImageBlock.images.map((image, index) => (
@@ -5414,7 +5614,7 @@ function ChatBubble({
                           setMeshyError(null)
                           onSelectDesignRendering(image)
                         }}
-                        aria-label={`${index + 1}번 디자인 시안 선택`}
+                        aria-label={language === 'ENG' ? `Select design concept ${index + 1}` : `${index + 1}번 디자인 시안 선택`}
                         className={`relative min-h-0 min-w-0 overflow-hidden transition disabled:cursor-not-allowed ${
                           selectedDesignIndex === index
                             ? 'z-10 ring-4 ring-inset ring-[#3056FF]'
@@ -5423,7 +5623,7 @@ function ChatBubble({
                       >
                         <Image
                           src={image}
-                          alt={`디자인 시안 ${index + 1}`}
+                          alt={language === 'ENG' ? `Design concept ${index + 1}` : `디자인 시안 ${index + 1}`}
                           fill
                           unoptimized
                           className="object-cover"
@@ -5443,7 +5643,7 @@ function ChatBubble({
                   {selectedDesignIndex !== null ? (
                     <div className="mt-4 flex w-full flex-col gap-3">
                       <p className="font-['Pretendard'] text-sm font-medium leading-7 text-stone-300">
-                        생성된 이미지 1장
+                        {language === 'ENG' ? '1 generated image' : '생성된 이미지 1장'}
                       </p>
                       <button
                         type="button"
@@ -5455,7 +5655,7 @@ function ChatBubble({
                           )
                         }
                         className="relative aspect-[25/16] w-full overflow-hidden rounded-[20px] bg-zinc-300"
-                        aria-label="선택한 디자인 시안 크게 보기"
+                        aria-label={language === 'ENG' ? 'Enlarge the selected design concept' : '선택한 디자인 시안 크게 보기'}
                       >
                         <Image
                           src={
@@ -5463,7 +5663,7 @@ function ChatBubble({
                               selectedDesignIndex
                             ]
                           }
-                          alt={`선택한 ${selectedDesignIndex + 1}번 디자인 시안`}
+                          alt={language === 'ENG' ? `Selected design concept ${selectedDesignIndex + 1}` : `선택한 ${selectedDesignIndex + 1}번 디자인 시안`}
                           fill
                           unoptimized
                           className="object-cover"
@@ -5476,12 +5676,14 @@ function ChatBubble({
                           disabled={disabled || isSelectedDesignConfirmed}
                           onClick={() =>
                             onChoice(
-                              `${selectedDesignIndex + 1}번 디자인 시안을 수정해서 다시 보여주세요`
+                              language === 'ENG'
+                                ? `Revise design concept ${selectedDesignIndex + 1} and show it again`
+                                : `${selectedDesignIndex + 1}번 디자인 시안을 수정해서 다시 보여주세요`
                             )
                           }
                           className="min-w-24 rounded-[30px] bg-blue-600 px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-white transition hover:bg-blue-700 disabled:bg-neutral-500 disabled:opacity-60"
                         >
-                          수정하기
+                          {language === 'ENG' ? 'Revise' : '수정하기'}
                         </button>
                         <button
                           type="button"
@@ -5513,7 +5715,7 @@ function ChatBubble({
                               : 'bg-[#DDF444] text-black hover:brightness-95 disabled:opacity-40'
                           }`}
                         >
-                          확정하기
+                          {copy.confirm}
                         </button>
                       </div>
 
@@ -5532,13 +5734,13 @@ function ChatBubble({
                             className="inline-flex items-center gap-1 rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
                           >
                             {meshyStatus === 'uploading'
-                              ? '업로드 중'
+                              ? language === 'ENG' ? 'Uploading' : '업로드 중'
                               : meshyStatus === 'PENDING' ||
                                   meshyStatus === 'IN_PROGRESS'
-                                ? '3D 생성 중'
+                                ? language === 'ENG' ? 'Generating 3D' : '3D 생성 중'
                                 : meshyStatus === 'SUCCEEDED'
-                                  ? '시각화 완료'
-                                  : '시각화 하기'}
+                                  ? language === 'ENG' ? 'Visualization complete' : '시각화 완료'
+                                  : copy.visualize}
                             <Image
                               src="/assets/icons/chat/visualize.svg"
                               alt=""
@@ -5554,7 +5756,7 @@ function ChatBubble({
                       {(meshyStatus === 'PENDING' ||
                         meshyStatus === 'IN_PROGRESS') && (
                         <span className="text-right font-['Pretendard'] text-xs text-zinc-500">
-                          Meshy AI 처리 중...
+                          {language === 'ENG' ? 'Meshy AI is processing...' : 'Meshy AI 처리 중...'}
                         </span>
                       )}
                       {meshyStatus === 'FAILED' && meshyError ? (
@@ -5568,7 +5770,7 @@ function ChatBubble({
                             onClick={() => void startSelectedDesignVisualization()}
                             className="rounded-[30px] bg-[#DDF444] px-4 py-1 font-['Pretendard'] text-xs font-semibold text-black disabled:opacity-50"
                           >
-                            다시 시도
+                            {language === 'ENG' ? 'Try again' : '다시 시도'}
                           </button>
                         </div>
                       ) : null}
@@ -5579,25 +5781,27 @@ function ChatBubble({
                         type="button"
                         disabled={disabled}
                         onClick={() =>
-                          onChoice('현재 디자인 시안을 수정해서 다시 보여주세요')
+                          onChoice(language === 'ENG'
+                            ? 'Revise the current design concepts and show them again'
+                            : '현재 디자인 시안을 수정해서 다시 보여주세요')
                         }
                         className="rounded-[30px] bg-blue-600 px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-white disabled:opacity-50"
                       >
-                        다시 생성하기
+                        {copy.regenerate}
                       </button>
                     </div>
                   )}
                   {meshyStatus === 'SUCCEEDED' && (meshyThumbnail || meshyModelUrl) && (
                     <div className="flex flex-col gap-2">
                       <span className="font-['Pretendard'] text-xs font-semibold text-zinc-600">
-                        3D 모델 미리보기
+                        {language === 'ENG' ? '3D model preview' : '3D 모델 미리보기'}
                       </span>
                       {meshyModelUrl ? (
                         <button
                           type="button"
                           onClick={onOpenModelViewer}
                           className="group relative h-40 w-40 overflow-hidden rounded-lg bg-zinc-100"
-                          aria-label="3D 모델 뷰어 열기"
+                          aria-label={language === 'ENG' ? 'Open 3D model viewer' : '3D 모델 뷰어 열기'}
                         >
                           {meshyThumbnail ? (
                             <Image
@@ -5617,7 +5821,7 @@ function ChatBubble({
                               <path d="m2 17 10 5 10-5" />
                               <path d="m2 12 10 5 10-5" />
                             </svg>
-                            돌려보기
+                            {language === 'ENG' ? 'View in 3D' : '돌려보기'}
                           </span>
                         </button>
                       ) : meshyThumbnail ? (
@@ -5656,11 +5860,13 @@ function ChatBubble({
                           type="button"
                           disabled={disabled}
                           onClick={() =>
-                            onChoice(`${index + 1}번 스타일 레퍼런스를 선택할게요`)
+                            onChoice(language === 'ENG'
+                              ? `I will select style reference ${index + 1}`
+                              : `${index + 1}번 스타일 레퍼런스를 선택할게요`)
                           }
                           className="rounded-full border border-zinc-200 bg-white px-4 py-1.5 font-['Pretendard'] text-xs font-semibold text-neutral-700 shadow-sm transition hover:border-blue-300 hover:bg-blue-50 disabled:opacity-50"
                         >
-                          {index + 1}번 선택
+                          {language === 'ENG' ? `Select ${index + 1}` : `${index + 1}번 선택`}
                         </button>
                       ))}
                     </div>
@@ -5675,12 +5881,19 @@ function ChatBubble({
       {directionWidgets ? (
         <DirectionResearchWidgets
           disabled={disabled}
+          language={language}
           onSelect={(kind) => {
-            const labelMap: Record<DirectionArtifactKind, string> = {
-              brand_positioning: '경쟁사 리서치 보기',
-              consumption_keywords: '소비 트렌드 리서치 보기',
-              market_size: '시장 규모 리서치 보기',
-            }
+            const labelMap: Record<DirectionArtifactKind, string> = language === 'ENG'
+              ? {
+                  brand_positioning: 'View competitor research',
+                  consumption_keywords: 'View consumer trend research',
+                  market_size: 'View market sizing research',
+                }
+              : {
+                  brand_positioning: '경쟁사 리서치 보기',
+                  consumption_keywords: '소비 트렌드 리서치 보기',
+                  market_size: '시장 규모 리서치 보기',
+                }
 
             onChoice(labelMap[kind])
           }}
@@ -5695,6 +5908,7 @@ function ChatBubble({
               disabled={disabled || isStyleKeywordsSubmitted}
               english={english}
               keywords={styleKeywordPickerData[key]}
+              language={language}
               selected={selectedStyleKeywords[key] ?? []}
               onToggle={(keyword) => {
                 if (isStyleKeywordsSubmitted) return
@@ -5722,21 +5936,21 @@ function ChatBubble({
                 disabled={disabled}
                 onClick={() => {
                   const lines = STYLE_KEYWORD_CATEGORIES.map(
-                    ({ key, korean }) =>
-                      `${korean}: ${(selectedStyleKeywords[key] ?? []).join(', ')}`
+                    ({ key, korean, english }) =>
+                      `${language === 'ENG' ? english : korean}: ${(selectedStyleKeywords[key] ?? []).join(', ')}`
                   )
-                  onChoice(`스타일 키워드를 선택했습니다.\n${lines.join('\n')}`)
+                  onChoice(`${language === 'ENG' ? 'I selected the style keywords.' : '스타일 키워드를 선택했습니다.'}\n${lines.join('\n')}`)
                 }}
                 className="rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
               >
-                선택 완료
+                {language === 'ENG' ? 'Complete selection' : '선택 완료'}
               </button>
             </div>
           ) : null}
           {isStyleKeywordsSubmitted ? (
             <div className="flex w-full justify-end">
               <span className="rounded-[30px] bg-zinc-200 px-6 py-[5px] font-['Pretendard'] text-sm font-semibold text-zinc-500">
-                키워드 선택 완료 ✓
+                {language === 'ENG' ? 'Keyword selection complete ✓' : '키워드 선택 완료 ✓'}
               </span>
             </div>
           ) : null}
@@ -5763,7 +5977,9 @@ function ChatBubble({
                 disabled={disabled || isMoodSelected}
                 onClick={() =>
                   onChoice(
-                    `스타일 분위기를 선택했어요: ${mood.title} - ${mood.description}`
+                    language === 'ENG'
+                      ? `I selected the style mood: ${mood.title} - ${mood.description}`
+                      : `스타일 분위기를 선택했어요: ${mood.title} - ${mood.description}`
                   )
                 }
                 className={`group w-full overflow-hidden rounded-[20px] border text-left transition disabled:cursor-not-allowed ${
@@ -5776,7 +5992,7 @@ function ChatBubble({
                   <div className="relative aspect-[16/7] w-full overflow-hidden bg-zinc-100">
                     <Image
                       src={image}
-                      alt={`${title} 스타일 레퍼런스`}
+                      alt={language === 'ENG' ? `${title} style reference` : `${title} 스타일 레퍼런스`}
                       fill
                       unoptimized
                       className="object-cover transition duration-300 group-hover:scale-[1.02]"
@@ -5814,7 +6030,7 @@ function ChatBubble({
           {isMoodSelected ? (
             <div className="flex w-full justify-end">
               <span className="rounded-[30px] bg-zinc-200 px-6 py-[5px] font-['Pretendard'] text-sm font-semibold text-zinc-500">
-                스타일 분위기 선택 완료 ✓
+                {language === 'ENG' ? 'Style mood selection complete ✓' : '스타일 분위기 선택 완료 ✓'}
               </span>
             </div>
           ) : null}
@@ -5832,7 +6048,7 @@ function ChatBubble({
             }}
             className="rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
           >
-            힌트 보기
+            {copy.hint}
           </button>
         </div>
       ) : null}
@@ -5843,10 +6059,10 @@ function ChatBubble({
             <button
               type="button"
               disabled={disabled}
-              onClick={() => onChoice('페르소나 카드 다시 생성하기')}
+              onClick={() => onChoice(language === 'ENG' ? 'Regenerate the Persona Card' : '페르소나 카드 다시 생성하기')}
               className="min-w-24 rounded-[30px] bg-blue-600 px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-white disabled:opacity-50"
             >
-              다시 생성하기
+              {copy.regenerate}
             </button>
             <button
               type="button"
@@ -5858,7 +6074,7 @@ function ChatBubble({
                   : 'bg-[#DDF444] text-black disabled:opacity-50'
               }`}
             >
-              확정하기
+              {copy.confirm}
             </button>
           </div>
 
@@ -5873,7 +6089,7 @@ function ChatBubble({
               }
               className="inline-flex items-center gap-1 rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
             >
-              시각화 하기
+              {copy.visualize}
               <Image
                 src="/assets/icons/chat/visualize.svg"
                 alt=""
@@ -5899,10 +6115,10 @@ function ChatBubble({
               <button
                 type="button"
                 disabled={disabled}
-                onClick={() => onChoice('Problem Statements 다시 생성하기')}
+                onClick={() => onChoice(language === 'ENG' ? 'Regenerate Problem Statements' : 'Problem Statements 다시 생성하기')}
                 className="min-w-24 rounded-[30px] bg-blue-600 px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-white disabled:opacity-50"
               >
-                다시 생성하기
+                {copy.regenerate}
               </button>
               <button
                 type="button"
@@ -5914,7 +6130,7 @@ function ChatBubble({
                     : 'bg-[#DDF444] text-black disabled:opacity-50'
                 }`}
               >
-                확정하기
+                {copy.confirm}
               </button>
             </div>
             {isProblemStatementsConfirmed && !visualizedProblemStatements ? (
@@ -5924,7 +6140,7 @@ function ChatBubble({
                 onClick={() => onVisualizeProblemStatements(psData)}
                 className="inline-flex items-center gap-1 rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
               >
-                시각화 하기
+                {copy.visualize}
                 <Image
                   src="/assets/icons/chat/visualize.svg"
                   alt=""
@@ -5970,10 +6186,10 @@ function ChatBubble({
               <button
                 type="button"
                 disabled={disabled}
-                onClick={() => onChoice(`${label} 다시 생성하기`)}
+                onClick={() => onChoice(language === 'ENG' ? `Regenerate ${label}` : `${label} 다시 생성하기`)}
                 className="min-w-24 rounded-[30px] bg-blue-600 px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-white disabled:opacity-50"
               >
-                다시 생성하기
+                {copy.regenerate}
               </button>
               <button
                 type="button"
@@ -5987,7 +6203,7 @@ function ChatBubble({
                     : 'bg-[#DDF444] text-black disabled:opacity-50'
                 }`}
               >
-                확정하기
+                {copy.confirm}
               </button>
             </div>
 
@@ -5998,7 +6214,7 @@ function ChatBubble({
                 onClick={() => onVisualizeKeyword(keywordCard)}
                 className="inline-flex items-center gap-1 rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
               >
-                시각화 하기
+                {copy.visualize}
                 <Image
                   src="/assets/icons/chat/visualize.svg"
                   alt=""
@@ -6022,12 +6238,14 @@ function ChatBubble({
               disabled={disabled}
               onClick={() =>
                 onChoice(
-                  `${getDirectionArtifactLabel(directionArtifactKind)} 다시 생성하기`
+                  language === 'ENG'
+                    ? `Regenerate ${getDirectionArtifactLabel(directionArtifactKind, language)}`
+                    : `${getDirectionArtifactLabel(directionArtifactKind, language)} 다시 생성하기`
                 )
               }
               className="min-w-24 rounded-[30px] bg-blue-600 px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-white disabled:opacity-50"
             >
-              다시 생성하기
+              {copy.regenerate}
             </button>
             <button
               type="button"
@@ -6043,7 +6261,7 @@ function ChatBubble({
                   : 'bg-[#DDF444] text-black disabled:opacity-50'
               }`}
             >
-              확정하기
+              {copy.confirm}
             </button>
           </div>
 
@@ -6061,7 +6279,7 @@ function ChatBubble({
               }
               className="inline-flex items-center gap-1 rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
             >
-              시각화 하기
+              {copy.visualize}
               <Image
                 src="/assets/icons/chat/visualize.svg"
                 alt=""
@@ -6080,10 +6298,10 @@ function ChatBubble({
           <button
             type="button"
             disabled={disabled}
-            onClick={() => onChoice('프로세스 확인하기')}
+            onClick={() => onChoice(language === 'ENG' ? 'Review the process' : '프로세스 확인하기')}
             className="rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
           >
-            프로세스 확인하기
+            {copy.process}
           </button>
         ) : null}
 
@@ -6095,21 +6313,21 @@ function ChatBubble({
               onClick={() =>
                 onChoice(
                   isStep1EntryPrompt(displayContent)
-                    ? 'STEP 1 시작할게요'
-                    : '다음 단계로 진행할게요'
+                    ? language === 'ENG' ? 'Start STEP 1' : 'STEP 1 시작할게요'
+                    : language === 'ENG' ? 'Continue to the next step' : '다음 단계로 진행할게요'
                 )
               }
               className="rounded-[30px] bg-blue-600 px-[clamp(16px,1.85svh,20px)] py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-white disabled:opacity-50"
             >
-              {isStep1EntryPrompt(displayContent) ? 'STEP 1 시작할게요' : '다음 단계로'}
+              {isStep1EntryPrompt(displayContent) ? copy.startStep1 : copy.nextStep}
             </button>
             <button
               type="button"
               disabled={disabled}
-              onClick={() => onChoice('더 하고 싶은 말이 있어요')}
+              onClick={() => onChoice(language === 'ENG' ? 'I have more to add' : '더 하고 싶은 말이 있어요')}
               className="rounded-[30px] bg-[#DDF444] px-[clamp(16px,1.85svh,20px)] py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
             >
-              더 하고 싶은 말이 있어요
+              {copy.moreToAdd}
             </button>
           </>
         ) : null}
@@ -6123,18 +6341,18 @@ function ChatBubble({
             <button
               type="button"
               disabled={disabled}
-              onClick={() => onChoice('프로젝트 기획안 수정하기')}
+              onClick={() => onChoice(language === 'ENG' ? 'Regenerate the project plan' : '프로젝트 기획안 수정하기')}
               className="min-w-24 rounded-[30px] bg-blue-600 px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-white transition hover:bg-blue-700 disabled:opacity-50"
             >
-              다시 생성하기
+              {copy.regenerate}
             </button>
             <button
               type="button"
               disabled={disabled || hasConfirmedRfp}
-              onClick={() => onChoice('프로젝트 기획안 확정하기')}
+              onClick={() => onChoice(language === 'ENG' ? 'Confirm the project plan' : '프로젝트 기획안 확정하기')}
               className="min-w-24 rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-black transition hover:brightness-95 disabled:opacity-50"
             >
-              확정하기
+              {copy.confirm}
             </button>
           </div>
 
@@ -6145,7 +6363,7 @@ function ChatBubble({
               onClick={() => onVisualizeRfp(message.id, rfpBlock.rfp!)}
               className="inline-flex items-center gap-1 rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
             >
-              시각화 하기
+              {copy.visualize}
               <Image
                 src="/assets/icons/chat/visualize.svg"
                 alt=""
@@ -6164,7 +6382,7 @@ function ChatBubble({
               onClick={() => void onDownloadRfp()}
               className="rounded-[30px] bg-blue-600 px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-white disabled:opacity-50"
             >
-              리포트 다운로드
+              {copy.downloadReport}
             </button>
           ) : null}
         </div>
@@ -6176,10 +6394,10 @@ function ChatBubble({
             <button
               type="button"
               disabled={disabled}
-              onClick={() => onChoice('협력업체 다시 추천해주세요')}
+              onClick={() => onChoice(language === 'ENG' ? 'Recommend partner companies again' : '협력업체 다시 추천해주세요')}
               className="min-w-24 rounded-[30px] bg-blue-600 px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-white transition hover:bg-blue-700 disabled:opacity-50"
             >
-              다시 생성하기
+              {copy.regenerate}
             </button>
             <button
               type="button"
@@ -6187,7 +6405,7 @@ function ChatBubble({
               onClick={() => onConfirmCompany(message.id)}
               className="min-w-24 rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-black transition hover:brightness-95 disabled:opacity-50"
             >
-              확정하기
+              {copy.confirm}
             </button>
           </div>
 
@@ -6198,7 +6416,7 @@ function ChatBubble({
               onClick={onVisualizeCompany}
               className="inline-flex items-center gap-1 rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
             >
-              시각화 하기
+              {copy.visualize}
               <Image
                 src="/assets/icons/chat/visualize.svg"
                 alt=""
@@ -6217,7 +6435,7 @@ function ChatBubble({
               onClick={onVisualizeCompany}
               className="rounded-[30px] bg-blue-600 px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-white disabled:opacity-50"
             >
-              협력업체 보기
+              {copy.viewPartners}
             </button>
           ) : null}
         </div>
@@ -6242,7 +6460,7 @@ function ChatBubble({
               >
                 <Image
                   src="/assets/icons/chat/x-button.svg"
-                  alt="닫기"
+                  alt={copy.close}
                   width={12}
                   height={12}
                 />
@@ -6281,7 +6499,7 @@ function ChatBubble({
                 }}
                 className="w-24 rounded-[30px] bg-[#DDF444] px-5 py-[3px] text-center font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-40"
               >
-                선택하기
+                {copy.select}
               </button>
             </div>
           </div>

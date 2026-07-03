@@ -13,7 +13,7 @@ export type AppLanguage = 'ENG' | 'KOR'
 
 const LANGUAGE_STORAGE_KEY = 'aidee:language'
 const LANGUAGE_CHANGE_EVENT = 'aidee:language-change'
-let memoryLanguage: AppLanguage = 'KOR'
+let memoryLanguage: AppLanguage = 'ENG'
 
 type AppLanguageContextValue = {
   language: AppLanguage
@@ -25,7 +25,7 @@ const AppLanguageContext = createContext<AppLanguageContextValue | null>(null)
 function getLanguageSnapshot(): AppLanguage {
   try {
     const savedLanguage = window.localStorage.getItem(LANGUAGE_STORAGE_KEY)
-    memoryLanguage = savedLanguage === 'ENG' ? 'ENG' : 'KOR'
+    memoryLanguage = savedLanguage === 'KOR' ? 'KOR' : 'ENG'
     return memoryLanguage
   } catch {
     return memoryLanguage
@@ -43,7 +43,7 @@ function subscribeToLanguage(onStoreChange: () => void) {
 }
 
 function getServerLanguageSnapshot(): AppLanguage {
-  return 'KOR'
+  return 'ENG'
 }
 
 export function AppLanguageProvider({ children }: { children: ReactNode }) {

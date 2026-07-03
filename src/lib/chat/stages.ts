@@ -75,17 +75,17 @@ export function canRequestCompanyStage(stageKey: StageKey) {
 }
 
 export function hasStyleReferenceSelection(text: string) {
-  return /([1-3])\s*번|이미지\s*([1-3])|레퍼런스\s*([1-3])|첫\s*번째|두\s*번째|세\s*번째|선택|확정/.test(
+  return /([1-3])\s*번|이미지\s*([1-3])|레퍼런스\s*([1-3])|첫\s*번째|두\s*번째|세\s*번째|선택|확정|(?:image|reference)\s*([1-3])|(?:first|second|third)\s*(?:image|reference)?|select|confirm/i.test(
     text
   )
 }
 
 export function hasDesignFinalSelection(text: string) {
-  if (/수정|바꿔|변경|조정|다듬|발전|재생성/i.test(text)) {
+  if (/수정|바꿔|변경|조정|다듬|발전|재생성|edit|revise|change|adjust|refine|regenerate/i.test(text)) {
     return false
   }
 
-  return /(?:디자인|시안|렌더|안|[1-3]\s*번).*(?:확정|최종|진행|좋아|갈게|하겠습니다)|최종\s*확정/i.test(
+  return /(?:디자인|시안|렌더|안|[1-3]\s*번).*(?:확정|최종|진행|좋아|갈게|하겠습니다)|최종\s*확정|(?:design|concept|render|option|image).*(?:confirm|final|proceed|select)|final\s*confirmation/i.test(
     text
   )
 }
@@ -106,7 +106,7 @@ export function resolveIntentStageKey({
   // "STEP 1 시작할게요"는 step_0_start 프로세스 소개 후 STEP 1 진입 신호 — step_2_persona로 넘어가지 않음
   if (
     (currentStageKey === 'step_0_start' || currentStageKey === 'step_1_idea') &&
-    /STEP\s*1\s*시작할게요/i.test(lastUserMessage)
+    /STEP\s*1\s*시작할게요|(?:start|begin)\s*STEP\s*1/i.test(lastUserMessage)
   ) {
     return 'step_1_idea'
   }
@@ -114,7 +114,7 @@ export function resolveIntentStageKey({
   if (
     currentStageKey === 'step_1_idea' &&
     hasCompletedStep1 &&
-    /다음\s*단계로\s*진행할게요|STEP\s*2(?:로)?\s*(?:진행|넘어가|시작)/i.test(
+    /다음\s*단계로\s*진행할게요|STEP\s*2(?:로)?\s*(?:진행|넘어가|시작)|(?:continue|proceed|move)\s*(?:to\s*)?(?:the\s*)?next\s*step|(?:start|move to|proceed to)\s*STEP\s*2/i.test(
       lastUserMessage
     )
   ) {
@@ -124,7 +124,7 @@ export function resolveIntentStageKey({
   if (
     currentStageKey === 'step_2_research' &&
     hasCompletedStep2Research &&
-    /(?:궁금한\s*점|더\s*탐색|추가\s*질문).*(?:없|괜찮)|없어|없습니다|다음\s*(?:단계|STEP)|STEP\s*3|넘어가/i.test(
+    /(?:궁금한\s*점|더\s*탐색|추가\s*질문).*(?:없|괜찮)|없어|없습니다|다음\s*(?:단계|STEP)|STEP\s*3|넘어가|no (?:more|additional) questions|next (?:step|STEP)|(?:start|move to|proceed to)\s*STEP\s*3/i.test(
       lastUserMessage
     )
   ) {
@@ -134,7 +134,7 @@ export function resolveIntentStageKey({
   if (
     currentStageKey === 'step_3_direction' &&
     hasCompletedDirectionResearch &&
-    /다음\s*(?:단계|STEP)|STEP\s*4|스타일\s*(?:단계|컨셉)|넘어가|진행/i.test(
+    /다음\s*(?:단계|STEP)|STEP\s*4|스타일\s*(?:단계|컨셉)|넘어가|진행|next (?:step|STEP)|STEP\s*4|style concept|move on|proceed/i.test(
       lastUserMessage
     )
   ) {
@@ -143,7 +143,7 @@ export function resolveIntentStageKey({
 
   if (
     currentStageKey === 'step_4_style' &&
-    /스타일\s*레퍼런스를\s*선택하고\s*무드보드를\s*만들었어요|STEP\s*5|디자인\s*시안|시안\s*생성/i.test(
+    /스타일\s*레퍼런스를\s*선택하고\s*무드보드를\s*만들었어요|STEP\s*5|디자인\s*시안|시안\s*생성|selected (?:the )?style references? and created (?:the )?moodboard|design concepts?|generate (?:the )?concepts?/i.test(
       lastUserMessage
     )
   ) {
@@ -153,26 +153,26 @@ export function resolveIntentStageKey({
   if (
     currentStageKey === 'step_5_design' &&
     (hasDesignFinalSelection(lastUserMessage) ||
-      /다음\s*(?:단계|STEP)(?:로)?\s*(?:진행|넘어가|이동|시작|가)|STEP\s*6|기획안\s*(?:생성|작성|만들)|다음\s*단계/i.test(
+      /다음\s*(?:단계|STEP)(?:로)?\s*(?:진행|넘어가|이동|시작|가)|STEP\s*6|기획안\s*(?:생성|작성|만들)|다음\s*단계|next (?:step|STEP)|STEP\s*6|(?:create|generate|write) (?:the )?(?:project )?plan/i.test(
         lastUserMessage
       ))
   ) {
     return 'step_6_rfp'
   }
 
-  if (/협력\s*(?:업체|파트너)|업체\s*추천|파트너|vendor|company/i.test(lastUserMessage)) {
+  if (/협력\s*(?:업체|파트너)|업체\s*추천|파트너|vendor|company|partner/i.test(lastUserMessage)) {
     return canRequestCompanyStage(currentStageKey)
       ? 'step_6_company'
       : currentStageKey
   }
 
-  if (/rfp|제안\s*요청서|프로젝트\s*기획안|기획안\s*생성|문서\s*생성|pdf/i.test(lastUserMessage)) {
+  if (/rfp|제안\s*요청서|프로젝트\s*기획안|기획안\s*생성|문서\s*생성|pdf|project\s*(?:plan|report)|generate\s*(?:the\s*)?document/i.test(lastUserMessage)) {
     return canRequestRfpStage(currentStageKey) ? 'step_6_rfp' : currentStageKey
   }
 
   if (
     currentStageKey === 'step_6_rfp' &&
-    /다음\s*(?:단계|STEP)|STEP\s*7|협력\s*(?:업체|파트너)|파트너|넘어가|진행/i.test(
+    /다음\s*(?:단계|STEP)|STEP\s*7|협력\s*(?:업체|파트너)|파트너|넘어가|진행|next (?:step|STEP)|STEP\s*7|partner|vendor|proceed/i.test(
       lastUserMessage
     )
   ) {
@@ -192,7 +192,7 @@ export function inferStageMetaFromText({
   if (
     currentStageKey === 'step_0_start' &&
     /STEP\s*1/i.test(text) &&
-    /(?:전체\s*프로세스|프로세스는|1[.)]\s*개발\s*조건)/i.test(text)
+    /(?:전체\s*프로세스|프로세스는|1[.)]\s*개발\s*조건)|(?:full|overall|development)\s*process|1[.)]\s*Development Requirements/i.test(text)
   ) {
     return {
       currentStageKey,
@@ -204,7 +204,7 @@ export function inferStageMetaFromText({
 
   if (
     currentStageKey === 'step_1_idea' &&
-    /STEP\s*2\.?\s*사용자\s*명확화\s*단계(?:에\s*오신\s*것을\s*환영|입니다|를\s*시작)/i.test(
+    /STEP\s*2\.?\s*사용자\s*명확화\s*단계(?:에\s*오신\s*것을\s*환영|입니다|를\s*시작)|STEP\s*2\.?\s*(?:User Clarification|Target User)/i.test(
       text
     )
   ) {
@@ -216,7 +216,7 @@ export function inferStageMetaFromText({
     }
   }
 
-  if (/STEP\s*3|방향/i.test(text) && currentStageKey.startsWith('step_2')) {
+  if (/STEP\s*3|방향|development direction/i.test(text) && currentStageKey.startsWith('step_2')) {
     return {
       currentStageKey,
       nextStageKey: 'step_3_direction',
@@ -225,7 +225,7 @@ export function inferStageMetaFromText({
     }
   }
 
-  if (/STEP\s*4|스타일|레퍼런스/i.test(text) && currentStageKey === 'step_3_direction') {
+  if (/STEP\s*4|스타일|레퍼런스|style|reference/i.test(text) && currentStageKey === 'step_3_direction') {
     return {
       currentStageKey,
       nextStageKey: 'step_4_style',
@@ -236,7 +236,7 @@ export function inferStageMetaFromText({
 
   if (
     currentStageKey === 'step_4_style' &&
-    /STEP\s*5|디자인\s*시안|3D\s*(?:디자인|렌더링)|생성된\s*이미지/i.test(
+    /STEP\s*5|디자인\s*시안|3D\s*(?:디자인|렌더링)|생성된\s*이미지|design concepts?|3D\s*(?:design|render)|generated images?/i.test(
       text
     )
   ) {

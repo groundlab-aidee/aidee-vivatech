@@ -1,6 +1,7 @@
 'use client'
 
 import Image from 'next/image'
+import type { AppLanguage } from '@/components/i18n/AppLanguageContext'
 
 export type MoodboardGridImage = {
   id: string
@@ -14,17 +15,18 @@ export type MoodboardGridImage = {
 
 type Props = {
   images: MoodboardGridImage[]
+  language: AppLanguage
   onOpenModal?: () => void
 }
 
-export function MoodboardGrid({ images, onOpenModal }: Props) {
+export function MoodboardGrid({ images, language, onOpenModal }: Props) {
   if (images.length === 0) return null
 
   return (
     <div className="mt-4 flex flex-col gap-3">
       <div className="flex items-center justify-between">
         <p className="font-['Pretendard'] text-sm font-semibold text-zinc-700">
-          무드보드
+          {language === 'ENG' ? 'Moodboard' : '무드보드'}
         </p>
         {onOpenModal ? (
           <button
@@ -32,7 +34,7 @@ export function MoodboardGrid({ images, onOpenModal }: Props) {
             onClick={onOpenModal}
             className="font-['Pretendard'] text-xs text-blue-600 hover:underline"
           >
-            전체 보기
+            {language === 'ENG' ? 'View all' : '전체 보기'}
           </button>
         ) : null}
       </div>
@@ -42,7 +44,7 @@ export function MoodboardGrid({ images, onOpenModal }: Props) {
             <div className="relative aspect-video w-full overflow-hidden rounded-md">
               <Image
                 src={img.url}
-                alt={`무드보드 ${i + 1}`}
+                alt={language === 'ENG' ? `Moodboard ${i + 1}` : `무드보드 ${i + 1}`}
                 fill
                 unoptimized
                 className="object-cover"

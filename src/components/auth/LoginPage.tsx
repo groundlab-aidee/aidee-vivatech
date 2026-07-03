@@ -28,7 +28,7 @@ const loginCopy = {
 export function LoginPage({
   next = '/workspace',
   hasAuthError = false,
-  language = 'KOR',
+  language = 'ENG',
 }: LoginPageProps) {
   const copy = loginCopy[language]
 

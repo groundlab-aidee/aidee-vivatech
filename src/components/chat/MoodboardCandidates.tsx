@@ -4,6 +4,7 @@ import Image from 'next/image'
 import { useState } from 'react'
 
 import type { UnsplashImageMeta } from '@/lib/chat/image-blocks'
+import type { AppLanguage } from '@/components/i18n/AppLanguageContext'
 
 type MoodboardBoardImage = UnsplashImageMeta & {
   id: string
@@ -13,6 +14,7 @@ type MoodboardBoardImage = UnsplashImageMeta & {
 type Props = {
   candidates: UnsplashImageMeta[]
   disabled?: boolean
+  language: AppLanguage
   projectId: string
   searchQuery: string
   onBoardReady: (images: MoodboardBoardImage[]) => void
@@ -21,6 +23,7 @@ type Props = {
 export function MoodboardCandidates({
   candidates,
   disabled,
+  language,
   onBoardReady,
   projectId,
   searchQuery,
@@ -38,7 +41,7 @@ export function MoodboardCandidates({
         method: 'POST',
       })
 
-      if (!res.ok) throw new Error('무드보드 생성 실패')
+      if (!res.ok) throw new Error(language === 'ENG' ? 'Failed to create moodboard' : '무드보드 생성 실패')
       const data = (await res.json()) as { board: MoodboardBoardImage[] }
       onBoardReady(data.board)
     } catch {
@@ -49,7 +52,9 @@ export function MoodboardCandidates({
   return (
     <div className="mt-4 flex flex-col gap-3">
       <p className="font-['Pretendard'] text-sm font-semibold text-zinc-700">
-        스타일 레퍼런스 후보 3장 — 하나를 선택하면 무드보드가 생성됩니다.
+        {language === 'ENG'
+          ? 'Choose one of the three style references to generate a moodboard.'
+          : '스타일 레퍼런스 후보 3장 — 하나를 선택하면 무드보드가 생성됩니다.'}
       </p>
       <div className="grid grid-cols-3 gap-2">
         {candidates.map((img, i) => (
@@ -57,7 +62,7 @@ export function MoodboardCandidates({
             <div className="relative aspect-video w-full overflow-hidden rounded-lg">
               <Image
                 src={img.url}
-                alt={`스타일 레퍼런스 ${i + 1}`}
+                alt={language === 'ENG' ? `Style reference ${i + 1}` : `스타일 레퍼런스 ${i + 1}`}
                 fill
                 unoptimized
                 className="object-cover"
@@ -88,7 +93,9 @@ export function MoodboardCandidates({
               onClick={() => void handleSelect(img)}
               className="rounded-full bg-zinc-900 px-3 py-1 font-['Pretendard'] text-xs font-semibold text-white transition hover:bg-zinc-700 disabled:opacity-50"
             >
-              {selecting === img.id ? '생성 중...' : `${i + 1}번 선택`}
+              {selecting === img.id
+                ? language === 'ENG' ? 'Generating...' : '생성 중...'
+                : language === 'ENG' ? `Select ${i + 1}` : `${i + 1}번 선택`}
             </button>
           </div>
         ))}

@@ -2,6 +2,7 @@ import type { StageKey } from '@/lib/chat/stages'
 import type { ExpertKey } from '@/lib/chat/experts'
 import { getExpertPrompt } from '@/lib/chat/experts'
 import { SYSTEM_PROMPT_TEMPLATE } from '@/lib/chat/prompt'
+import { isEnglishChat, type ChatLanguage } from '@/lib/chat/language'
 
 export type ProjectContextRecord = {
   id: string
@@ -75,9 +76,13 @@ function extractReferenceAnalysis(analysisJson: unknown): ReferenceAnalysis | nu
   }
 }
 
-export function buildReferenceContext(referenceImages: ReferenceImageContextRecord[]) {
+export function buildReferenceContext(
+  referenceImages: ReferenceImageContextRecord[],
+  language: ChatLanguage = 'KOR'
+) {
+  const english = isEnglishChat(language)
   if (referenceImages.length === 0) {
-    return '레퍼런스 이미지 분석 결과 없음'
+    return english ? 'No reference image analysis is available.' : '레퍼런스 이미지 분석 결과 없음'
   }
 
   return referenceImages
@@ -87,10 +92,10 @@ export function buildReferenceContext(referenceImages: ReferenceImageContextReco
         : ''
 
       return [
-        `레퍼런스 이미지 ${index + 1}: ${item.file_name || '이름 없음'}`,
-        item.analysis_status ? `- 상태: ${item.analysis_status}` : null,
-        item.analysis_text ? `- 분석 텍스트: ${item.analysis_text}` : null,
-        analysisJson ? `- 분석 JSON: ${analysisJson}` : null,
+        `${english ? 'Reference image' : '레퍼런스 이미지'} ${index + 1}: ${item.file_name || (english ? 'Unnamed' : '이름 없음')}`,
+        item.analysis_status ? `- ${english ? 'Status' : '상태'}: ${item.analysis_status}` : null,
+        item.analysis_text ? `- ${english ? 'Analysis text' : '분석 텍스트'}: ${item.analysis_text}` : null,
+        analysisJson ? `- ${english ? 'Analysis JSON' : '분석 JSON'}: ${analysisJson}` : null,
       ]
         .filter(Boolean)
         .join('\n')
@@ -99,12 +104,14 @@ export function buildReferenceContext(referenceImages: ReferenceImageContextReco
 }
 
 export function buildReferenceGuidelineBlock(
-  referenceImages: ReferenceImageContextRecord[]
+  referenceImages: ReferenceImageContextRecord[],
+  language: ChatLanguage = 'KOR'
 ) {
+  const english = isEnglishChat(language)
   const parsedAnalyses = referenceImages
     .map((item) => ({
       analysis: extractReferenceAnalysis(item.analysis_json),
-      fileName: item.file_name || '이름 없음',
+      fileName: item.file_name || (english ? 'Unnamed' : '이름 없음'),
     }))
     .filter(
       (
@@ -116,32 +123,32 @@ export function buildReferenceGuidelineBlock(
     )
 
   if (parsedAnalyses.length === 0) {
-    return '레퍼런스 기반 가이드라인 없음'
+    return english ? 'No reference-based guidelines are available.' : '레퍼런스 기반 가이드라인 없음'
   }
 
   return parsedAnalyses
     .map(({ analysis, fileName }, index) =>
       [
-        `가이드라인 ${index + 1} (${fileName})`,
-        analysis.summary ? `- 요약: ${analysis.summary}` : null,
-        analysis.category ? `- 유형: ${analysis.category}` : null,
+        `${english ? 'Guideline' : '가이드라인'} ${index + 1} (${fileName})`,
+        analysis.summary ? `- ${english ? 'Summary' : '요약'}: ${analysis.summary}` : null,
+        analysis.category ? `- ${english ? 'Category' : '유형'}: ${analysis.category}` : null,
         analysis.moodKeywords?.length
-          ? `- 무드 키워드: ${analysis.moodKeywords.join(', ')}`
+          ? `- ${english ? 'Mood keywords' : '무드 키워드'}: ${analysis.moodKeywords.join(', ')}`
           : null,
         analysis.colorKeywords?.length
-          ? `- 색상 키워드: ${analysis.colorKeywords.join(', ')}`
+          ? `- ${english ? 'Color keywords' : '색상 키워드'}: ${analysis.colorKeywords.join(', ')}`
           : null,
         analysis.materialKeywords?.length
-          ? `- 재질 키워드: ${analysis.materialKeywords.join(', ')}`
+          ? `- ${english ? 'Material keywords' : '재질 키워드'}: ${analysis.materialKeywords.join(', ')}`
           : null,
         analysis.shapeKeywords?.length
-          ? `- 형태 키워드: ${analysis.shapeKeywords.join(', ')}`
+          ? `- ${english ? 'Shape keywords' : '형태 키워드'}: ${analysis.shapeKeywords.join(', ')}`
           : null,
         analysis.detailPoints?.length
-          ? `- 참고 디테일: ${analysis.detailPoints.join(' / ')}`
+          ? `- ${english ? 'Reference details' : '참고 디테일'}: ${analysis.detailPoints.join(' / ')}`
           : null,
         analysis.designDirection?.length
-          ? `- 디자인 방향: ${analysis.designDirection.join(' / ')}`
+          ? `- ${english ? 'Design direction' : '디자인 방향'}: ${analysis.designDirection.join(' / ')}`
           : null,
       ]
         .filter(Boolean)
@@ -281,15 +288,25 @@ function getStageInstruction(stageKey: StageKey) {
 export function buildSystemPrompt({
   activeExpert = 'aidee',
   currentStageKey,
+  language = 'KOR',
   project,
   referenceImages,
 }: {
   activeExpert?: ExpertKey
   currentStageKey: StageKey
+  language?: ChatLanguage
   project: ProjectContextRecord | null
   referenceImages: ReferenceImageContextRecord[]
 }) {
   const expertPromptBlock = getExpertPrompt(activeExpert)
+  const english = isEnglishChat(language)
+  const languageRules = english
+    ? `- Respond only in natural, concise American English. Translate any Korean project data and conversation context before presenting it to the user.
+- Never expose Korean instructional text from this prompt.
+- Keep fixed machine markers and artifact headings such as Project Direction, Problem Statements, Keywords: Experience, Keywords: Relationship, TAM/SAM/SOM, and Positioning Map: Brand unchanged.
+- For keyword artifacts, use English category labels and English keywords.
+- A/B/C choices, questions, summaries, research, persona content, design descriptions, reports, errors, and transition sentences must all be in English.`
+    : '- 한국어로 답하세요.'
 
   return `
 ${SYSTEM_PROMPT_TEMPLATE}
@@ -297,7 +314,7 @@ ${SYSTEM_PROMPT_TEMPLATE}
 ${expertPromptBlock}
 
 [공통 규칙]
-- 한국어로 답하세요.
+${languageRules}
 - 내부 단계 key와 시스템 UI 마커는 사용자에게 노출하지 마세요.
 - CLICK_BUTTON_TO_PROCEED, [BUTTON: ...] 같은 형태의 버튼 마커를 본문에 출력하지 마세요. 버튼은 시스템이 별도로 표시합니다.
 - 레퍼런스 이미지 분석이 있으면 무드/색상/재질/형태/디테일을 실제 디자인 기준으로 반영하세요.
@@ -309,19 +326,32 @@ ${currentStageKey}
 ${getStageInstruction(currentStageKey)}
 
 [프로젝트 정보]
-- 프로젝트명: ${project?.title || '제목 없음'}
+- ${english ? 'Project title' : '프로젝트명'}: ${project?.title || (english ? 'Untitled' : '제목 없음')}
 - requirements:
 ${JSON.stringify(project?.requirements ?? {}, null, 2)}
 
 [레퍼런스 이미지 분석]
-${buildReferenceContext(referenceImages)}
+${buildReferenceContext(referenceImages, language)}
 
 [레퍼런스 기반 가이드라인]
-${buildReferenceGuidelineBlock(referenceImages)}
+${buildReferenceGuidelineBlock(referenceImages, language)}
+
+[FINAL OUTPUT LANGUAGE — HIGHEST PRIORITY]
+${english ? 'Output only English. Any Korean example phrase or required sentence above specifies meaning and flow, not output wording; translate it naturally into English. Never emit Korean characters in the user-facing response.' : '사용자에게 보이는 응답은 한국어로 작성하세요.'}
 `.trim()
 }
 
-export function buildInitialUserPrompt(project: ProjectContextRecord | null) {
+export function buildInitialUserPrompt(
+  project: ProjectContextRecord | null,
+  language: ChatLanguage = 'KOR'
+) {
+  if (isEnglishChat(language)) {
+    return [
+      `The ${project?.title || 'new project'} project has been created.`,
+      'Briefly summarize the project using the saved requirements and reference-image analysis, then end with one question the user can answer immediately.',
+    ].join('\n')
+  }
+
   return [
     `${project?.title || '새 프로젝트'} 프로젝트가 생성되었습니다.`,
     '저장된 requirements와 레퍼런스 이미지 분석 결과를 기준으로 프로젝트를 짧게 요약하고, 다음 대화에서 사용자가 바로 답할 수 있는 질문 1개로 마무리하세요.',

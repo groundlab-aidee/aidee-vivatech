@@ -46,6 +46,11 @@ import {
   searchUnsplashPhotos,
   type UnsplashImageMeta,
 } from '@/lib/chat/unsplash'
+import {
+  isEnglishChat,
+  normalizeChatLanguage,
+  type ChatLanguage,
+} from '@/lib/chat/language'
 
 export const maxDuration = 60
 
@@ -58,6 +63,7 @@ type ChatRequestBody = {
     | 'persona_card'
     | 'style_reference'
   message?: unknown
+  language?: unknown
   projectId?: unknown
 }
 
@@ -119,29 +125,33 @@ function isPersonaCardVisualizationRequest(text: string) {
 }
 
 function isPersonaCardConfirmRequest(text: string) {
-  return /페르소나\s*카드.*확정|persona\s*card.*confirm/i.test(text)
+  return /페르소나\s*카드.*확정|persona\s*card.*confirm|confirm.*persona\s*card/i.test(text)
 }
 
 function isPersonaCardRevisionRequest(text: string) {
-  return /페르소나\s*카드\s*(?:수정|다시\s*생성|재생성)|persona\s*card\s*(?:edit|revise|regenerate)/i.test(
+  return /페르소나\s*카드\s*(?:수정|다시\s*생성|재생성)|persona\s*card\s*(?:edit|revise|regenerate)|(?:edit|revise|regenerate).*persona\s*card/i.test(
     text
   )
 }
 
 function isRfpConfirmRequest(text: string) {
-  return /(?:프로젝트\s*)?기획안.*확정|project\s*(?:plan|report).*confirm/i.test(
+  return /(?:프로젝트\s*)?기획안.*확정|project\s*(?:plan|report).*confirm|confirm.*project\s*(?:plan|report)/i.test(
     text
   )
 }
 
 function isRfpRevisionRequest(text: string) {
-  return /(?:프로젝트\s*)?기획안.*(?:수정|다시\s*생성|재생성)|project\s*(?:plan|report).*(?:edit|revise|regenerate)/i.test(
+  return /(?:프로젝트\s*)?기획안.*(?:수정|다시\s*생성|재생성)|project\s*(?:plan|report).*(?:edit|revise|regenerate)|(?:edit|revise|regenerate).*project\s*(?:plan|report)/i.test(
     text
   )
 }
 
-function buildPostPersonaKeywordPrompt() {
-  return [
+function buildPostPersonaKeywordPrompt(language: ChatLanguage) {
+  return isEnglishChat(language) ? [
+    'The Persona Card has been generated.', '',
+    'Review it, then regenerate or confirm it.',
+    'Visualization becomes available after confirmation.',
+  ].join('\n') : [
     'Persona Card를 생성했습니다.',
     '',
     '내용을 확인한 뒤 다시 생성하거나 확정할 수 있습니다.',
@@ -149,8 +159,12 @@ function buildPostPersonaKeywordPrompt() {
   ].join('\n')
 }
 
-function buildPersonaConfirmedPrompt() {
-  return [
+function buildPersonaConfirmedPrompt(language: ChatLanguage) {
+  return isEnglishChat(language) ? [
+    'The Persona Card has been confirmed.', '',
+    'STEP 2 is complete: Problem Statements, Keywords: Experience, Keywords: Relationship, and Persona Card.',
+    'You are ready to move to STEP 3: Development Direction.',
+  ].join('\n') : [
     '페르소나 카드를 확정했습니다.',
     '',
     'STEP 2의 모든 과정(Problem Statements, Keywords: Experience, Keywords: Relationship, Persona Card)이 완료되었습니다.',
@@ -158,8 +172,11 @@ function buildPersonaConfirmedPrompt() {
   ].join('\n')
 }
 
-function buildRfpConfirmedPrompt() {
-  return [
+function buildRfpConfirmedPrompt(language: ChatLanguage) {
+  return isEnglishChat(language) ? [
+    'The project plan has been confirmed.', '',
+    'You can now visualize the confirmed content as a Project Report.',
+  ].join('\n') : [
     '프로젝트 기획안을 확정했습니다.',
     '',
     '확정된 내용을 Project Report로 시각화할 수 있습니다.',
@@ -181,7 +198,7 @@ function hasAllKeywordResults(
 
 function hasCompletedStep1(messages: Array<{ content: string }>) {
   return messages.some((m) =>
-    /핵심\s*아이디어와\s*개발\s*조건이\s*정리되었습니다|STEP\s*2\.\s*사용자\s*명확화\s*단계로\s*넘어가겠습니다/i.test(
+    /핵심\s*아이디어와\s*개발\s*조건이\s*정리되었습니다|STEP\s*2\.\s*사용자\s*명확화\s*단계로\s*넘어가겠습니다|core idea and development requirements have been organized|move (?:on )?to STEP\s*2/i.test(
       m.content
     )
   )
@@ -202,14 +219,14 @@ function hasDirectionResearch(
 }
 
 function isDirectionResearchRequest(text: string) {
-  return /(?:시장\s*규모|소비\s*트렌드|경쟁사)\s*리서치\s*(?:보기|다시\s*생성하기)/i.test(
+  return /(?:시장\s*규모|소비\s*트렌드|경쟁사)\s*리서치\s*(?:보기|다시\s*생성하기)|(?:(?:view|open|regenerate)\s*)?(?:market sizing|consumer trends?|competitor)(?:\s*research)?|(?:market sizing|consumer trends?|competitor)(?:\s*research)?\s*(?:view|open|regenerate)/i.test(
     text
   )
 }
 
 function isExplicitStep4ProceedRequest(text: string) {
   // Triggers Unsplash moodboard_candidate search — only when user explicitly selects a style mood
-  return /스타일\s*분위기를\s*선택했어요/i.test(text)
+  return /스타일\s*분위기를\s*선택했어요|I selected (?:a|the) style mood/i.test(text)
 }
 
 type StyleMoodWidget = {
@@ -295,25 +312,63 @@ const STYLE_KEYWORD_FALLBACKS = {
   ],
 } as const
 
+const STYLE_KEYWORD_FALLBACKS_EN = {
+  emotional: [
+    'Calm', 'Comforting', 'Stable', 'Warm', 'Serene', 'Fresh', 'Playful', 'Organized',
+    'Energetic', 'Immersive', 'Delicate', 'Soft', 'Refined', 'Trustworthy', 'Friendly',
+    'Sensory', 'Reassuring', 'Empowering', 'Distinctive', 'Inspiring',
+  ],
+  color: [
+    'Clear', 'Warm', 'Cool', 'Neutral', 'Vivid', 'Subtle', 'Deep', 'Transparent',
+    'Natural', 'Modern', 'Vintage', 'Pop', 'Dark', 'Bright', 'Earthy', 'Metallic',
+    'Pastel', 'Monochrome', 'Primary', 'Gradient',
+  ],
+  structure: [
+    'Simple', 'Linear', 'Curved', 'Geometric', 'Asymmetric', 'Symmetric', 'Minimal',
+    'Structural', 'Organic', 'Angular', 'Rounded', 'Sharp', 'Bold', 'Slim', 'Layered',
+    'Modular', 'Compact', 'Open', 'Enclosed', 'Robust',
+  ],
+  texture: [
+    'Soft', 'Rough', 'Smooth', 'Warm', 'Cool', 'Matte', 'Glossy', 'Natural',
+    'Synthetic', 'Metallic', 'Woodgrain', 'Rubberized', 'Textile', 'Foam-like',
+    'Crystalline', 'Weighty', 'Lightweight', 'Elastic', 'Rigid', 'Flexible',
+  ],
+} as const
+
 async function generateStyleKeywords(
   apiKey: string,
-  conversation: string
+  conversation: string,
+  language: ChatLanguage
 ): Promise<{
   emotional: string[]
   color: string[]
   structure: string[]
   texture: string[]
 }> {
+  const source = isEnglishChat(language)
+    ? STYLE_KEYWORD_FALLBACKS_EN
+    : STYLE_KEYWORD_FALLBACKS
   const fallback = {
-    emotional: [...STYLE_KEYWORD_FALLBACKS.emotional],
-    color: [...STYLE_KEYWORD_FALLBACKS.color],
-    structure: [...STYLE_KEYWORD_FALLBACKS.structure],
-    texture: [...STYLE_KEYWORD_FALLBACKS.texture],
+    emotional: [...source.emotional],
+    color: [...source.color],
+    structure: [...source.structure],
+    texture: [...source.texture],
   }
 
   if (!apiKey) return fallback
 
-  const prompt = [
+  const prompt = isEnglishChat(language) ? [
+    'You are a product-design style consultant.',
+    'Analyze the project conversation and generate exactly 20 concise English adjective keywords for each style category.',
+    '',
+    'Return only valid JSON in this exact shape:',
+    '{"emotional":["keyword1",...],"color":[...],"structure":[...],"texture":[...]}',
+    '',
+    'Use one- or two-word English descriptors. Include a varied, project-relevant spectrum.',
+    '',
+    'Project conversation:',
+    conversation.slice(0, 2500),
+  ].join('\n') : [
     '당신은 제품 디자인 스타일 컨설턴트입니다.',
     '아래 프로젝트 대화를 분석해 각 스타일 카테고리별 한국어 형용사 키워드를 정확히 20개씩 생성하세요.',
     '',
@@ -376,12 +431,17 @@ async function generateStyleKeywords(
   }
 }
 
-function appendDirectionCompletionPrompt(text: string) {
-  if (/STEP\s*4|스타일\s*컨셉.*(?:넘어|진행)|진행할까요/i.test(text)) {
+function appendDirectionCompletionPrompt(text: string, language: ChatLanguage) {
+  if (/STEP\s*4|스타일\s*컨셉.*(?:넘어|진행)|진행할까요|style concept.*(?:proceed|move)|shall we proceed/i.test(text)) {
     return text
   }
 
-  return [
+  return isEnglishChat(language) ? [
+    text,
+    '',
+    'The selected research is complete.',
+    'You can review another direction-research area, or move to STEP 4: Style Concept if you have enough information. Would you like to continue?',
+  ].join('\n') : [
     text,
     '',
     '선택한 리서치가 완료되었습니다.',
@@ -452,17 +512,31 @@ async function enrichPersonaSummary({
   apiKey,
   conversation,
   draft,
+  language,
 }: {
   apiKey: string
   conversation: string
   draft: string
+  language: ChatLanguage
 }) {
+  const english = isEnglishChat(language)
   return generateGeminiText({
     apiKey,
     messages: [
       {
         role: 'user',
-        content: [
+        content: english ? [
+          'Rewrite the persona summary below for a product-planning persona card using the conversation and draft.',
+          'Preserve user-provided facts and infer only plausible missing details from the product and usage context.',
+          'Do not include placeholders, empty items, questions, UI instructions, or next-step guidance.',
+          '',
+          'Use exactly these headings: Demographic Info, Persona Story, Problem & Needs, Current Behavior, Lifestyle Context, Relationship Keyword.',
+          'Demographic Info must have 5 bullet points. Persona Story must be a substantial 3–4 line paragraph. Every remaining section must have 5 distinct bullet points.',
+          '',
+          `Conversation:\n${conversation.slice(-10000)}`,
+          '',
+          `Current draft:\n${draft}`,
+        ].join('\n') : [
           '아래 대화와 초안을 바탕으로 제품 기획용 Persona Summary를 충분한 정보 밀도로 다시 작성하세요.',
           '사용자가 직접 말한 정보는 유지하고, 누락된 세부 정보는 누적 대화의 제품·문제·행동·생활 맥락에서 설득력 있게 추론하세요.',
           '카드 UI에 들어갈 내용이므로 장문 설명이나 반복은 피하되, 각 섹션을 한 줄로 축약하지 마세요.',
@@ -493,13 +567,14 @@ async function enrichPersonaSummary({
         ].join('\n'),
       },
     ],
-    system:
-      '당신은 사용자 대화를 제품 기획용 페르소나 카드 문구로 구조화하는 사용자 리서처입니다. 지정된 형식만 출력합니다.',
+    system: english
+      ? 'You are a user researcher who structures conversations into concise, professional English persona-card content. Output only the requested format.'
+      : '당신은 사용자 대화를 제품 기획용 페르소나 카드 문구로 구조화하는 사용자 리서처입니다. 지정된 형식만 출력합니다.',
   })
 }
 
 function removePrematureStep3Transition(text: string) {
-  if (!/STEP\s*3|다음\s*단계|넘어가/i.test(text)) {
+  if (!/STEP\s*3|다음\s*단계|넘어가|next step|move (?:on )?to/i.test(text)) {
     return text
   }
 
@@ -507,7 +582,7 @@ function removePrematureStep3Transition(text: string) {
     .split('\n')
     .filter(
       (line) =>
-        !/STEP\s*3|다음\s*단계|넘어가겠습니다|넘어갈지|진행할까요/i.test(line)
+        !/STEP\s*3|다음\s*단계|넘어가겠습니다|넘어갈지|진행할까요|next step|move (?:on )?to|shall we proceed/i.test(line)
     )
     .join('\n')
     .trim()
@@ -540,6 +615,42 @@ function getRequirementString(
   return typeof value === 'string' && value.trim() ? value.trim() : fallback
 }
 
+const REQUIREMENT_VALUE_EN: Record<string, string> = {
+  '아이디어 구체화': 'Refine the idea',
+  '2D·3D 시각화': '2D / 3D visualization',
+  '시제품 제작 및 사업화': 'Prototype development and commercialization',
+  조명: 'Lighting',
+  '인테리어 소품': 'Home decor',
+  가구: 'Furniture',
+  '패션·악세서리': 'Fashion & accessories',
+  '디지털 기기': 'Digital devices',
+  '단순 구조물': 'Simple structure',
+  '빛·색 변화': 'Light or color changes',
+  '센서 감지': 'Sensor detection',
+  '조립·분해 가능': 'Easy assembly and disassembly',
+  'IoT / 스마트 기능': 'IoT / smart features',
+  '손바닥 크기 (10cm 이내)': 'Palm-sized (within 10 cm)',
+  '소형 (10~50cm)': 'Small (10–50 cm)',
+  '중형 (50~100cm)': 'Medium (50–100 cm)',
+  '대형 (100cm 이상)': 'Large (over 100 cm)',
+  '아직 못 정했어요': 'Not decided yet',
+  '개인 소장 및 전시용': 'Personal use or display',
+  '대량 판매': 'Mass-market sales',
+  '크라우드 펀딩': 'Crowdfunding',
+  '브랜드 런칭': 'Brand launch',
+  '1주': '1 week',
+  '2주': '2 weeks',
+  '1개월': '1 month',
+  '3개월': '3 months',
+  '6개월': '6 months',
+  '1년': '1 year',
+  '1년 +': 'More than 1 year',
+}
+
+function localizeRequirementValue(value: string, language: ChatLanguage) {
+  return isEnglishChat(language) ? REQUIREMENT_VALUE_EN[value] ?? value : value
+}
+
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string')
 }
@@ -547,7 +658,8 @@ function isStringArray(value: unknown): value is string[] {
 function formatRequirementList(
   requirements: Record<string, unknown>,
   key: string,
-  otherKey?: string
+  otherKey?: string,
+  language: ChatLanguage = 'KOR'
 ) {
   const value = requirements[key]
   const otherValue = otherKey ? getRequirementString(requirements, otherKey, '') : ''
@@ -559,37 +671,54 @@ function formatRequirementList(
         .filter((item) => item !== '기타 (직접 입력)')
     : []
 
-  return values.length > 0 ? values.join(', ') : otherValue || '미정'
+  const localized = values.map((item) => localizeRequirementValue(item, language))
+  return localized.length > 0
+    ? localized.join(', ')
+    : otherValue || (isEnglishChat(language) ? 'Not decided' : '미정')
 }
 
-function formatBudgetValue(value: unknown) {
+function formatBudgetValue(value: unknown, language: ChatLanguage) {
   if (typeof value !== 'number' || Number.isNaN(value)) {
     return null
   }
 
   if (value >= 10000) {
-    return '1억 원'
+    return isEnglishChat(language) ? '₩100M+' : '1억 원'
   }
 
-  return `${value.toLocaleString('ko-KR')}만 원`
+  return isEnglishChat(language)
+    ? `₩${value / 100}M`
+    : `${value.toLocaleString('ko-KR')}만 원`
 }
 
-function formatBudgetRange(requirements: Record<string, unknown>) {
-  const minBudget = formatBudgetValue(requirements.minBudget)
-  const maxBudget = formatBudgetValue(requirements.maxBudget)
+function formatBudgetRange(
+  requirements: Record<string, unknown>,
+  language: ChatLanguage
+) {
+  const minBudget = formatBudgetValue(requirements.minBudget, language)
+  const maxBudget = formatBudgetValue(requirements.maxBudget, language)
 
   if (minBudget && maxBudget) {
     return `${minBudget} ~ ${maxBudget}`
   }
 
-  return minBudget || maxBudget || '미정'
+  return minBudget || maxBudget || (isEnglishChat(language) ? 'Not decided' : '미정')
 }
 
-function summarizeIdeaText(requirements: Record<string, unknown>) {
+function summarizeIdeaText(
+  requirements: Record<string, unknown>,
+  language: ChatLanguage
+) {
   const idea = cleanSingleLineText(getRequirementString(requirements, 'idea', ''))
 
   if (!idea) {
-    return '아직 아이디어 텍스트가 충분히 입력되지 않았습니다.'
+    return isEnglishChat(language)
+      ? 'The product idea has not been described in enough detail yet.'
+      : '아직 아이디어 텍스트가 충분히 입력되지 않았습니다.'
+  }
+
+  if (isEnglishChat(language)) {
+    return idea
   }
 
   if (/개발이\s*목표입니다[.!]?$/.test(idea)) {
@@ -616,7 +745,8 @@ function summarizeIdeaText(requirements: Record<string, unknown>) {
 }
 
 function buildProjectStartSnapshot(
-  project: Awaited<ReturnType<typeof getProjectForUser>>
+  project: Awaited<ReturnType<typeof getProjectForUser>>,
+  language: ChatLanguage
 ) {
   const projectRequirements =
     project?.requirements && typeof project.requirements === 'object'
@@ -629,41 +759,56 @@ function buildProjectStartSnapshot(
       ? (projectRequirements.generated as Record<string, unknown>)
       : {}
   const generatedSummary = getRequirementString(generated, 'summary', '')
-  const budgetRange = formatBudgetRange(requirements)
-  const duration = getRequirementString(requirements, 'duration')
+  const undecided = isEnglishChat(language) ? 'Not decided' : '미정'
+  const budgetRange = formatBudgetRange(requirements, language)
+  const duration = localizeRequirementValue(
+    getRequirementString(requirements, 'duration', undecided),
+    language
+  )
   const budgetAndDuration =
-    budgetRange === '미정' && duration === '미정'
-      ? '미정'
+    budgetRange === undecided && duration === undecided
+      ? undecided
       : `${budgetRange} / ${duration}`
 
   return {
     budgetAndDuration,
-    category: formatRequirementList(requirements, 'categories', 'otherCategory'),
-    features: formatRequirementList(requirements, 'features', 'otherFeature'),
-    goal: getRequirementString(requirements, 'goal'),
-    ideaSummary: generatedSummary || summarizeIdeaText(requirements),
-    size: getRequirementString(requirements, 'size'),
-    title: project?.title || '새 프로젝트',
-    usage: getRequirementString(requirements, 'usage'),
+    category: formatRequirementList(requirements, 'categories', 'otherCategory', language),
+    features: formatRequirementList(requirements, 'features', 'otherFeature', language),
+    goal: localizeRequirementValue(getRequirementString(requirements, 'goal', undecided), language),
+    ideaSummary: generatedSummary || summarizeIdeaText(requirements, language),
+    size: localizeRequirementValue(getRequirementString(requirements, 'size', undecided), language),
+    title: project?.title || (isEnglishChat(language) ? 'New Project' : '새 프로젝트'),
+    usage: localizeRequirementValue(getRequirementString(requirements, 'usage', undecided), language),
   }
 }
 
 function buildProjectCardResponse({
+  language,
   project,
   referenceImages,
 }: {
+  language: ChatLanguage
   project: Awaited<ReturnType<typeof getProjectForUser>>
   referenceImages: Awaited<ReturnType<typeof getReferenceImages>>
 }) {
-  const snapshot = buildProjectStartSnapshot(project)
+  const snapshot = buildProjectStartSnapshot(project, language)
+  const english = isEnglishChat(language)
   const referenceSummary =
     referenceImages.length > 0
-      ? `${referenceImages.length}개 참고 이미지가 업로드되어 있습니다.`
-      : '업로드된 참고 이미지는 아직 없습니다.'
-  const referenceGuidelines = buildReferenceGuidelineBlock(referenceImages)
+      ? english
+        ? `${referenceImages.length} reference image${referenceImages.length === 1 ? ' has' : 's have'} been uploaded.`
+        : `${referenceImages.length}개 참고 이미지가 업로드되어 있습니다.`
+      : english
+        ? 'No reference images have been uploaded yet.'
+        : '업로드된 참고 이미지는 아직 없습니다.'
+  const referenceGuidelines = buildReferenceGuidelineBlock(referenceImages, language)
   const referenceDirection =
     referenceImages.length > 0
-      ? [
+      ? english ? [
+          'Priority directions from the reference images', '', referenceGuidelines, '',
+          'Does this summary capture your current idea?',
+          'Please describe any specific form, color, material, usage scene, or other detail you already have in mind.',
+        ] : [
           '레퍼런스 이미지에서 우선 참고해야 할 방향',
           '',
           referenceGuidelines,
@@ -671,13 +816,30 @@ function buildProjectCardResponse({
           '이 요약이 현재 아이디어를 잘 담고 있나요?',
           '혹시 예상하고 있는 제품의 구체적인 모습이나 보충하고 싶은 설명이 있다면 자유롭게 말씀해주세요.',
         ]
-      : [
+      : english ? [
+          'Priority directions from the reference images', '',
+          'There are no uploaded reference images yet, so we will use your survey responses as the starting point.', '',
+          'Please describe any specific form, color, material, usage scene, or other detail you already have in mind.',
+        ] : [
           '레퍼런스 이미지에서 우선 참고해야 할 방향',
           '',
           '아직 업로드된 참고 이미지가 없어, 설문 내용을 기준으로 방향을 잡겠습니다.',
           '',
           '예상하고 있는 제품의 구체적인 모습이나 보충하고 싶은 설명이 있다면 자유롭게 말씀해주세요.',
         ]
+
+  if (english) {
+    return [
+      'A new project has been created.',
+      "The Aidee team summarized the information saved so far to help develop your idea.", '',
+      '<<AIDEE_PROJECT_DIRECTION>>', 'Project Direction', '',
+      '**Project Name**', snapshot.title, '', '**Project Goal**', snapshot.goal, '',
+      '**Product Category**', snapshot.category, '', '**Budget / Timeline**', snapshot.budgetAndDuration, '',
+      '**Estimated Size**', snapshot.size, '', '**Key Features**', snapshot.features, '',
+      '**Final Purpose**', snapshot.usage, '', '**Idea Summary**', snapshot.ideaSummary, '',
+      '**References**', referenceSummary, '<</AIDEE_PROJECT_DIRECTION>>', '', ...referenceDirection,
+    ].join('\n')
+  }
 
   return [
     '새로운 프로젝트가 생성되었습니다.',
@@ -807,11 +969,13 @@ function buildPersonaImagePrompt({
 
 async function generateRfp({
   apiKey,
+  language,
   messages,
   project,
   referenceImages,
 }: {
   apiKey: string
+  language: ChatLanguage
   messages: GeminiMessage[]
   project: NonNullable<Awaited<ReturnType<typeof getProjectForUser>>>
   referenceImages: Awaited<ReturnType<typeof getReferenceImages>>
@@ -820,7 +984,7 @@ async function generateRfp({
     apiKey,
     messages: [
       {
-        content: buildRfpPrompt({ messages, project, referenceImages }),
+        content: buildRfpPrompt({ language, messages, project, referenceImages }),
         role: 'user',
       },
     ],
@@ -835,9 +999,14 @@ async function generateRfp({
   return appendRfpJsonBlock({
     rfp: parsed,
     text: [
-      'STEP 6. 평가 및 제품개발 기획안 생성',
+      isEnglishChat(language)
+        ? 'STEP 6. Evaluation and Product Development Plan'
+        : 'STEP 6. 평가 및 제품개발 기획안 생성',
       '',
-      formatRfpMarkdown(parsed).replace(/^# 프로젝트 기획안\n+/, ''),
+      formatRfpMarkdown(parsed, language).replace(
+        isEnglishChat(language) ? /^# Project Plan\n+/ : /^# 프로젝트 기획안\n+/,
+        ''
+      ),
     ].join('\n'),
   })
 }
@@ -845,6 +1014,7 @@ async function generateRfp({
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as ChatRequestBody
+    const language = normalizeChatLanguage(body.language)
     const projectId = typeof body.projectId === 'string' ? body.projectId : ''
 
     if (!projectId) {
@@ -883,8 +1053,10 @@ export async function POST(request: Request) {
     )
     const isInitialEntry = !hasAssistantMessage && !userMessage
     const messageForModel = isInitialEntry
-      ? buildInitialUserPrompt(project)
-      : userMessage || (isForcedGeneration ? '시각화 생성 요청' : '')
+      ? buildInitialUserPrompt(project, language)
+      : userMessage || (isForcedGeneration
+          ? isEnglishChat(language) ? 'Generate visualization' : '시각화 생성 요청'
+          : '')
     const isPersonaConfirmMessage =
       !isInitialEntry && isPersonaCardConfirmRequest(messageForModel)
     const isPersonaRevisionMessage =
@@ -947,6 +1119,7 @@ export async function POST(request: Request) {
 
     if (isInitialEntry) {
       assistantContent = buildProjectCardResponse({
+        language,
         project,
         referenceImages,
       })
@@ -965,6 +1138,7 @@ export async function POST(request: Request) {
       const system = buildSystemPrompt({
         activeExpert,
         currentStageKey,
+        language,
         project,
         referenceImages,
       })
@@ -998,10 +1172,10 @@ export async function POST(request: Request) {
         (!hasExistingRfp || isRfpRevisionMessage)
 
       if (canUseStaticPersonaConfirmation) {
-        assistantContent = buildPersonaConfirmedPrompt()
+        assistantContent = buildPersonaConfirmedPrompt(language)
         responseStageKey = 'step_2_research'
       } else if (canUseStaticRfpConfirmation) {
-        assistantContent = buildRfpConfirmedPrompt()
+        assistantContent = buildRfpConfirmedPrompt(language)
         responseStageKey = 'step_6_rfp'
       } else if (shouldGeneratePersonaCardImage) {
         const personaCard = getLatestPersonaCard(conversationMessages)
@@ -1035,6 +1209,7 @@ export async function POST(request: Request) {
       } else if (shouldGenerateRfp) {
         assistantContent = await generateRfp({
           apiKey: requiredApiKey,
+          language,
           messages: modelMessages,
           project,
           referenceImages,
@@ -1152,7 +1327,7 @@ export async function POST(request: Request) {
           currentStageKey === 'step_3_direction' &&
           hasDirectionResearch(conversationMessages, text)
         const responseText = completedDirectionResearch
-          ? appendDirectionCompletionPrompt(text)
+          ? appendDirectionCompletionPrompt(text, language)
           : text
         assistantContent = appendImageBlockIfPresent({
           imageBlock,
@@ -1178,6 +1353,7 @@ export async function POST(request: Request) {
               apiKey: requiredApiKey,
               conversation,
               draft: personaText,
+              language,
             }).catch(() => '')
             const enrichedData = enrichedText
               ? buildPersonaCardDataFromText(enrichedText)
@@ -1194,7 +1370,7 @@ export async function POST(request: Request) {
             text: [
               personaText,
               '',
-              buildPostPersonaKeywordPrompt(),
+              buildPostPersonaKeywordPrompt(language),
             ]
               .filter(Boolean)
               .join('\n'),
@@ -1222,7 +1398,11 @@ export async function POST(request: Request) {
         currentStageKey === 'step_4_style' &&
         !hasExistingKeywordPicker
       ) {
-        const keywords = await generateStyleKeywords(requiredApiKey, conversation)
+        const keywords = await generateStyleKeywords(
+          requiredApiKey,
+          conversation,
+          language
+        )
         assistantContent =
           assistantContent +
           `\n\n<<AIDEE_STYLE_KEYWORD_PICKER>>\n${JSON.stringify(keywords)}\n<</AIDEE_STYLE_KEYWORD_PICKER>>`

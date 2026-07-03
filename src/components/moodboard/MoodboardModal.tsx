@@ -2,6 +2,7 @@
 
 import Image from 'next/image'
 import { useEffect, useState } from 'react'
+import { useAppLanguage } from '@/components/i18n/AppLanguageContext'
 
 type MoodboardImage = {
   id: string
@@ -19,20 +20,33 @@ type Props = {
 }
 
 export function MoodboardModal({ isOpen, onClose, projectId }: Props) {
+  const { language } = useAppLanguage()
   const [images, setImages] = useState<MoodboardImage[]>([])
-  const [loading, setLoading] = useState(false)
+  const [loadedProjectId, setLoadedProjectId] = useState<string | null>(null)
+  const loading = loadedProjectId !== projectId
 
   useEffect(() => {
     if (!isOpen) return
-    setLoading(true)
+    const controller = new AbortController()
 
-    fetch(`/api/moodboard?projectId=${projectId}`)
-      .then((r) => r.json())
+    fetch(`/api/moodboard?projectId=${projectId}`, {
+      signal: controller.signal,
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error('Failed to load moodboard')
+        return response.json()
+      })
       .then((data: { board?: MoodboardImage[] }) => {
         setImages(data.board ?? [])
       })
-      .catch(() => {})
-      .finally(() => setLoading(false))
+      .catch(() => {
+        if (!controller.signal.aborted) setImages([])
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoadedProjectId(projectId)
+      })
+
+    return () => controller.abort()
   }, [isOpen, projectId])
 
   if (!isOpen) return null
@@ -48,11 +62,12 @@ export function MoodboardModal({ isOpen, onClose, projectId }: Props) {
       >
         <div className="flex items-center justify-between border-b border-zinc-100 px-6 py-4">
           <h2 className="font-['Pretendard'] text-base font-bold text-zinc-900">
-            무드보드
+            {language === 'ENG' ? 'Moodboard' : '무드보드'}
           </h2>
           <button
             type="button"
             onClick={onClose}
+            aria-label={language === 'ENG' ? 'Close' : '닫기'}
             className="flex h-8 w-8 items-center justify-center rounded-full text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700"
           >
             ✕
@@ -63,13 +78,13 @@ export function MoodboardModal({ isOpen, onClose, projectId }: Props) {
           {loading ? (
             <div className="flex h-40 items-center justify-center">
               <span className="font-['Pretendard'] text-sm text-zinc-400">
-                불러오는 중...
+                {language === 'ENG' ? 'Loading...' : '불러오는 중...'}
               </span>
             </div>
           ) : images.length === 0 ? (
             <div className="flex h-40 items-center justify-center">
               <span className="font-['Pretendard'] text-sm text-zinc-400">
-                무드보드 이미지가 없습니다.
+                {language === 'ENG' ? 'No moodboard images are available.' : '무드보드 이미지가 없습니다.'}
               </span>
             </div>
           ) : (
@@ -79,7 +94,7 @@ export function MoodboardModal({ isOpen, onClose, projectId }: Props) {
                   <div className="relative aspect-video w-full overflow-hidden rounded-lg">
                     <Image
                       src={img.url}
-                      alt={`무드보드 ${i + 1}`}
+                      alt={language === 'ENG' ? `Moodboard ${i + 1}` : `무드보드 ${i + 1}`}
                       fill
                       unoptimized
                       className="object-cover"

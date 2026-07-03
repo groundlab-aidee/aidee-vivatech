@@ -2,8 +2,10 @@ import { NextResponse } from 'next/server'
 
 import { extractRfpJsonBlock, formatRfpMarkdown } from '@/lib/chat/rfp'
 import { createClient } from '@/lib/supabase/server'
+import { normalizeChatLanguage } from '@/lib/chat/language'
 
 type RfpDownloadBody = {
+  language?: unknown
   projectId?: unknown
 }
 
@@ -19,6 +21,7 @@ export async function POST(request: Request) {
   try {
     const body = (await request.json()) as RfpDownloadBody
     const projectId = typeof body.projectId === 'string' ? body.projectId : ''
+    const language = normalizeChatLanguage(body.language)
 
     if (!projectId) {
       return NextResponse.json({ error: 'projectId is required' }, { status: 400 })
@@ -71,7 +74,7 @@ export async function POST(request: Request) {
       )
     }
 
-    const markdown = formatRfpMarkdown(rfp)
+    const markdown = formatRfpMarkdown(rfp, language)
     const fileName = sanitizeFileName(
       `${project.title || 'aidee-project-plan'}.md`
     )

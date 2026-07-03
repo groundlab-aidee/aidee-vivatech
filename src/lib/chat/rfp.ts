@@ -1,5 +1,6 @@
 import { buildReferenceContext, type ProjectContextRecord, type ReferenceImageContextRecord } from '@/lib/chat/context'
 import type { GeminiMessage } from '@/lib/chat/gemini'
+import { isEnglishChat, type ChatLanguage } from '@/lib/chat/language'
 
 export type RfpDocument = {
   avoidDirections: string[]
@@ -28,16 +29,20 @@ export function buildRfpPrompt({
   messages,
   project,
   referenceImages,
+  language = 'KOR',
 }: {
   messages: GeminiMessage[]
   project: ProjectContextRecord | null
   referenceImages: ReferenceImageContextRecord[]
+  language?: ChatLanguage
 }) {
+  const english = isEnglishChat(language)
   return `
 당신은 Aidee의 STEP 6 프로젝트 기획안 생성 담당자입니다.
 아래 프로젝트 컨텍스트와 대화 기록을 바탕으로 프로젝트 기획안 JSON 객체만 반환하세요.
 마크다운, 코드블록, 설명 문장 없이 JSON만 반환하세요.
 이전 단계에서 확정된 정보만 사용하고, 대화에 없는 내용을 새로 지어내지 마세요.
+${english ? 'All string values in the JSON must be written in natural American English. Translate Korean source context instead of copying Korean into the output.' : ''}
 
 [스키마]
 {
@@ -64,13 +69,13 @@ export function buildRfpPrompt({
 }
 
 [프로젝트]
-${project?.title || '제목 없음'}
+${project?.title || (english ? 'Untitled' : '제목 없음')}
 
 [requirements]
 ${JSON.stringify(project?.requirements ?? {}, null, 2)}
 
 [레퍼런스 이미지 분석]
-${buildReferenceContext(referenceImages)}
+${buildReferenceContext(referenceImages, language)}
 
 [대화 기록]
 ${messages.map((message) => `[${message.role}] ${message.content}`).join('\n\n')}
@@ -120,7 +125,35 @@ export function extractRfpJsonBlock(text: string) {
   }
 }
 
-export function formatRfpMarkdown(rfp: RfpDocument) {
+export function formatRfpMarkdown(
+  rfp: RfpDocument,
+  language: ChatLanguage = 'KOR'
+) {
+  if (isEnglishChat(language)) {
+    return [
+      '# Project Plan', '', '## 1. Project Overview',
+      `- Project name: ${rfp.projectName}`,
+      `- One-line product definition: ${rfp.oneLineDefinition}`,
+      `- Project goal: ${rfp.projectGoal}`,
+      `- Final purpose: ${rfp.finalPurpose}`, '',
+      '## 2. Persona', `- Primary target: ${rfp.mainTarget}`,
+      `- Usage context: ${rfp.usageContext}`, `- Core needs / problem: ${rfp.coreNeeds}`, '',
+      '## 3. Product Direction', `- Core value: ${rfp.coreValue}`,
+      `- Style keywords: ${rfp.styleKeywords.join(', ')}`,
+      `- Directions to avoid: ${rfp.avoidDirections.join(', ')}`, '',
+      '## 4. Functional Requirements', '- Must-have features',
+      ...rfp.mustHaveFeatures.map((item) => `- ${item}`), '- Nice-to-have features',
+      ...rfp.niceToHaveFeatures.map((item) => `- ${item}`), '',
+      '## 5. Implementation and Production Constraints', `- Budget range: ${rfp.budgetRange}`,
+      `- Target timeline: ${rfp.timeline}`, `- Size / form constraints: ${rfp.sizeOrForm}`,
+      '- Implementation notes', ...rfp.implementationNotes.map((item) => `- ${item}`), '',
+      '## 6. References and Research', `- Reference summary: ${rfp.referenceSummary}`,
+      ...rfp.researchInsights.map((item) => `- ${item}`), '',
+      '## 7. Success Criteria', ...rfp.successCriteria.map((item) => `- ${item}`), '',
+      '## 8. Next Actions', ...rfp.nextActions.map((item) => `- ${item}`),
+    ].join('\n')
+  }
+
   return [
     '# 프로젝트 기획안',
     '',
