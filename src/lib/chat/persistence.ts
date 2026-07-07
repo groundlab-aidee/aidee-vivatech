@@ -13,6 +13,10 @@ import {
   type PersonaCardData,
 } from '@/lib/chat/persona-card'
 import { DEFAULT_STAGE_KEY, isKnownStageKey, type StageKey } from '@/lib/chat/stages'
+import {
+  extractStructuredResponseBlock,
+  type StructuredChatResponse,
+} from '@/lib/chat/structured-response'
 
 export type ChatRole = 'assistant' | 'system' | 'user'
 
@@ -25,6 +29,7 @@ export type ChatMessageRecord = {
   role: ChatRole
   seq_order: number
   stageKey: StageKey
+  structuredResponse: StructuredChatResponse | null
 }
 
 type RawMessageRow = {
@@ -136,8 +141,10 @@ export function stripInternalBlocks(content: string) {
 }
 
 export function mapMessageRow(row: RawMessageRow): ChatMessageRecord {
+  const { cleanedText: withoutStructuredResponse, response } =
+    extractStructuredResponseBlock(stripInternalBlocks(row.content))
   const { cleanedText, imageBlock } = extractGeneratedImagesBlock(
-    stripInternalBlocks(row.content)
+    withoutStructuredResponse
   )
   const { cleanedText: visibleText, personaCardBlock } =
     extractPersonaCardBlock(cleanedText)
@@ -153,6 +160,7 @@ export function mapMessageRow(row: RawMessageRow): ChatMessageRecord {
       : 'user',
     seq_order: row.seq_order ?? 0,
     stageKey: getMessageStage(row.content),
+    structuredResponse: response,
   }
 }
 

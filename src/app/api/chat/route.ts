@@ -9,6 +9,7 @@ import { isExpertKey, type ExpertKey } from '@/lib/chat/experts'
 import {
   appendImageBlockIfPresent,
   generateGeminiImages,
+  generateGeminiJson,
   generateGeminiText,
   getGeminiApiKey,
   type GeminiMessage,
@@ -51,11 +52,24 @@ import {
   normalizeChatLanguage,
   type ChatLanguage,
 } from '@/lib/chat/language'
+import { buildStepZeroOnePrompt } from '@/lib/chat/prompts/step-0-1'
+import {
+  appendStructuredResponseBlock,
+  deriveLegacyStructuredResponse,
+  isStepZeroOrOne,
+  parseChatIntent,
+  parseStructuredChatResponse,
+  resolveStageFromClientIntent,
+  STEP_0_1_RESPONSE_JSON_SCHEMA,
+  toChatStage,
+  type StructuredChatResponse,
+} from '@/lib/chat/structured-response'
 
 export const maxDuration = 60
 
 type ChatRequestBody = {
   activeExpert?: unknown
+  clientIntent?: unknown
   currentStageKey?: unknown
   forceImageGeneration?:
     | 'design_revision'
@@ -103,6 +117,57 @@ function normalizeStage(value: unknown): StageKey {
 
 function normalizeExpert(value: unknown): ExpertKey {
   return isExpertKey(value) ? value : 'aidee'
+}
+
+function authorizeClientIntent({
+  currentStage,
+  messages,
+  requestedIntent,
+}: {
+  currentStage: StageKey
+  messages: Awaited<ReturnType<typeof getProjectMessages>>
+  requestedIntent: ReturnType<typeof parseChatIntent>
+}) {
+  if (!requestedIntent) return null
+
+  const latestAssistant = [...messages]
+    .reverse()
+    .find((message) => message.role === 'assistant')
+  if (!latestAssistant) return null
+
+  const response =
+    latestAssistant.structuredResponse ??
+    deriveLegacyStructuredResponse({
+      currentStage,
+      message: latestAssistant.content,
+    })
+
+  if (
+    requestedIntent === 'REVIEW_DEVELOPMENT_PROCESS' &&
+    response.actions.includes('SHOW_REVIEW_PROCESS_BUTTON')
+  ) {
+    return requestedIntent
+  }
+
+  if (
+    (requestedIntent === 'START_STEP_1' ||
+      requestedIntent === 'ADD_PROJECT_CONTEXT') &&
+    response.intent === 'REQUEST_STEP_1_START' &&
+    response.actions.includes('SHOW_STAGE_PROCEED_BUTTONS')
+  ) {
+    return requestedIntent
+  }
+
+  if (
+    (requestedIntent === 'CONTINUE_TO_STEP_2' ||
+      requestedIntent === 'ADD_STEP_1_CONTEXT') &&
+    response.intent === 'REQUEST_STEP_2_TRANSITION' &&
+    response.actions.includes('SHOW_STAGE_PROCEED_BUTTONS')
+  ) {
+    return requestedIntent
+  }
+
+  return null
 }
 
 function buildConversation(messages: Array<{ content: string; role: string }>) {
@@ -758,7 +823,14 @@ function buildProjectStartSnapshot(
     typeof projectRequirements.generated === 'object'
       ? (projectRequirements.generated as Record<string, unknown>)
       : {}
-  const generatedSummary = getRequirementString(generated, 'summary', '')
+  const generatedSummaryRaw = getRequirementString(generated, 'summary', '')
+  // The generated summary is produced in Korean at project-creation time, so
+  // skip it in English mode when it still contains Hangul and fall back to the
+  // language-aware summary instead.
+  const generatedSummary =
+    isEnglishChat(language) && /[가-힣]/.test(generatedSummaryRaw)
+      ? ''
+      : generatedSummaryRaw
   const undecided = isEnglishChat(language) ? 'Not decided' : '미정'
   const budgetRange = formatBudgetRange(requirements, language)
   const duration = localizeRequirementValue(
@@ -828,8 +900,8 @@ function buildProjectCardResponse({
           '예상하고 있는 제품의 구체적인 모습이나 보충하고 싶은 설명이 있다면 자유롭게 말씀해주세요.',
         ]
 
-  if (english) {
-    return [
+  const message = english
+    ? [
       'A new project has been created.',
       "The Aidee team summarized the information saved so far to help develop your idea.", '',
       '<<AIDEE_PROJECT_DIRECTION>>', 'Project Direction', '',
@@ -839,9 +911,7 @@ function buildProjectCardResponse({
       '**Final Purpose**', snapshot.usage, '', '**Idea Summary**', snapshot.ideaSummary, '',
       '**References**', referenceSummary, '<</AIDEE_PROJECT_DIRECTION>>', '', ...referenceDirection,
     ].join('\n')
-  }
-
-  return [
+    : [
     '새로운 프로젝트가 생성되었습니다.',
     "'Aidee' 팀이 사용자의 아이디어를 구체화할 수 있도록, 현재까지 저장된 내용을 먼저 요약해 드릴게요.",
     '',
@@ -877,7 +947,17 @@ function buildProjectCardResponse({
     '<</AIDEE_PROJECT_DIRECTION>>',
     '',
     ...referenceDirection,
-  ].join('\n')
+    ].join('\n')
+
+  return {
+    actions: ['SHOW_PROJECT_DIRECTION', 'SHOW_HINT_BUTTON'],
+    intent: 'REQUEST_PROJECT_DETAILS',
+    message,
+    metadata: {
+      projectDirection: { ...snapshot, referenceSummary },
+    },
+    stage: 'STEP_0_START',
+  } satisfies StructuredChatResponse
 }
 
 function buildStyleImagePrompt({
@@ -1046,6 +1126,11 @@ export async function POST(request: Request) {
     ])
     const requestedStageKey = normalizeStage(body.currentStageKey)
     const activeExpert = normalizeExpert(body.activeExpert)
+    const clientIntent = authorizeClientIntent({
+      currentStage: requestedStageKey,
+      messages: existingMessages,
+      requestedIntent: parseChatIntent(body.clientIntent),
+    })
     const userMessage = typeof body.message === 'string' ? body.message.trim() : ''
     const isForcedGeneration = Boolean(body.forceImageGeneration)
     const hasAssistantMessage = existingMessages.some(
@@ -1075,7 +1160,7 @@ export async function POST(request: Request) {
     }
 
     const directionResearchRequest = isDirectionResearchRequest(messageForModel)
-    const currentStageKey = resolveIntentStageKey({
+    const legacyResolvedStageKey = resolveIntentStageKey({
       currentStageKey: directionResearchRequest
         ? 'step_3_direction'
         : requestedStageKey,
@@ -1084,6 +1169,10 @@ export async function POST(request: Request) {
       hasCompletedStep2Research: hasAllKeywordResults(existingMessages),
       lastUserMessage: messageForModel,
     })
+    const currentStageKey = resolveStageFromClientIntent({
+      clientIntent,
+      currentStage: legacyResolvedStageKey,
+    }) as StageKey
     const nextSeqOrder =
       existingMessages.reduce(
         (maxSeq, message) => Math.max(maxSeq, message.seq_order),
@@ -1118,11 +1207,12 @@ export async function POST(request: Request) {
     let responseStageKey = currentStageKey
 
     if (isInitialEntry) {
-      assistantContent = buildProjectCardResponse({
+      const initialResponse = buildProjectCardResponse({
         language,
         project,
         referenceImages,
       })
+      assistantContent = appendStructuredResponseBlock(initialResponse)
     } else {
       const conversationMessages = [
         ...existingMessages,
@@ -1171,7 +1261,64 @@ export async function POST(request: Request) {
         currentStageKey === 'step_6_rfp' &&
         (!hasExistingRfp || isRfpRevisionMessage)
 
-      if (canUseStaticPersonaConfirmation) {
+      if (isStepZeroOrOne(currentStageKey)) {
+        const structuredSystem = buildStepZeroOnePrompt({
+          clientIntent,
+          currentStage: currentStageKey,
+          language,
+          projectContext: JSON.stringify(
+            {
+              projectTitle: project.title,
+              referenceGuidelines: buildReferenceGuidelineBlock(
+                referenceImages,
+                language
+              ),
+              requirements: project.requirements,
+            },
+            null,
+            2
+          ),
+        })
+
+        try {
+          const rawResponse = await generateGeminiJson({
+            apiKey: requiredApiKey,
+            messages: modelMessages,
+            responseSchema: STEP_0_1_RESPONSE_JSON_SCHEMA,
+            system: structuredSystem,
+          })
+          const structuredResponse = parseStructuredChatResponse(rawResponse)
+
+          if (!structuredResponse) {
+            throw new Error('Gemini structured response failed validation')
+          }
+
+          const normalizedResponse = {
+            ...structuredResponse,
+            stage: toChatStage(currentStageKey),
+          }
+          assistantContent = appendStructuredResponseBlock(normalizedResponse)
+          responseStageKey = currentStageKey
+        } catch (structuredError) {
+          console.warn(
+            '[chat] STEP 0~1 structured output failed; using legacy text fallback.',
+            structuredError
+          )
+          const fallbackText = await generateGeminiText({
+            apiKey: requiredApiKey,
+            messages: modelMessages,
+            system,
+          })
+          assistantContent = fallbackText
+          const fallbackStage = inferStageMetaFromText({
+            currentStageKey,
+            text: fallbackText,
+          })
+          responseStageKey = fallbackStage.transition
+            ? fallbackStage.nextStageKey
+            : fallbackStage.currentStageKey
+        }
+      } else if (canUseStaticPersonaConfirmation) {
         assistantContent = buildPersonaConfirmedPrompt(language)
         responseStageKey = 'step_2_research'
       } else if (canUseStaticRfpConfirmation) {

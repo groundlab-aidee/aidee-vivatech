@@ -183,6 +183,7 @@ export function ProjectSurveyModal({
       const { referenceImages, ...requirements } = data
       const formData = new FormData()
       formData.set('survey', JSON.stringify(requirements))
+      formData.set('language', language)
       referenceImages.forEach((file) => {
         formData.append('referenceImages', file)
       })

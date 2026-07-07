@@ -1,5 +1,10 @@
 import { NextResponse } from 'next/server'
 
+import {
+  isEnglishChat,
+  normalizeChatLanguage,
+  type ChatLanguage,
+} from '@/lib/chat/language'
 import { insertProjectMessage } from '@/lib/chat/persistence'
 import { DEFAULT_STAGE_KEY } from '@/lib/chat/stages'
 import { createClient } from '@/lib/supabase/server'
@@ -57,28 +62,43 @@ function stripCodeFence(text: string) {
     .trim()
 }
 
-function fallbackProjectInfo(survey: SurveyData): GeminiProjectInfo {
+function fallbackProjectInfo(
+  survey: SurveyData,
+  language: ChatLanguage
+): GeminiProjectInfo {
+  const english = isEnglishChat(language)
   const idea = typeof survey.idea === 'string' ? survey.idea.trim() : ''
-  const title = idea.length > 15 ? `${idea.slice(0, 15)}...` : idea || '새 프로젝트'
+  const title =
+    idea.length > 15
+      ? `${idea.slice(0, 15)}...`
+      : idea || (english ? 'New Project' : '새 프로젝트')
 
   return {
     title,
-    summary: idea || '사용자 설문 기반 신규 제품 디자인 프로젝트',
-    goal: survey.goal || '아이디어 구체화',
+    summary:
+      idea ||
+      (english
+        ? 'A new product design project based on the user survey.'
+        : '사용자 설문 기반 신규 제품 디자인 프로젝트'),
+    goal: survey.goal || (english ? 'Refine the idea' : '아이디어 구체화'),
     keyRequirements: [
       ...(survey.categories ?? []),
       ...(survey.features ?? []),
-      survey.size ? `크기: ${survey.size}` : '',
-      survey.duration ? `기간: ${survey.duration}` : '',
-      survey.usage ? `사용 맥락: ${survey.usage}` : '',
+      survey.size ? `${english ? 'Size' : '크기'}: ${survey.size}` : '',
+      survey.duration ? `${english ? 'Timeline' : '기간'}: ${survey.duration}` : '',
+      survey.usage ? `${english ? 'Usage context' : '사용 맥락'}: ${survey.usage}` : '',
     ].filter(Boolean),
     recommendedStage: 'step_1_idea',
     initialContext: JSON.stringify(survey, null, 2),
   }
 }
 
-function normalizeProjectInfo(value: unknown, survey: SurveyData): GeminiProjectInfo {
-  const fallback = fallbackProjectInfo(survey)
+function normalizeProjectInfo(
+  value: unknown,
+  survey: SurveyData,
+  language: ChatLanguage
+): GeminiProjectInfo {
+  const fallback = fallbackProjectInfo(survey, language)
 
   if (!value || typeof value !== 'object') {
     return fallback
@@ -114,30 +134,49 @@ function normalizeProjectInfo(value: unknown, survey: SurveyData): GeminiProject
   }
 }
 
-async function generateProjectInfo(survey: SurveyData) {
+async function generateProjectInfo(survey: SurveyData, language: ChatLanguage) {
   const apiKey = getGeminiApiKey()
 
   if (!apiKey) {
-    return fallbackProjectInfo(survey)
+    return fallbackProjectInfo(survey, language)
   }
 
-  const prompt = [
-    '아래 설문 정보를 바탕으로 제품 디자인 프로젝트 초기 정보를 한국어 JSON으로 정리하세요.',
-    '마크다운 코드블록 없이 JSON 객체만 반환하세요.',
-    '',
-    '반환 스키마:',
-    '{',
-    '  "title": "프로젝트 제목 20자 이내",',
-    '  "summary": "사용자의 아이디어를 제품 개발 관점의 자연스럽고 공식적인 한 문장으로 정리. 반드시 ~ 개발이 목표입니다. 형태로 작성",',
-    '  "goal": "프로젝트 목표",',
-    '  "keyRequirements": ["주요 요구사항"],',
-    '  "recommendedStage": "추천 진행 단계",',
-    '  "initialContext": "초기 채팅 컨텍스트로 사용할 설명"',
-    '}',
-    '',
-    '설문 정보:',
-    JSON.stringify(survey, null, 2),
-  ].join('\n')
+  const prompt = (isEnglishChat(language)
+    ? [
+        'Based on the survey information below, organize the initial information for a product design project as English JSON.',
+        'Return only the JSON object without any markdown code block.',
+        '',
+        'Return schema:',
+        '{',
+        '  "title": "Project title, 20 characters or fewer",',
+        '  "summary": "Summarize the user\'s idea as one natural, formal sentence from a product-development perspective. It must be phrased in the form: The goal is to develop ~.",',
+        '  "goal": "Project goal",',
+        '  "keyRequirements": ["Key requirement"],',
+        '  "recommendedStage": "Recommended stage",',
+        '  "initialContext": "Description to use as the initial chat context"',
+        '}',
+        '',
+        'Survey information:',
+        JSON.stringify(survey, null, 2),
+      ]
+    : [
+        '아래 설문 정보를 바탕으로 제품 디자인 프로젝트 초기 정보를 한국어 JSON으로 정리하세요.',
+        '마크다운 코드블록 없이 JSON 객체만 반환하세요.',
+        '',
+        '반환 스키마:',
+        '{',
+        '  "title": "프로젝트 제목 20자 이내",',
+        '  "summary": "사용자의 아이디어를 제품 개발 관점의 자연스럽고 공식적인 한 문장으로 정리. 반드시 ~ 개발이 목표입니다. 형태로 작성",',
+        '  "goal": "프로젝트 목표",',
+        '  "keyRequirements": ["주요 요구사항"],',
+        '  "recommendedStage": "추천 진행 단계",',
+        '  "initialContext": "초기 채팅 컨텍스트로 사용할 설명"',
+        '}',
+        '',
+        '설문 정보:',
+        JSON.stringify(survey, null, 2),
+      ]
+  ).join('\n')
 
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
@@ -175,10 +214,10 @@ async function generateProjectInfo(survey: SurveyData) {
   }
 
   try {
-    return normalizeProjectInfo(JSON.parse(stripCodeFence(text)), survey)
+    return normalizeProjectInfo(JSON.parse(stripCodeFence(text)), survey, language)
   } catch (error) {
     console.error('[project create] Gemini JSON parse failed:', error)
-    return fallbackProjectInfo(survey)
+    return fallbackProjectInfo(survey, language)
   }
 }
 
@@ -246,6 +285,7 @@ export async function POST(request: Request) {
     }
 
     const survey = JSON.parse(surveyRaw) as SurveyData
+    const language = normalizeChatLanguage(formData.get('language'))
     const files = formData
       .getAll('referenceImages')
       .filter((value): value is File => value instanceof File)
@@ -258,7 +298,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const generated = await generateProjectInfo(survey)
+    const generated = await generateProjectInfo(survey, language)
     const requirements = {
       generated,
       source: 'workspace_survey',

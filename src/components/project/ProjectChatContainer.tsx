@@ -38,6 +38,11 @@ import {
   inferStageMetaFromText,
   type StageKey,
 } from '@/lib/chat/stages'
+import {
+  toLegacyStageKey,
+  type ChatAction,
+  type ChatIntent,
+} from '@/lib/chat/structured-response'
 
 type ModelViewerProps = DetailedHTMLProps<
   HTMLAttributes<HTMLElement> & {
@@ -1278,16 +1283,23 @@ export function ProjectChatContainer({
       inferredStageKey = getLaterStageKey(inferredStageKey, message.stageKey)
 
       if (message.role === 'assistant') {
-        const inferred = inferStageMetaFromText({
-          currentStageKey: inferredStageKey,
-          text: message.content,
-        })
-
-        if (inferred.transition) {
+        if (message.structuredResponse) {
           inferredStageKey = getLaterStageKey(
             inferredStageKey,
-            inferred.nextStageKey
+            toLegacyStageKey(message.structuredResponse.stage) as StageKey
           )
+        } else {
+          const inferred = inferStageMetaFromText({
+            currentStageKey: inferredStageKey,
+            text: message.content,
+          })
+
+          if (inferred.transition) {
+            inferredStageKey = getLaterStageKey(
+              inferredStageKey,
+              inferred.nextStageKey
+            )
+          }
         }
 
         if (
@@ -1328,6 +1340,10 @@ export function ProjectChatContainer({
       if (message.role !== 'assistant') {
         continue
       }
+
+      const structuredProjectDirection =
+        message.structuredResponse?.metadata.projectDirection
+      if (structuredProjectDirection) return structuredProjectDirection
 
       const parsed = extractProjectDirectionCard(message.content)
 
@@ -1892,9 +1908,11 @@ export function ProjectChatContainer({
   }, [isExpertMenuOpen])
 
   const requestAssistantResponse = useCallback(async ({
+    clientIntent,
     forceImageGeneration,
     message,
   }: {
+    clientIntent?: ChatIntent
     forceImageGeneration?: ForceImageGeneration
     message: string
   }) => {
@@ -1919,6 +1937,7 @@ export function ProjectChatContainer({
               -1
             ) + 1,
           stageKey: effectiveStageKey,
+          structuredResponse: null,
         }
       : null
 
@@ -1934,6 +1953,7 @@ export function ProjectChatContainer({
       const response = await fetch('/api/chat', {
         body: JSON.stringify({
           activeExpert,
+          clientIntent,
           currentStageKey: effectiveStageKey,
           forceImageGeneration,
           language,
@@ -2010,13 +2030,15 @@ export function ProjectChatContainer({
 
   async function submitMessage(
     message: string,
-    forceImageGeneration?: ForceImageGeneration
+    forceImageGeneration?: ForceImageGeneration,
+    clientIntent?: ChatIntent
   ) {
     if (!message.trim()) {
       return
     }
 
     await requestAssistantResponse({
+      clientIntent,
       forceImageGeneration,
       message,
     })
@@ -2264,7 +2286,10 @@ export function ProjectChatContainer({
   useEffect(() => {
     const hasConfirmedProcess = visibleMessages.some(
       (message) =>
-        message.role === 'user' && /프로세스\s*확인하기|review (?:the )?process/i.test(message.content)
+        (message.role === 'assistant' &&
+          message.structuredResponse?.intent === 'REQUEST_STEP_1_START') ||
+        (message.role === 'user' &&
+          /프로세스\s*확인하기|review (?:the )?process/i.test(message.content))
     )
 
     setSidebarState({
@@ -2379,7 +2404,9 @@ export function ProjectChatContainer({
                     directionKindsByMessageId.get(message.id) ?? null
                   }
                   latestRfpMessageId={latestRfpMessage?.id ?? null}
-                  onChoice={(value) => submitMessage(value)}
+                  onChoice={(value, clientIntent) =>
+                    submitMessage(value, undefined, clientIntent)
+                  }
                   onConfirmKeyword={confirmKeywordCard}
                   onConfirmPersona={confirmPersonaCard}
                   onDownloadRfp={downloadRfp}
@@ -5292,7 +5319,7 @@ function ChatBubble({
   latestCompanyMessageId: string | null
   language: AppLanguage
   message: ChatMessageRecord
-  onChoice: (value: string) => void
+  onChoice: (value: string, clientIntent?: ChatIntent) => void
   onConfirmKeyword: (
     kind: KeywordArtifactKind,
     messageId: string
@@ -5401,9 +5428,13 @@ function ChatBubble({
     }
   }
   const isUser = message.role === 'user'
+  const structuredResponse = !isUser ? message.structuredResponse : null
+  const hasStructuredAction = (action: ChatAction) =>
+    structuredResponse?.actions.includes(action) ?? false
   const rfpBlock = extractRfpJsonBlock(message.content)
   const projectDirection = !isUser
-    ? extractProjectDirectionCard(rfpBlock.cleanedText)
+    ? structuredResponse?.metadata.projectDirection ??
+      extractProjectDirectionCard(rfpBlock.cleanedText)
     : null
   const projectDirectionSplit = projectDirection
     ? splitProjectDirectionContent(rfpBlock.cleanedText)
@@ -5447,12 +5478,22 @@ function ChatBubble({
   const displayContent = choiceSplit.displayContent
   const isPersonaCardMessage = Boolean(message.personaCardBlock)
   const shouldShowHints =
-    !isUser &&
-    !isPersonaCardMessage &&
-    !problemStatements &&
-    !isProcessCheckPrompt(displayContent) &&
-    !isStageProceedPrompt(displayContent) &&
-    isAssistantQuestion(displayContent)
+    structuredResponse
+      ? hasStructuredAction('SHOW_HINT_BUTTON')
+      : !isUser &&
+        !isPersonaCardMessage &&
+        !problemStatements &&
+        !isProcessCheckPrompt(displayContent) &&
+        !isStageProceedPrompt(displayContent) &&
+        isAssistantQuestion(displayContent)
+  const showProcessConfirmation = structuredResponse
+    ? hasStructuredAction('SHOW_REVIEW_PROCESS_BUTTON')
+    : isProcessCheckPrompt(displayContent)
+  const showStageProceedButtons = structuredResponse
+    ? hasStructuredAction('SHOW_STAGE_PROCEED_BUTTONS')
+    : isStageProceedPrompt(displayContent)
+  const isStructuredStep1Entry =
+    structuredResponse?.intent === 'REQUEST_STEP_1_START'
   const choices = isPersonaCardMessage
     ? []
     : choiceSplit.choices.length > 0
@@ -6294,37 +6335,58 @@ function ChatBubble({
       ) : null}
 
       <div className="flex w-full flex-wrap items-center justify-end gap-3">
-        {isProcessCheckPrompt(displayContent) ? (
+        {showProcessConfirmation ? (
           <button
             type="button"
             disabled={disabled}
-            onClick={() => onChoice(language === 'ENG' ? 'Review the process' : '프로세스 확인하기')}
+            onClick={() =>
+              onChoice(
+                language === 'ENG' ? 'Review the process' : '프로세스 확인하기',
+                'REVIEW_DEVELOPMENT_PROCESS'
+              )
+            }
             className="rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
           >
             {copy.process}
           </button>
         ) : null}
 
-        {isStageProceedPrompt(displayContent) && !directionArtifactKind ? (
+        {showStageProceedButtons && !directionArtifactKind ? (
           <>
             <button
               type="button"
               disabled={disabled}
               onClick={() =>
                 onChoice(
-                  isStep1EntryPrompt(displayContent)
+                  isStructuredStep1Entry ||
+                    (!structuredResponse && isStep1EntryPrompt(displayContent))
                     ? language === 'ENG' ? 'Start STEP 1' : 'STEP 1 시작할게요'
-                    : language === 'ENG' ? 'Continue to the next step' : '다음 단계로 진행할게요'
+                    : language === 'ENG' ? 'Continue to the next step' : '다음 단계로 진행할게요',
+                  isStructuredStep1Entry ||
+                    (!structuredResponse && isStep1EntryPrompt(displayContent))
+                    ? 'START_STEP_1'
+                    : 'CONTINUE_TO_STEP_2'
                 )
               }
               className="rounded-[30px] bg-blue-600 px-[clamp(16px,1.85svh,20px)] py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-white disabled:opacity-50"
             >
-              {isStep1EntryPrompt(displayContent) ? copy.startStep1 : copy.nextStep}
+              {isStructuredStep1Entry ||
+              (!structuredResponse && isStep1EntryPrompt(displayContent))
+                ? copy.startStep1
+                : copy.nextStep}
             </button>
             <button
               type="button"
               disabled={disabled}
-              onClick={() => onChoice(language === 'ENG' ? 'I have more to add' : '더 하고 싶은 말이 있어요')}
+              onClick={() =>
+                onChoice(
+                  language === 'ENG' ? 'I have more to add' : '더 하고 싶은 말이 있어요',
+                  isStructuredStep1Entry ||
+                    (!structuredResponse && isStep1EntryPrompt(displayContent))
+                    ? 'ADD_PROJECT_CONTEXT'
+                    : 'ADD_STEP_1_CONTEXT'
+                )
+              }
               className="rounded-[30px] bg-[#DDF444] px-[clamp(16px,1.85svh,20px)] py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
             >
               {copy.moreToAdd}

@@ -116,6 +116,70 @@ export async function generateGeminiText({
   return text
 }
 
+export async function generateGeminiJson({
+  apiKey,
+  messages,
+  model = DEFAULT_TEXT_MODEL,
+  responseSchema,
+  system,
+}: {
+  apiKey: string
+  messages: GeminiMessage[]
+  model?: string
+  responseSchema: Record<string, unknown>
+  system: string
+}) {
+  const contents = messages
+    .filter((message) => message.role !== 'system')
+    .map((message) => ({
+      parts: [{ text: message.content }],
+      role: message.role === 'assistant' ? 'model' : 'user',
+    }))
+
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+    {
+      body: JSON.stringify({
+        contents,
+        generationConfig: {
+          responseMimeType: 'application/json',
+          responseSchema,
+        },
+        systemInstruction: {
+          parts: [{ text: system }],
+        },
+      }),
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST',
+    }
+  )
+  const payload = (await response.json().catch(() => null)) as unknown
+
+  if (!response.ok) {
+    const message =
+      payload &&
+      typeof payload === 'object' &&
+      'error' in payload &&
+      payload.error &&
+      typeof payload.error === 'object' &&
+      'message' in payload.error &&
+      typeof payload.error.message === 'string'
+        ? payload.error.message
+        : 'Gemini structured generation failed'
+
+    throw new Error(message)
+  }
+
+  const text = getTextFromGeminiPayload(payload).trim()
+  if (!text) throw new Error('Gemini returned empty structured output')
+
+  try {
+    return JSON.parse(text) as unknown
+  } catch {
+    throw new Error('Gemini returned invalid structured JSON')
+  }
+}
+
 function extractInlineImages(payload: unknown) {
   if (!payload || typeof payload !== 'object') {
     return []

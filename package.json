@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:chat-flow": "node --test --experimental-strip-types tests/chat-step-0-1.test.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.10.3",
