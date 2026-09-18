@@ -8,6 +8,7 @@ import {
   parseStructuredChatResponse,
   resolveStageFromClientIntent,
 } from '../src/lib/chat/structured-response.ts'
+import { inferStageMetaFromText } from '../src/lib/chat/stages.ts'
 
 test('Korean STEP 0 scenario exposes process action without sentence-driven UI', () => {
   const response = parseStructuredChatResponse({
@@ -90,4 +91,38 @@ test('legacy Korean and English messages remain compatible fallbacks', () => {
   assert.equal(korean.intent, 'SHOW_PROCESS_CONFIRMATION')
   assert.equal(english.intent, 'SHOW_PROCESS_CONFIRMATION')
   assert.deepEqual(korean.actions, english.actions)
+})
+
+test('STEP 3 completion prompt does not skip directly to STEP 4', () => {
+  const korean = inferStageMetaFromText({
+    currentStageKey: 'step_3_direction',
+    text: [
+      '## Tam Sam Som',
+      '선택한 리서치가 완료되었습니다.',
+      '다른 개발 방향성 리서치도 확인할 수 있습니다. 현재 정보가 충분하다면 다음 STEP 4. 스타일 컨셉 도출 단계로 진행할까요?',
+    ].join('\n'),
+  })
+  const english = inferStageMetaFromText({
+    currentStageKey: 'step_3_direction',
+    text: [
+      '## Tam Sam Som',
+      'The selected research is complete.',
+      'You can review another direction-research area, or move to STEP 4: Style Concept if you have enough information. Would you like to continue?',
+    ].join('\n'),
+  })
+
+  assert.equal(korean.transition, false)
+  assert.equal(korean.nextStageKey, 'step_3_direction')
+  assert.equal(english.transition, false)
+  assert.equal(english.nextStageKey, 'step_3_direction')
+})
+
+test('explicit STEP 4 heading is still recognized as a legacy fallback', () => {
+  const meta = inferStageMetaFromText({
+    currentStageKey: 'step_3_direction',
+    text: 'STEP 4. Style Concept\nI prepared style keywords for this project.',
+  })
+
+  assert.equal(meta.transition, true)
+  assert.equal(meta.nextStageKey, 'step_4_style')
 })

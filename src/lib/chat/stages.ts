@@ -225,7 +225,12 @@ export function inferStageMetaFromText({
     }
   }
 
-  if (/STEP\s*4|스타일|레퍼런스|style|reference/i.test(text) && currentStageKey === 'step_3_direction') {
+  if (
+    currentStageKey === 'step_3_direction' &&
+    /^\s*(?:#{1,6}\s*)?STEP\s*4[.:]?\s*(?:스타일\s*컨셉\s*도출|Style\s*Concept)\b/im.test(
+      text
+    )
+  ) {
     return {
       currentStageKey,
       nextStageKey: 'step_4_style',

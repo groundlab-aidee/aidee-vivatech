@@ -180,7 +180,9 @@ function getImageArtifactKind(purpose?: GeneratedImagePurpose): LibraryArtifactK
     case 'persona':
       return 'persona'
     case 'style_reference':
+    case 'moodboard_candidate':
       return 'mood_board'
+    case 'design':
     case 'thumbnail':
       return 'rendering'
     default:
@@ -1447,6 +1449,22 @@ export function ProjectChatContainer({
     }
     return null
   }, [visibleMessages])
+  const latestDesignRenderingImage = useMemo(() => {
+    for (const message of [...visibleMessages].reverse()) {
+      if (
+        message.generatedImageBlock?.purpose === 'design' &&
+        message.generatedImageBlock.images.length > 0
+      ) {
+        return (
+          message.generatedImageBlock.images[
+            message.generatedImageBlock.selectedImageIndex ?? 0
+          ] ?? message.generatedImageBlock.images[0] ?? null
+        )
+      }
+    }
+
+    return null
+  }, [visibleMessages])
   const latestProblemStatementsMessageId = useMemo(() => {
     for (const message of [...visibleMessages].reverse()) {
       if (message.role !== 'assistant') continue
@@ -1635,15 +1653,21 @@ export function ProjectChatContainer({
       availableKinds.add('project_direction')
     }
 
-    if (visualizedProblemStatements) {
+    if (visualizedProblemStatements || latestProblemStatementsMessageId) {
       availableKinds.add('problem_statements')
     }
 
-    if (visualizedKeywordCards.experience_keywords) {
+    if (
+      visualizedKeywordCards.experience_keywords ||
+      latestKeywordMessageIds.experience_keywords
+    ) {
       availableKinds.add('experience_keywords')
     }
 
-    if (visualizedKeywordCards.relationship_keywords) {
+    if (
+      visualizedKeywordCards.relationship_keywords ||
+      latestKeywordMessageIds.relationship_keywords
+    ) {
       availableKinds.add('relationship_keywords')
     }
 
@@ -1652,10 +1676,7 @@ export function ProjectChatContainer({
       'consumption_keywords',
       'brand_positioning',
     ] as const) {
-      if (
-        visualizedDirectionArtifacts[kind] &&
-        visualizedDirectionArtifacts[kind] === latestDirectionMessageIds[kind]
-      ) {
+      if (latestDirectionMessageIds[kind]) {
         availableKinds.add(getDirectionLibraryKind(kind))
       }
     }
@@ -1675,7 +1696,7 @@ export function ProjectChatContainer({
 
     }
 
-    if (selectedRenderingImage) {
+    if (selectedRenderingImage || latestDesignRenderingImage) {
       availableKinds.add('rendering')
     }
 
@@ -1683,7 +1704,7 @@ export function ProjectChatContainer({
       availableKinds.add('modeling')
     }
 
-    if (latestRfp && hasVisualizedLatestRfp) {
+    if (latestRfp && (hasVisualizedLatestRfp || hasConfirmedLatestRfp)) {
       availableKinds.add('project_report')
     }
 
@@ -1692,13 +1713,16 @@ export function ProjectChatContainer({
     )
   }, [
     hasVisualizedLatestRfp,
+    hasConfirmedLatestRfp,
+    latestDesignRenderingImage,
     latestProjectDirection,
     latestRfp,
     latestDirectionMessageIds,
+    latestKeywordMessageIds,
+    latestProblemStatementsMessageId,
     meshyModelUrl,
     selectedRenderingImage,
     visibleMessages,
-    visualizedDirectionArtifacts,
     visualizedKeywordCards,
     visualizedProblemStatements,
   ])
@@ -1870,6 +1894,28 @@ export function ProjectChatContainer({
         )
       } catch {
         setConfirmedDirectionArtifacts({})
+      }
+    }, 0)
+
+    return () => window.clearTimeout(restoreTimer)
+  }, [projectId])
+
+  useEffect(() => {
+    const restoreTimer = window.setTimeout(() => {
+      try {
+        setSelectedRenderingImage(
+          window.localStorage.getItem(`aidee:selected-rendering-image:${projectId}`)
+        )
+        setMeshyModelUrl(
+          window.localStorage.getItem(`aidee:meshy-model-url:${projectId}`)
+        )
+        setConfirmedCompanyMessageId(
+          window.localStorage.getItem(`aidee:confirmed-company:${projectId}`)
+        )
+      } catch {
+        setSelectedRenderingImage(null)
+        setMeshyModelUrl(null)
+        setConfirmedCompanyMessageId(null)
       }
     }, 0)
 
@@ -2240,6 +2286,45 @@ export function ProjectChatContainer({
     })
   }
 
+  function selectDesignRendering(image: string) {
+    setSelectedRenderingImage(image)
+
+    try {
+      if (image) {
+        window.localStorage.setItem(
+          `aidee:selected-rendering-image:${projectId}`,
+          image
+        )
+      } else {
+        window.localStorage.removeItem(
+          `aidee:selected-rendering-image:${projectId}`
+        )
+      }
+    } catch {
+      // The selection remains available for the current session.
+    }
+  }
+
+  function setReadyModelUrl(url: string) {
+    setMeshyModelUrl(url)
+
+    try {
+      window.localStorage.setItem(`aidee:meshy-model-url:${projectId}`, url)
+    } catch {
+      // The model remains available for the current session.
+    }
+  }
+
+  function confirmCompany(messageId: string) {
+    setConfirmedCompanyMessageId(messageId)
+
+    try {
+      window.localStorage.setItem(`aidee:confirmed-company:${projectId}`, messageId)
+    } catch {
+      // The confirmation remains available for the current session.
+    }
+  }
+
   function resizeComposer() {
     const textarea = textareaRef.current
 
@@ -2418,11 +2503,11 @@ export function ProjectChatContainer({
                   onVisualizeDirection={visualizeDirectionArtifact}
                   onConfirmDirection={confirmDirectionArtifact}
                   onVisualizeRfp={visualizeProjectReport}
-                  onConfirmCompany={(id) => setConfirmedCompanyMessageId(id)}
+                  onConfirmCompany={confirmCompany}
                   onVisualizeCompany={() => setCompanyModalOpen(true)}
-                  onModelReady={(url) => setMeshyModelUrl(url)}
+                  onModelReady={setReadyModelUrl}
                   onOpenModelViewer={() => setModelViewerOpen(true)}
-                  onSelectDesignRendering={setSelectedRenderingImage}
+                  onSelectDesignRendering={selectDesignRendering}
                   projectId={projectId}
                   userAvatarUrl={userAvatarUrl}
                   visualizedKeywordCards={visualizedKeywordCards}
@@ -2580,6 +2665,16 @@ export function ProjectChatContainer({
             return
           }
 
+          if (kind === 'problem_statements') {
+            const sourceMessage = visibleMessages.find(
+              (message) => message.id === latestProblemStatementsMessageId
+            )
+            setProblemStatementsModalData(
+              sourceMessage ? extractProblemStatementsData(sourceMessage.content) : null
+            )
+            return
+          }
+
           if (kind === 'persona' && latestVisualizedPersonaCard) {
             setPersonaCardModalData(latestVisualizedPersonaCard)
             return
@@ -2591,6 +2686,25 @@ export function ProjectChatContainer({
             visualizedKeywordCards[kind]
           ) {
             setKeywordCardModalData(visualizedKeywordCards[kind])
+            return
+          }
+
+          if (kind === 'experience_keywords' || kind === 'relationship_keywords') {
+            const sourceMessage = visibleMessages.find(
+              (message) => message.id === latestKeywordMessageIds[kind]
+            )
+            const card =
+              sourceMessage
+                ? extractKeywordCardsData(sourceMessage.content).find(
+                    (item) => item.kind === kind
+                  ) ?? null
+                : null
+            setKeywordCardModalData(card)
+            return
+          }
+
+          if (kind === 'mood_board') {
+            setMoodboardModalOpen(true)
             return
           }
 
@@ -2640,8 +2754,8 @@ export function ProjectChatContainer({
             return
           }
 
-          if (kind === 'rendering' && selectedRenderingImage) {
-            setRenderingModalImage(selectedRenderingImage)
+          if (kind === 'rendering') {
+            setRenderingModalImage(selectedRenderingImage ?? latestDesignRenderingImage)
             return
           }
 
@@ -5532,6 +5646,44 @@ function ChatBubble({
 
     return () => clearInterval(interval)
   }, [language, meshyTaskId, meshyStatus, onModelReady])
+
+  useEffect(() => {
+    if (
+      message.generatedImageBlock?.purpose !== 'moodboard_candidate' ||
+      !canShowStyleReferences ||
+      moodboardImages
+    ) {
+      return
+    }
+
+    let cancelled = false
+
+    async function restoreMoodboard() {
+      try {
+        const response = await fetch(`/api/moodboard?projectId=${projectId}`)
+        const data = (await response.json().catch(() => null)) as {
+          board?: MoodboardGridImage[]
+        } | null
+
+        if (!cancelled && response.ok && data?.board && data.board.length > 0) {
+          setMoodboardImages(data.board)
+        }
+      } catch {
+        // Keep showing the candidate UI if the saved board cannot be restored.
+      }
+    }
+
+    void restoreMoodboard()
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    canShowStyleReferences,
+    message.generatedImageBlock?.purpose,
+    moodboardImages,
+    projectId,
+  ])
 
   const isPersonaVisualizationOnly =
     Boolean(message.personaCardBlock?.imageUrl) &&
