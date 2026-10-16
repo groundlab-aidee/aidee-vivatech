@@ -58,6 +58,11 @@ const expertItems: Array<{
   },
 ]
 
+const AGENT_MENU_BUTTON_COUNT = expertItems.length + 1
+const AGENT_MENU_BUTTON_HEIGHT = 'clamp(36px,4.69svh,48px)'
+const AGENT_MENU_BUTTON_GAP = '3px'
+const AGENT_MENU_RESERVED_HEIGHT = `calc(${AGENT_MENU_BUTTON_HEIGHT} * ${AGENT_MENU_BUTTON_COUNT} + ${AGENT_MENU_BUTTON_GAP} * ${AGENT_MENU_BUTTON_COUNT - 1})`
+
 const processSteps: Array<{
   index: number
   label: string
@@ -65,38 +70,38 @@ const processSteps: Array<{
 }> = [
   {
     index: 1,
-    label: '개발 조건 정리',
+    label: '제품 개발 조건 정리',
     stageKeys: ['step_0_start', 'step_1_idea'],
   },
   {
     index: 2,
-    label: '사용자 명확화',
-    stageKeys: ['step_2_persona', 'step_2_research'],
+    label: 'AI 에이전트 생성',
+    stageKeys: ['step_2_agent'],
   },
   {
     index: 3,
-    label: '개발 방향성 도출',
-    stageKeys: ['step_3_direction'],
+    label: '제품 사용자 정의',
+    stageKeys: ['step_3_persona', 'step_3_research'],
   },
   {
     index: 4,
-    label: '스타일 컨셉 도출',
-    stageKeys: ['step_4_style'],
+    label: '개발 방향 도출',
+    stageKeys: ['step_4_direction'],
   },
   {
     index: 5,
-    label: '디자인 시안 확정',
-    stageKeys: ['step_5_design'],
+    label: '디자인 컨셉 도출',
+    stageKeys: ['step_5_style', 'step_5_design', 'step_5_cmf', 'step_5_3d'],
   },
   {
     index: 6,
-    label: '프로젝트 기획안 생성',
-    stageKeys: ['step_6_rfp'],
+    label: '구조 설계 방향 도출',
+    stageKeys: ['step_6_structure'],
   },
   {
     index: 7,
-    label: '협력 파트너 매칭',
-    stageKeys: ['step_6_company'],
+    label: '시장 진입 전략 도출',
+    stageKeys: ['step_7_market', 'step_7_rfp'],
   },
 ]
 
@@ -116,13 +121,13 @@ const expertLabels: Record<ExpertKey, Record<AppLanguage, string>> = {
 }
 
 const processStepLabels: Record<number, Record<AppLanguage, string>> = {
-  1: { ENG: 'Define Requirements', KOR: '개발 조건 정리' },
-  2: { ENG: 'Identify Users', KOR: '사용자 명확화' },
-  3: { ENG: 'Set Development Direction', KOR: '개발 방향성 도출' },
-  4: { ENG: 'Establish Style Concept', KOR: '스타일 컨셉 도출' },
-  5: { ENG: 'Finalize Design Drafts', KOR: '디자인 시안 확정' },
-  6: { ENG: 'Generate Project Proposal', KOR: '프로젝트 기획안 생성' },
-  7: { ENG: 'Partner Matching', KOR: '협력 파트너 매칭' },
+  1: { ENG: 'Product Development Conditions', KOR: '제품 개발 조건 정리' },
+  2: { ENG: 'Create AI Agents', KOR: 'AI 에이전트 생성' },
+  3: { ENG: 'Define Product User', KOR: '제품 사용자 정의' },
+  4: { ENG: 'Derive Development Direction', KOR: '개발 방향 도출' },
+  5: { ENG: 'Derive Design Concept', KOR: '디자인 컨셉 도출' },
+  6: { ENG: 'Structural Design Direction', KOR: '구조 설계 방향 도출' },
+  7: { ENG: 'Market Entry Strategy', KOR: '시장 진입 전략 도출' },
 }
 
 function isActivePath(pathname: string, href: string) {
@@ -135,7 +140,7 @@ function isActivePath(pathname: string, href: string) {
 
 export function AppSidebar() {
   const pathname = usePathname()
-  const { sidebarState } = useProjectChatSidebar()
+  const { debate, setSidebarState, sidebarState } = useProjectChatSidebar()
   const { language } = useAppLanguage()
 
   if (
@@ -145,10 +150,15 @@ export function AppSidebar() {
     return (
       <ProjectProgressSidebar
         activeExpert={sidebarState.activeExpert}
-        activeExperts={sidebarState.activeExperts}
         activeStageKey={sidebarState.activeStageKey}
+        areAgentsEnabled={sidebarState.areAgentsEnabled}
         language={language}
         pathname={pathname}
+        setActiveExpert={(activeExpert) =>
+          setSidebarState((current) => ({ ...current, activeExpert }))
+        }
+        onOpenDebate={debate.open}
+        showAgents={sidebarState.showAgents}
       />
     )
   }
@@ -225,16 +235,22 @@ function SidebarLogo() {
 
 function ProjectProgressSidebar({
   activeExpert,
-  activeExperts,
   activeStageKey,
+  areAgentsEnabled,
   language,
   pathname,
+  onOpenDebate,
+  setActiveExpert,
+  showAgents,
 }: {
   activeExpert: ExpertKey
-  activeExperts: ExpertKey[]
   activeStageKey: StageKey
+  areAgentsEnabled: boolean
   language: AppLanguage
   pathname: string
+  onOpenDebate: () => void
+  setActiveExpert: (expert: ExpertKey) => void
+  showAgents: boolean
 }) {
   const activeStepIndex = getProcessStepIndex(activeStageKey)
 
@@ -244,39 +260,72 @@ function ProjectProgressSidebar({
 
       <SidebarNav language={language} pathname={pathname} />
 
-      <section className="border-b border-neutral-800 px-[clamp(12px,1.56svh,16px)] py-[clamp(10px,1.56svh,16px)]">
-        <div className="flex flex-col gap-[3px]">
-          {expertItems.map((expert) => {
-            const selected =
-              activeExperts.length > 0
-                ? activeExperts.includes(expert.key)
-                : activeExpert === expert.key
+      <section className="shrink-0 border-b border-neutral-800 px-[clamp(12px,1.56svh,16px)] py-[clamp(10px,1.56svh,16px)]">
+        <div
+          className="flex flex-col"
+          style={{
+            gap: AGENT_MENU_BUTTON_GAP,
+            height: AGENT_MENU_RESERVED_HEIGHT,
+          }}
+        >
+          {showAgents
+            ? expertItems.map((expert) => {
+              const selected =
+                areAgentsEnabled && activeExpert === expert.key
 
-            return (
-              <div
-                key={expert.key}
-                className={`flex h-[clamp(36px,4.69svh,48px)] items-center gap-[clamp(12px,1.95svh,20px)] rounded-lg px-[clamp(14px,1.95svh,20px)] py-2 ${
-                  selected
-                    ? 'bg-gradient-to-l from-zinc-800 to-slate-600/50 text-white'
-                    : 'text-zinc-500'
+              return (
+                <button
+                  key={expert.key}
+                  type="button"
+                  disabled={!areAgentsEnabled}
+                  onClick={() => setActiveExpert(expert.key)}
+                  className={`flex items-center gap-[clamp(12px,1.95svh,20px)] rounded-lg px-[clamp(14px,1.95svh,20px)] py-2 ${
+                    selected
+                      ? 'bg-gradient-to-l from-zinc-800 to-slate-600/50 text-white'
+                      : 'text-zinc-500'
+                  } disabled:cursor-default`}
+                  style={{ height: AGENT_MENU_BUTTON_HEIGHT }}
+                >
+                  <Image
+                    src={expert.icon}
+                    alt=""
+                    width={28}
+                    height={28}
+                    unoptimized
+                    className={`h-[clamp(20px,2.73svh,28px)] w-[clamp(20px,2.73svh,28px)] shrink-0 object-contain ${
+                      areAgentsEnabled ? 'opacity-100' : 'grayscale opacity-45'
+                    }`}
+                  />
+                  <span className="font-['Inter'] text-[clamp(13px,1.56svh,16px)] font-semibold leading-6">
+                    {expertLabels[expert.key][language]}
+                  </span>
+                </button>
+              )
+            })
+            : null}
+          {showAgents ? (
+            <button
+              className="flex items-center gap-[clamp(12px,1.95svh,20px)] rounded-lg px-[clamp(14px,1.95svh,20px)] py-2 text-zinc-500 hover:bg-neutral-800 disabled:cursor-default disabled:hover:bg-transparent"
+              disabled={!areAgentsEnabled}
+              onClick={onOpenDebate}
+              style={{ height: AGENT_MENU_BUTTON_HEIGHT }}
+              type="button"
+            >
+              <Image
+                src="/assets/icons/navigation/chat.svg"
+                alt=""
+                width={28}
+                height={28}
+                unoptimized
+                className={`h-[clamp(20px,2.73svh,28px)] w-[clamp(20px,2.73svh,28px)] shrink-0 object-contain ${
+                  areAgentsEnabled ? 'opacity-100' : 'grayscale opacity-45'
                 }`}
-              >
-                <Image
-                  src={expert.icon}
-                  alt=""
-                  width={28}
-                  height={28}
-                  unoptimized
-                  className={`h-[clamp(20px,2.73svh,28px)] w-[clamp(20px,2.73svh,28px)] shrink-0 object-contain ${
-                    selected ? 'opacity-100' : 'opacity-45'
-                  }`}
-                />
-                <span className="font-['Inter'] text-[clamp(13px,1.56svh,16px)] font-semibold leading-6">
-                  {expertLabels[expert.key][language]}
-                </span>
-              </div>
-            )
-          })}
+              />
+              <span className="font-['Inter'] text-[clamp(13px,1.56svh,16px)] font-semibold leading-6">
+                에이전트 토론창
+              </span>
+            </button>
+          ) : null}
         </div>
       </section>
 

@@ -81,7 +81,10 @@ export async function POST(request: Request) {
         accessKey: unsplashKey,
         query: boardQuery,
         perPage: 12,
-      }).catch(() => [])
+      }).catch((error) => {
+        console.error('[MOODBOARD] Unsplash 보드 이미지 검색 실패:', error)
+        return []
+      })
     }
 
     if (boardImages.length === 0) {
@@ -120,6 +123,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ board: inserted ?? [] })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
+    console.error('[MOODBOARD] /api/moodboard/select 실패:', err)
     return NextResponse.json({ error: message }, { status: 500 })
   }
 }

@@ -98,13 +98,17 @@ function getStageLabel(stage?: string) {
   const stageKeyMap: Record<string, string> = {
     step_0_start: 'Step1',
     step_1_idea: 'Step1',
-    step_2_persona: 'Step2',
-    step_2_research: 'Step2',
-    step_3_direction: 'Step3',
-    step_4_style: 'Step4',
+    step_2_agent: 'Step2',
+    step_3_persona: 'Step3',
+    step_3_research: 'Step3',
+    step_4_direction: 'Step4',
+    step_5_style: 'Step5',
     step_5_design: 'Step5',
-    step_6_rfp: 'Step6',
-    step_6_company: 'Step7',
+    step_5_cmf: 'Step5',
+    step_5_3d: 'Step5',
+    step_6_structure: 'Step6',
+    step_7_market: 'Step7',
+    step_7_rfp: 'Step7',
   }
   const normalized = stage.trim().toLowerCase()
   const mappedStage = stageKeyMap[normalized]
@@ -119,27 +123,31 @@ function getStageLabel(stage?: string) {
     return 'Step1'
   }
 
-  if (/페르소나|리서치|사용자|타겟/.test(compactStage)) {
+  if (/에이전트/.test(compactStage)) {
     return 'Step2'
   }
 
-  if (/방향|방향성/.test(compactStage)) {
+  if (/페르소나|리서치|사용자|타겟/.test(compactStage)) {
     return 'Step3'
   }
 
-  if (/스타일|컨셉|콘셉트/.test(compactStage)) {
+  if (/방향|방향성/.test(compactStage)) {
     return 'Step4'
+  }
+
+  if (/스타일|컨셉|콘셉트/.test(compactStage)) {
+    return 'Step5'
   }
 
   if (/디자인|시안|제안/.test(compactStage)) {
     return 'Step5'
   }
 
-  if (/평가|rfp|기획안|제안요청서/.test(compactStage)) {
+  if (/구조|설계/.test(compactStage)) {
     return 'Step6'
   }
 
-  if (/협력|업체|파트너|연결/.test(compactStage)) {
+  if (/시장|판매|rfp|기획안|제안요청서/.test(compactStage)) {
     return 'Step7'
   }
 

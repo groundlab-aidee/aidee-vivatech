@@ -20,6 +20,10 @@ import {
 import { useAppLanguage } from '@/components/i18n/AppLanguageContext'
 import { ProjectFavoriteButton } from '@/components/project/ProjectFavoriteButton'
 import { ProjectMoreMenu } from '@/components/project/ProjectMoreMenu'
+import { AgentCustomizationBox } from '@/components/project/AgentCustomizationBox'
+import { AgentCustomizationModal } from '@/components/project/AgentCustomizationModal'
+import { StepSectionHeader } from '@/components/project/StepSectionHeader'
+import { STEP_2_AGENT_CUSTOMIZATION_DATA } from '@/components/project/step2AgentCustomizationData'
 import {
   getExpertDefinition,
   type ExpertKey,
@@ -33,6 +37,8 @@ import { extractRfpJsonBlock, type RfpDocument } from '@/lib/chat/rfp'
 import {
   getLaterStageKey,
   inferStageMetaFromText,
+  resolveStageStartAction,
+  type ChatAction,
   type StageKey,
 } from '@/lib/chat/stages'
 
@@ -68,12 +74,12 @@ type ProjectChatContainerProps = {
   initialIsFavorite?: boolean
   userAvatarUrl?: string | null
   userPlanLabel?: string
-  userTokenCount?: number
 }
 
 type ChatApiResponse = {
   error?: string
   message?: ChatMessageRecord
+  messages?: ChatMessageRecord[]
   nextStageKey?: StageKey
   userMessage?: ChatMessageRecord | null
 }
@@ -83,6 +89,38 @@ type ForceImageGeneration =
   | 'initial_design'
   | 'persona_card'
   | 'style_reference'
+
+const STEP_2_AGENT_NAMES = [
+  '기획전략가',
+  '디자이너',
+  '엔지니어',
+  '마케터',
+] as const
+
+type Step2AgentName = (typeof STEP_2_AGENT_NAMES)[number]
+type Step2AgentSelections = Record<string, string[]>
+type Step2CustomizationState = Record<
+  Step2AgentName,
+  { completed: boolean; selections: Step2AgentSelections }
+>
+
+function createEmptyStep2CustomizationState(): Step2CustomizationState {
+  return Object.fromEntries(
+    STEP_2_AGENT_NAMES.map((agentName) => [
+      agentName,
+      { completed: false, selections: {} },
+    ])
+  ) as Step2CustomizationState
+}
+
+function isStep2EntryAssistantMessage(message: ChatMessageRecord) {
+  return (
+    message.role === 'assistant' &&
+    message.stageKey === 'step_2_agent' &&
+    /STEP\s*2[.]?\s*AI\s*에이전트\s*생성/i.test(message.content) &&
+    /에이전트\s*4명을\s*모두\s*커스터마이징/i.test(message.content)
+  )
+}
 
 type DirectionArtifactKind =
   | 'brand_positioning'
@@ -117,6 +155,18 @@ type BrandPositioningData = {
 
 type KeywordArtifactKind = 'experience_keywords' | 'relationship_keywords'
 
+type ArtifactType =
+  | 'persona'
+  | 'problem_statements'
+  | 'keyword_experience'
+  | 'keyword_relationship'
+  | 'direction_market_size'
+  | 'direction_consumption_keywords'
+  | 'direction_brand_positioning'
+  | 'moodboard'
+  | 'design'
+  | 'modeling'
+
 type KeywordCardData = {
   description: string
   keywords: string[]
@@ -131,10 +181,12 @@ type ProblemStatementsData = {
 }
 
 type ChatChoice = {
-  key: 'A' | 'B' | 'C'
+  key: 'A' | 'B' | 'C' | 'D'
   label: string
   value: string
 }
+
+type Step5WidgetKind = 'shape' | 'form'
 
 type ProjectDirectionData = {
   budgetAndDuration: string
@@ -175,6 +227,8 @@ function getImageArtifactKind(purpose?: GeneratedImagePurpose): LibraryArtifactK
       return 'mood_board'
     case 'thumbnail':
       return 'rendering'
+    case 'modeling':
+      return 'modeling'
     default:
       return null
   }
@@ -206,18 +260,6 @@ const EXPERT_MENU_ITEMS: Array<{
     label: { ENG: 'Marketer', KOR: '마케터' },
   },
 ]
-
-const STAGE_EXPERTS: Record<StageKey, ExpertKey[]> = {
-  step_0_start: ['planner'],
-  step_1_idea: ['planner'],
-  step_2_persona: ['planner', 'marketer'],
-  step_2_research: ['planner', 'marketer'],
-  step_3_direction: ['planner', 'engineer', 'marketer', 'style_designer'],
-  step_4_style: ['style_designer'],
-  step_5_design: ['style_designer', 'engineer'],
-  step_6_rfp: ['planner', 'engineer', 'marketer', 'style_designer'],
-  step_6_company: ['planner'],
-}
 
 const LIBRARY_ARTIFACTS: LibraryArtifact[] = [
   { kind: 'project_direction', title: 'Project Direction' },
@@ -329,6 +371,10 @@ function splitProjectDirectionContent(content: string) {
 function stripInternalBlocksForDisplay(text: string) {
   return text
     .replace(
+      /^(?:\s*(?:#{1,6}\s*)?(?:\*{1,2}|_{1,2})?\s*(?:PILOT\s*:\s*\[[^\]\n]+\]|\[\s*PILOT\s*:\s*[^\]\n]+\])\s*(?:\*{1,2}|_{1,2})?\s*\n?)+/i,
+      ''
+    )
+    .replace(
       /\n?<<\s*AIDEE[-_ ]?(?:IMAGES|RFP_JSON)\s*>>[\s\S]*?(?:<<\s*\/\s*AIDEE[-_ ]?(?:IMAGES|RFP_JSON)\s*>>|$)/gi,
       ''
     )
@@ -340,12 +386,17 @@ function stripInternalBlocksForDisplay(text: string) {
       /\n?<<AIDEE_DIRECTION_WIDGETS>>[\s\S]*?<<\/AIDEE_DIRECTION_WIDGETS>>/g,
       ''
     )
+    .replace(/\n?<<AIDEE_STEP5_(?:SHAPE|FORM)_WIDGET>>/g, '')
     .replace(
       /\n?<<AIDEE_DIRECTION_CARD:[\s\S]*?<<\/AIDEE_DIRECTION_CARD>>/g,
       ''
     )
     .replace(
       /\n?<<AIDEE_STYLE_KEYWORD_PICKER>>[\s\S]*?<<\/AIDEE_STYLE_KEYWORD_PICKER>>/g,
+      ''
+    )
+    .replace(
+      /\n?<<AIDEE_STYLE_KEYWORDS_SELECTED>>[\s\S]*?<<\/AIDEE_STYLE_KEYWORDS_SELECTED>>/g,
       ''
     )
     .replace(
@@ -380,6 +431,10 @@ type StyleKeywordPickerData = {
 
 function hasStyleKeywordPicker(content: string) {
   return /<<AIDEE_STYLE_KEYWORD_PICKER>>/.test(content)
+}
+
+function hasStyleKeywordSubmission(content: string) {
+  return /<<AIDEE_STYLE_KEYWORDS_SELECTED>>/.test(content)
 }
 
 function parseStyleKeywordPickerData(content: string): StyleKeywordPickerData | null {
@@ -472,12 +527,6 @@ function stripMoodOptionsPayload(content: string) {
     .replace(/\n?\{\s*"moods"\s*:\s*\[[\s\S]*?\]\s*\}\s*/gi, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
-}
-
-function hasDirectionWidgets(content: string) {
-  return /<<AIDEE_DIRECTION_WIDGETS>>[\s\S]*?<<\/AIDEE_DIRECTION_WIDGETS>>/.test(
-    content
-  )
 }
 
 function getDirectionArtifactKind(content: string): DirectionArtifactKind | null {
@@ -859,7 +908,7 @@ function extractKeywordCardsData(content: string): KeywordCardData[] {
   const normalized = stripInternalBlocksForDisplay(content)
   // `#` prefix is optional — the AI sometimes outputs plain "Keywords: Experience"
   const matches = normalized.matchAll(
-    /(?:^|\n)#{0,3}\s*Keywords:\s*(Experience|Relationship)\s*\n([\s\S]*?)(?=\n#{0,3}\s*Keywords:\s*(?:Experience|Relationship)|\n#{1,3}\s|\n\s*다음\s*STEP|\n이\s+['"]?Keywords|\s*$)/gi
+    /(?:^|\n)\s*\**\s*#{0,3}\s*Keywords:\s*(Experience|Relationship)\s*\**\s*\n([\s\S]*?)(?=\n\s*\**\s*#{0,3}\s*Keywords:\s*(?:Experience|Relationship)|\n\s*\**\s*#{1,3}\s|\n\s*다음\s*STEP|\n이\s+['"]?Keywords|\s*$)/gi
   )
 
   return Array.from(matches, (match) => {
@@ -888,13 +937,13 @@ function extractKeywordCardsData(content: string): KeywordCardData[] {
       .flatMap((line) => {
         // "감정: kw1, kw2" or "감정\nkw1, kw2" (category-only line → skip, next line has keywords)
         const withoutCategory = line.replace(
-          /^(?:감정|행동|공간|관계|사용자|환경|기존\s*도구|시간|방해\s*요소|사용\s*시간|타인)\s*[:：]\s*/i,
+          /^(?:감정|행동|공간|Emotion|Action|Space|관계|사용자(?:와\s*제품)?|환경|기존\s*도구|다른\s*사람|시간(?:·|\s+및\s+)루틴|실패(?:·|\s+및\s+)회복|방해\s*요소|사용\s*시간|타인)\s*[:：]\s*/i,
           ''
         )
         // if stripping changed nothing and line is a bare category word → skip
         if (
           withoutCategory === line &&
-          /^(?:감정|행동|공간|관계|사용자|환경|기존\s*도구|시간|방해\s*요소|사용\s*시간|타인)$/i.test(
+          /^(?:감정|행동|공간|Emotion|Action|Space|관계|사용자(?:와\s*제품)?|환경|기존\s*도구|다른\s*사람|시간(?:·|\s+및\s+)루틴|실패(?:·|\s+및\s+)회복|방해\s*요소|사용\s*시간|타인)$/i.test(
             line
           )
         ) {
@@ -939,25 +988,28 @@ function splitAssistantChoices(content: string): {
   const lines = content.replace(/\r\n/g, '\n').split('\n')
   const removableLineIndexes = new Set<number>()
   const choices: ChatChoice[] = []
-  const choiceLinePattern = /^(?:[-•*]\s*)?([ABC])\.\s+(.+)$/
+  const choiceLinePattern = /^(?:[-•*]\s*)?([ABCD])\.\s+(.+)$/
 
   lines.forEach((line, index) => {
     const trimmedLine = line.trim()
     const inlineChoiceMatch = trimmedLine.match(
-      /^A\.\s*(.+?)\s*\/\s*B\.\s*(.+?)\s*\/\s*C\.\s*(.+)$/
+      /^A\.\s*(.+?)\s*\/\s*B\.\s*(.+?)\s*\/\s*C\.\s*(.+?)(?:\s*\/\s*D\.\s*(.+))?$/
     )
 
     if (inlineChoiceMatch) {
-      inlineChoiceMatch.slice(1, 4).forEach((label, labelIndex) => {
-        const key = ['A', 'B', 'C'][labelIndex] as ChatChoice['key']
-        const normalizedLabel = label.trim()
+      inlineChoiceMatch
+        .slice(1, 5)
+        .filter((label): label is string => Boolean(label))
+        .forEach((label, labelIndex) => {
+          const key = ['A', 'B', 'C', 'D'][labelIndex] as ChatChoice['key']
+          const normalizedLabel = label.trim()
 
-        choices.push({
-          key,
-          label: normalizedLabel,
-          value: `${key}. ${normalizedLabel}`,
+          choices.push({
+            key,
+            label: normalizedLabel,
+            value: `${key}. ${normalizedLabel}`,
+          })
         })
-      })
       removableLineIndexes.add(index)
       return
     }
@@ -983,7 +1035,12 @@ function splitAssistantChoices(content: string): {
     }
   })
 
-  if (choices.length === 0) {
+  const uniqueChoices = choices.filter(
+    (choice, index, allChoices) =>
+      allChoices.findIndex((candidate) => candidate.key === choice.key) === index
+  )
+
+  if (uniqueChoices.length === 0) {
     return {
       choices: [],
       displayContent: content,
@@ -991,7 +1048,7 @@ function splitAssistantChoices(content: string): {
   }
 
   return {
-    choices,
+    choices: uniqueChoices,
     displayContent: lines
       .filter((_, index) => !removableLineIndexes.has(index))
       .join('\n')
@@ -1050,24 +1107,51 @@ function isAssistantQuestion(content: string) {
   )
 }
 
+function isDirectionResearchSelectionPrompt(content: string) {
+  const normalized = content.replace(/\s+/g, ' ').trim()
+
+  return (
+    /STEP\s*4/i.test(normalized) &&
+    /(?:어떤|무엇|선택할)\s*(?:항목의?)?/i.test(normalized) &&
+    /리서치/i.test(normalized) &&
+    /(?:먼저\s*)?시작할까요[?？]?/i.test(normalized)
+  )
+}
+
 function isStageProceedPrompt(content: string) {
   const normalized = content.replace(/\s+/g, ' ').trim()
+
+  if (isDirectionResearchSelectionPrompt(normalized)) {
+    return false
+  }
+
   const mentionsProceedQuestion = /진행할까요[?？]?|시작할까요[?？]?/.test(
     normalized
   )
+  const isStep1CompletionPrompt =
+    /STEP\s*2(?:\s*로|[.\s])[^?？]*진행할\s*준비가\s*되었습니다/i.test(normalized) &&
+    /계속\s*진행할까요[?？]?/i.test(normalized)
+  const isStep2CompletionPrompt =
+    /STEP\s*2[.\s][^?？]*완료되었습니다/i.test(normalized) &&
+    /STEP\s*3[.\s][^?？]*시작할까요[?？]?/i.test(normalized)
   const mentionsStageTransition =
     /다음으로\s*STEP\s*\d+[.\s][\s\S]*?(?:단계로\s*)?(?:넘어가겠습니다|진행하겠습니다|이동하겠습니다|시작하겠습니다)/i.test(
       normalized
     ) ||
     /다음\s*단계로\s*(?:넘어가겠습니다|진행하겠습니다|이동하겠습니다)/i.test(
       normalized
-    )
+    ) ||
+    /STEP\s*2\s*로\s*진행할\s*준비가\s*되었습니다/i.test(normalized)
   const mentionsNextStage =
     mentionsStageTransition ||
     /다음(?:으로| 단계| STEP)/i.test(normalized) ||
     /STEP\s*\d+[\s\S]*(?:넘어|진행|이동|들어가|시작)/i.test(normalized)
 
-  return mentionsNextStage && (mentionsProceedQuestion || mentionsStageTransition)
+  return (
+    isStep1CompletionPrompt ||
+    isStep2CompletionPrompt ||
+    (mentionsNextStage && (mentionsProceedQuestion || mentionsStageTransition))
+  )
 }
 
 function isProcessCheckPrompt(content: string) {
@@ -1078,12 +1162,42 @@ function isProcessCheckPrompt(content: string) {
 
 // STEP 1 진입 요청 (프로세스 소개 후 "STEP 1 시작할까요?" 맥락)
 // STEP 1 완료 후 STEP 2 진행 요청과 구분하기 위해 사용
-function isStep1EntryPrompt(content: string) {
+function getStageStartStep(content: string) {
   const normalized = content.replace(/\s+/g, ' ').trim()
-  return (
-    /STEP\s*1/i.test(normalized) &&
-    /진행할까요|시작할까요|넘어가겠습니다/i.test(normalized) &&
-    !/핵심\s*아이디어와\s*개발\s*조건이\s*정리|STEP\s*2\s*[.로]|사용자\s*명확화/i.test(normalized)
+
+  if (isDirectionResearchSelectionPrompt(normalized)) {
+    return null
+  }
+
+  const explicitStartMatches = [
+    ...normalized.matchAll(
+      /STEP\s*([1-7])(?:(?!STEP)[\s\S])*?시작할까요[?？]?/gi
+    ),
+  ]
+  const explicitStart = explicitStartMatches.at(-1)?.[1]
+
+  if (explicitStart) {
+    return Number(explicitStart)
+  }
+
+  if (
+    /STEP\s*2(?:\s*로|[.\s])[^?？]*진행할\s*준비가\s*되었습니다/i.test(
+      normalized
+    ) && /계속\s*진행할까요[?？]?/i.test(normalized)
+  ) {
+    return 2
+  }
+
+  const nextStageMatch = normalized.match(
+    /다음으로\s*STEP\s*([1-7])[.\s][^?？]*?진행할까요[?？]?/i
+  )
+
+  return nextStageMatch ? Number(nextStageMatch[1]) : null
+}
+
+function isStep7CompletionPrompt(content: string) {
+  return /STEP\s*7[.]?\s*시장\s*진입\s*전략\s*도출\s*단계가\s*완료되었습니다[.]?\s*프로젝트\s*기획안\s*생성을\s*위해\s*내용을\s*확정하시겠습니까[?？]?/i.test(
+    content.replace(/\s+/g, ' ').trim()
   )
 }
 
@@ -1096,17 +1210,24 @@ export function ProjectChatContainer({
   initialIsFavorite = false,
   userAvatarUrl,
   userPlanLabel = 'Free',
-  userTokenCount = 400,
 }: ProjectChatContainerProps) {
   const { language } = useAppLanguage()
-  const { setSidebarState } = useProjectChatSidebar()
+  const { debate, setSidebarState, sidebarState } = useProjectChatSidebar()
   const didRequestInitialResponseRef = useRef(false)
   const expertMenuRef = useRef<HTMLDivElement | null>(null)
   const messageScrollRef = useRef<HTMLDivElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const [messages, setMessages] = useState(initialMessages)
   const [stageKey, setStageKey] = useState(initialStageKey)
-  const [activeExpert, setActiveExpert] = useState<ExpertKey>('aidee')
+  const activeExpert = sidebarState.activeExpert
+  const setActiveExpert = useCallback(
+    (nextExpert: ExpertKey) =>
+      setSidebarState((current) => ({
+        ...current,
+        activeExpert: nextExpert,
+      })),
+    [setSidebarState]
+  )
   const [isExpertMenuOpen, setIsExpertMenuOpen] = useState(false)
   const [input, setInput] = useState('')
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
@@ -1165,11 +1286,129 @@ export function ProjectChatContainer({
     useState<ConsumptionKeywordData | null>(null)
   const [isPending, setIsPending] = useState(false)
   const [moodboardModalOpen, setMoodboardModalOpen] = useState(false)
+  const [step2Customization, setStep2Customization] =
+    useState<Step2CustomizationState>(createEmptyStep2CustomizationState)
+  const [customizingStep2Agent, setCustomizingStep2Agent] =
+    useState<Step2AgentName | null>(null)
+  const [areStep2AgentsEnabled, setAreStep2AgentsEnabled] = useState(false)
+  const [isStep2TeamModalOpen, setIsStep2TeamModalOpen] = useState(false)
+  const step2CompletedAgentCount = Object.values(step2Customization).filter(
+    (agent) => agent.completed
+  ).length
+  const isStep2CustomizationComplete =
+    step2CompletedAgentCount === STEP_2_AGENT_NAMES.length
+
   const activeExpertDefinition = getExpertDefinition(activeExpert)
   const visibleMessages = useMemo(
     () => messages.filter((message) => message.role !== 'system'),
     [messages]
   )
+
+  useEffect(() => {
+    const restoreTimer = window.setTimeout(() => {
+      try {
+        setAreStep2AgentsEnabled(
+          window.localStorage.getItem(
+            `aidee:step-2-agents-enabled:${projectId}`
+          ) === 'true'
+        )
+        const savedCustomization = window.localStorage.getItem(
+          `aidee:step-2-customization:${projectId}`
+        )
+
+        if (savedCustomization) {
+          const parsed = JSON.parse(savedCustomization) as Partial<
+            Record<
+              Step2AgentName,
+              { completed?: unknown; selections?: unknown }
+            >
+          >
+          const restored = createEmptyStep2CustomizationState()
+
+          for (const agentName of STEP_2_AGENT_NAMES) {
+            const savedAgent = parsed[agentName]
+
+            if (!savedAgent || typeof savedAgent !== 'object') {
+              continue
+            }
+
+            restored[agentName] = {
+              completed: savedAgent.completed === true,
+              selections:
+                savedAgent.selections &&
+                typeof savedAgent.selections === 'object'
+                  ? Object.fromEntries(
+                      Object.entries(savedAgent.selections).filter(
+                        (entry): entry is [string, string[]] =>
+                          Array.isArray(entry[1]) &&
+                          entry[1].every((item) => typeof item === 'string')
+                      )
+                    )
+                  : {},
+            }
+          }
+
+          setStep2Customization(restored)
+        }
+      } catch {
+        setAreStep2AgentsEnabled(false)
+        setStep2Customization(createEmptyStep2CustomizationState())
+      }
+    }, 0)
+
+    return () => window.clearTimeout(restoreTimer)
+  }, [projectId])
+
+  function confirmStep2Agent(
+    agentName: Step2AgentName,
+    selections: Step2AgentSelections
+  ) {
+    setStep2Customization((current) => {
+      const next = {
+        ...current,
+        [agentName]: { completed: true, selections },
+      }
+
+      try {
+        window.localStorage.setItem(
+          `aidee:step-2-customization:${projectId}`,
+          JSON.stringify(next)
+        )
+      } catch {
+        // The customization remains available for the current session.
+      }
+
+      return next
+    })
+    setCustomizingStep2Agent(null)
+  }
+
+  function completeStep2Customization() {
+    if (!isStep2CustomizationComplete) {
+      return
+    }
+
+    setAreStep2AgentsEnabled(true)
+    setActiveExpert('aidee')
+    setIsStep2TeamModalOpen(true)
+
+    try {
+      window.localStorage.setItem(
+        `aidee:step-2-agents-enabled:${projectId}`,
+        'true'
+      )
+    } catch {
+      // The enabled state remains available for the current session.
+    }
+  }
+
+  async function confirmStep2Team() {
+    setIsStep2TeamModalOpen(false)
+    await requestAssistantResponse({
+      action: 'confirm_step_2_team',
+      message: '',
+    })
+  }
   const effectiveStageKey = useMemo(() => {
     let inferredStageKey = stageKey
 
@@ -1190,7 +1429,6 @@ export function ProjectChatContainer({
         }
 
         if (
-          message.generatedImageBlock?.purpose === 'moodboard_candidate' ||
           message.generatedImageBlock?.purpose === 'design' ||
           message.generatedImageBlock?.purpose === 'thumbnail'
         ) {
@@ -1205,7 +1443,7 @@ export function ProjectChatContainer({
         ) {
           inferredStageKey = getLaterStageKey(
             inferredStageKey,
-            'step_4_style'
+            'step_5_style'
           )
         }
       }
@@ -1287,9 +1525,12 @@ export function ProjectChatContainer({
     if (!source) return false
     return visibleMessages.some(
       (m) =>
-        m.role === 'user' &&
-        m.seq_order > source.seq_order &&
-        /스타일\s*키워드를\s*선택했습니다/i.test(m.content)
+        (m.role === 'user' &&
+          m.seq_order > source.seq_order &&
+          /스타일\s*키워드를\s*선택했습니다/i.test(m.content)) ||
+        (m.role === 'assistant' &&
+          m.seq_order > source.seq_order &&
+          hasStyleKeywordSubmission(m.content))
     )
   }, [latestStyleKeywordPickerMessageId, visibleMessages])
   const latestMoodOptionsMessageId = useMemo(() => {
@@ -1466,6 +1707,29 @@ export function ProjectChatContainer({
       ),
     [confirmedDirectionArtifacts, latestDirectionMessageIds]
   )
+  const selectedStep5WidgetKinds = useMemo(() => {
+    const selected = new Set<Step5WidgetKind>()
+
+    for (const message of visibleMessages) {
+      if (message.role !== 'user') continue
+      if (message.action === 'select_step5_shape') selected.add('shape')
+      if (message.action === 'select_step5_form') selected.add('form')
+    }
+
+    return selected
+  }, [visibleMessages])
+  const latestStep4AssistantMessageId = useMemo(() => {
+    return (
+      [...visibleMessages]
+        .reverse()
+        .find(
+          (message) =>
+            message.role === 'assistant' &&
+            message.stageKey === 'step_4_direction'
+        )?.id ?? null
+    )
+  }, [visibleMessages])
+  const allDirectionResearchConfirmed = confirmedDirectionKinds.size === 3
   const latestRfpMessage = useMemo(() => {
     for (const message of [...visibleMessages].reverse()) {
       if (message.role === 'assistant' && extractRfpJsonBlock(message.content).rfp) {
@@ -1482,26 +1746,12 @@ export function ProjectChatContainer({
         : null,
     [latestRfpMessage]
   )
-  const hasConfirmedLatestRfp = useMemo(() => {
-    if (!latestRfpMessage) {
-      return false
-    }
-
-    return visibleMessages.some(
-      (message) =>
-        message.role === 'user' &&
-        message.seq_order > latestRfpMessage.seq_order &&
-        /(?:프로젝트\s*)?기획안.*확정|project\s*(?:plan|report).*confirm/i.test(
-          message.content
-        )
-    )
-  }, [latestRfpMessage, visibleMessages])
   const hasVisualizedLatestRfp = Boolean(
     latestRfpMessage && visualizedRfpMessageId === latestRfpMessage.id
   )
   const latestCompanyMessage = useMemo(() => {
     for (const message of [...visibleMessages].reverse()) {
-      if (message.role === 'assistant' && message.stageKey === 'step_6_company') {
+      if (message.role === 'assistant' && message.stageKey === 'step_7_market') {
         return message
       }
     }
@@ -1510,7 +1760,6 @@ export function ProjectChatContainer({
   const hasConfirmedLatestCompany = Boolean(
     latestCompanyMessage && confirmedCompanyMessageId === latestCompanyMessage.id
   )
-  const hasVisualizedLatestCompany = companyModalOpen
   const availableArtifacts = useMemo(() => {
     const availableKinds = new Set<LibraryArtifactKind>()
 
@@ -1760,6 +2009,29 @@ export function ProjectChatContainer({
   }, [projectId])
 
   useEffect(() => {
+    const storageKey = `aidee:confirmed-step-7:${projectId}`
+    const restoreTimer = window.setTimeout(() => {
+      try {
+        setConfirmedCompanyMessageId(window.localStorage.getItem(storageKey))
+      } catch {
+        setConfirmedCompanyMessageId(null)
+      }
+    }, 0)
+
+    return () => window.clearTimeout(restoreTimer)
+  }, [projectId])
+
+  function confirmStep7(messageId: string) {
+    setConfirmedCompanyMessageId(messageId)
+
+    try {
+      window.localStorage.setItem(`aidee:confirmed-step-7:${projectId}`, messageId)
+    } catch {
+      // The confirmation remains available for the current session.
+    }
+  }
+
+  useEffect(() => {
     if (!isExpertMenuOpen) {
       return
     }
@@ -1791,11 +2063,23 @@ export function ProjectChatContainer({
   }, [isExpertMenuOpen])
 
   const requestAssistantResponse = useCallback(async ({
+    action,
+    artifactMessageId,
+    artifactSelectedIndex,
+    artifactType,
     forceImageGeneration,
     message,
+    silent,
+    styleKeywordSelections,
   }: {
+    action?: ChatAction
+    artifactMessageId?: string
+    artifactSelectedIndex?: number
+    artifactType?: ArtifactType
     forceImageGeneration?: ForceImageGeneration
     message: string
+    silent?: boolean
+    styleKeywordSelections?: Partial<StyleKeywordPickerData>
   }) => {
     const trimmed = message.trim()
 
@@ -1803,9 +2087,24 @@ export function ProjectChatContainer({
       return null
     }
 
+    const resolvedTextStageKey = resolveStageStartAction(
+      effectiveStageKey,
+      trimmed
+    )
+    const optimisticStageKey =
+      action === 'start_step_2' && effectiveStageKey === 'step_1_idea'
+        ? 'step_2_agent'
+        : action === 'start_step_3' && effectiveStageKey === 'step_2_agent'
+          ? 'step_3_persona'
+        : action || resolvedTextStageKey === 'step_2_agent'
+          ? effectiveStageKey
+          : resolvedTextStageKey ?? effectiveStageKey
+    const isExplicitStageTransition = optimisticStageKey !== effectiveStageKey
     const optimisticUserMessage: ChatMessageRecord | null = trimmed
       ? {
           content: trimmed,
+          action: action ?? null,
+          availableActions: [],
           created_at: new Date().toISOString(),
           generatedImageBlock: null,
           id: `optimistic-${crypto.randomUUID()}`,
@@ -1817,12 +2116,19 @@ export function ProjectChatContainer({
                 Math.max(maxSeq, currentMessage.seq_order),
               -1
             ) + 1,
-          stageKey: effectiveStageKey,
+          stageKey: optimisticStageKey,
+          step1Completed: false,
         }
       : null
 
     setErrorMessage(null)
-    setIsPending(true)
+    if (!silent) {
+      setIsPending(true)
+    }
+
+    if (isExplicitStageTransition) {
+      setStageKey(optimisticStageKey)
+    }
 
     if (optimisticUserMessage) {
       setMessages((current) => [...current, optimisticUserMessage])
@@ -1830,14 +2136,30 @@ export function ProjectChatContainer({
     }
 
     try {
+      const requestBody = {
+        action,
+        activeExpert,
+        artifactMessageId,
+        artifactSelectedIndex,
+        artifactType,
+        currentStageKey: effectiveStageKey,
+        forceImageGeneration,
+        message: trimmed,
+        projectId,
+        styleKeywordSelections,
+      }
+
+      // TEMP CARD DEBUG: 새 프로젝트의 초기 /api/chat 요청과 전송 body입니다.
+      if (!trimmed && isNewProject) {
+        console.log('[CARD-DEBUG] initial request sent', {
+          time: new Date().toISOString(),
+          isNewProject,
+          body: requestBody,
+        })
+      }
+
       const response = await fetch('/api/chat', {
-        body: JSON.stringify({
-          activeExpert,
-          currentStageKey: effectiveStageKey,
-          forceImageGeneration,
-          message: trimmed,
-          projectId,
-        }),
+        body: JSON.stringify(requestBody),
         headers: { 'Content-Type': 'application/json' },
         method: 'POST',
       })
@@ -1849,6 +2171,7 @@ export function ProjectChatContainer({
 
       const savedUserMessage = result.userMessage ?? null
       const assistantMessage = result.message ?? null
+      const assistantMessages = result.messages ?? (assistantMessage ? [assistantMessage] : [])
 
       setMessages((current) => {
         let nextMessages = current
@@ -1871,11 +2194,14 @@ export function ProjectChatContainer({
           nextMessages = [...nextMessages, savedUserMessage]
         }
 
-        if (
-          assistantMessage &&
-          !nextMessages.some((messageItem) => messageItem.id === assistantMessage.id)
-        ) {
-          nextMessages = [...nextMessages, assistantMessage]
+        for (const nextAssistantMessage of assistantMessages) {
+          if (
+            !nextMessages.some(
+              (messageItem) => messageItem.id === nextAssistantMessage.id
+            )
+          ) {
+            nextMessages = [...nextMessages, nextAssistantMessage]
+          }
         }
 
         return nextMessages
@@ -1888,6 +2214,10 @@ export function ProjectChatContainer({
       )
       return assistantMessage
     } catch (error) {
+      if (isExplicitStageTransition) {
+        setStageKey(effectiveStageKey)
+      }
+
       if (optimisticUserMessage) {
         setMessages((current) =>
           current.filter(
@@ -1902,21 +2232,83 @@ export function ProjectChatContainer({
       )
       return null
     } finally {
-      setIsPending(false)
+      if (!silent) {
+        setIsPending(false)
+      }
+      setActiveExpert('aidee')
     }
-  }, [activeExpert, effectiveStageKey, isPending, messages, projectId])
+  }, [
+    activeExpert,
+    effectiveStageKey,
+    isNewProject,
+    isPending,
+    messages,
+    projectId,
+    setActiveExpert,
+  ])
 
   async function submitMessage(
     message: string,
-    forceImageGeneration?: ForceImageGeneration
+    forceImageGeneration?: ForceImageGeneration,
+    action?: ChatAction
   ) {
     if (!message.trim()) {
-      return
+      return null
     }
 
-    await requestAssistantResponse({
+    return requestAssistantResponse({
+      action,
       forceImageGeneration,
       message,
+    })
+  }
+
+  function submitStyleKeywordSelections(
+    selections: Partial<StyleKeywordPickerData>
+  ) {
+    return requestAssistantResponse({
+      message: '',
+      styleKeywordSelections: selections,
+    })
+  }
+
+  async function generateAndVisualizeProjectReport() {
+    const assistantMessage = await submitMessage('프로젝트 기획안 시각화하기')
+    const rfp = assistantMessage
+      ? extractRfpJsonBlock(assistantMessage.content).rfp
+      : null
+
+    if (assistantMessage && rfp) {
+      visualizeProjectReport(assistantMessage.id, rfp)
+    }
+  }
+
+  function confirmArtifact(
+    artifactType: ArtifactType,
+    messageId: string,
+    artifactSelectedIndex?: number
+  ) {
+    void requestAssistantResponse({
+      action: 'confirm_artifact',
+      artifactMessageId: messageId,
+      artifactSelectedIndex,
+      artifactType,
+      message: '',
+      silent: true,
+    })
+  }
+
+  function visualizeArtifact(
+    artifactType: ArtifactType,
+    messageId: string,
+    artifactSelectedIndex?: number
+  ) {
+    void requestAssistantResponse({
+      action: 'visualize_artifact',
+      artifactMessageId: messageId,
+      artifactSelectedIndex,
+      artifactType,
+      message: '',
     })
   }
 
@@ -1931,6 +2323,8 @@ export function ProjectChatContainer({
     } catch {
       // The confirmation remains available for the current session.
     }
+
+    confirmArtifact('persona', messageId)
   }
 
   async function visualizePersonaCard(
@@ -1966,7 +2360,7 @@ export function ProjectChatContainer({
     }
   }
 
-  function visualizeProblemStatements(data: ProblemStatementsData) {
+  function visualizeProblemStatements(data: ProblemStatementsData, messageId: string) {
     setVisualizedProblemStatements(data)
     try {
       window.localStorage.setItem(
@@ -1975,6 +2369,12 @@ export function ProjectChatContainer({
       )
     } catch {}
     setProblemStatementsModalData(data)
+    void requestAssistantResponse({
+      action: 'visualize_artifact',
+      artifactMessageId: messageId,
+      artifactType: 'problem_statements',
+      message: '',
+    })
   }
 
   function confirmProblemStatements(messageId: string) {
@@ -1988,9 +2388,11 @@ export function ProjectChatContainer({
     } catch {
       // The confirmation remains available for the current session.
     }
+
+    confirmArtifact('problem_statements', messageId)
   }
 
-  function visualizeKeywordCard(data: KeywordCardData) {
+  function visualizeKeywordCard(data: KeywordCardData, messageId: string) {
     setVisualizedKeywordCards((current) => {
       const nextCards = {
         ...current,
@@ -2009,6 +2411,15 @@ export function ProjectChatContainer({
       return nextCards
     })
     setKeywordCardModalData(data)
+    void requestAssistantResponse({
+      action: 'visualize_artifact',
+      artifactMessageId: messageId,
+      artifactType:
+        data.kind === 'experience_keywords'
+          ? 'keyword_experience'
+          : 'keyword_relationship',
+      message: '',
+    })
   }
 
   function confirmKeywordCard(
@@ -2029,6 +2440,13 @@ export function ProjectChatContainer({
 
       return next
     })
+
+    confirmArtifact(
+      kind === 'experience_keywords'
+        ? 'keyword_experience'
+        : 'keyword_relationship',
+      messageId
+    )
   }
 
   function visualizeProjectReport(messageId: string, rfp: RfpDocument) {
@@ -2065,8 +2483,17 @@ export function ProjectChatContainer({
       return next
     })
 
+    const requestVisualizationResponse = () =>
+      void requestAssistantResponse({
+        action: 'visualize_artifact',
+        artifactMessageId: messageId,
+        artifactType: `direction_${kind}` as ArtifactType,
+        message: '',
+      })
+
     if (kind === 'market_size') {
       setMarketSizingModalData(extractMarketSizingData(content))
+      requestVisualizationResponse()
       return
     }
 
@@ -2085,24 +2512,27 @@ export function ProjectChatContainer({
           // The visualization remains available for the current session.
         }
       }
+      requestVisualizationResponse()
       return
     }
 
     if (kind === 'brand_positioning') {
       setBrandPositioningModalData(extractBrandPositioningData(content))
+      requestVisualizationResponse()
       return
     }
 
     setSelectedArtifactKind(getDirectionLibraryKind(kind))
+    requestVisualizationResponse()
   }
 
   function confirmDirectionArtifact(
     kind: DirectionArtifactKind,
     messageId: string
   ) {
-    setConfirmedDirectionArtifacts((current) => {
-      const next = { ...current, [kind]: messageId }
+    const next = { ...confirmedDirectionArtifacts, [kind]: messageId }
 
+    setConfirmedDirectionArtifacts((current) => {
       try {
         window.localStorage.setItem(
           `aidee:confirmed-direction-artifacts:${projectId}`,
@@ -2114,6 +2544,11 @@ export function ProjectChatContainer({
 
       return next
     })
+
+    void confirmArtifact(
+      `direction_${kind}` as ArtifactType,
+      messageId
+    )
   }
 
   function resizeComposer() {
@@ -2131,6 +2566,20 @@ export function ProjectChatContainer({
     const hasAssistantMessage = messages.some(
       (message) => message.role === 'assistant'
     )
+
+    // TEMP CARD DEBUG: 초기 요청 guard 통과 여부입니다.
+    console.log('[CARD-DEBUG] initial request check', {
+      time: new Date().toISOString(),
+      isNewProject,
+      hasAssistantMessage,
+      initialRequestAlreadySent: didRequestInitialResponseRef.current,
+      isPending,
+      willSendInitialRequest:
+        isNewProject &&
+        !hasAssistantMessage &&
+        !didRequestInitialResponseRef.current &&
+        !isPending,
+    })
 
     if (
       !isNewProject ||
@@ -2162,18 +2611,36 @@ export function ProjectChatContainer({
   useEffect(() => {
     const hasConfirmedProcess = visibleMessages.some(
       (message) =>
-        message.role === 'user' && /프로세스\s*확인하기/.test(message.content)
+        message.role === 'user' && message.action === 'confirm_process'
     )
+
+    const showAgents =
+      effectiveStageKey !== 'step_0_start' &&
+      effectiveStageKey !== 'step_1_idea'
 
     setSidebarState({
       activeExpert,
-      activeExperts: STAGE_EXPERTS[effectiveStageKey],
+      activeExperts: [],
       activeStageKey: effectiveStageKey,
-      showProgress: hasConfirmedProcess || effectiveStageKey !== 'step_0_start',
+      areAgentsEnabled: showAgents && areStep2AgentsEnabled,
+      showAgents,
+      showProgress:
+        hasConfirmedProcess ||
+        (effectiveStageKey !== 'step_0_start' &&
+          effectiveStageKey !== 'step_1_idea'),
     })
+  }, [
+    activeExpert,
+    areStep2AgentsEnabled,
+    effectiveStageKey,
+    setSidebarState,
+    visibleMessages,
+  ])
 
-    return () => setSidebarState(defaultProjectChatSidebarState)
-  }, [activeExpert, effectiveStageKey, setSidebarState, visibleMessages])
+  useEffect(
+    () => () => setSidebarState(defaultProjectChatSidebarState),
+    [setSidebarState]
+  )
 
   async function downloadRfp() {
     try {
@@ -2237,9 +2704,19 @@ export function ProjectChatContainer({
         >
           <div className="mx-auto flex w-full max-w-[1150px] flex-col gap-[clamp(14px,1.85svh,20px)]">
             {visibleMessages.length > 0 ? (
-              visibleMessages.map((message) => (
-                <ChatBubble
-                  key={message.id}
+              visibleMessages.map((message) => {
+                const isStep2Entry = isStep2EntryAssistantMessage(message)
+
+                return (
+                <div key={message.id} className="chat-flow-item contents">
+                  {isStep2Entry ? (
+                    <StepSectionHeader
+                      title="STEP 2. AI 에이전트 생성"
+                      description="에이전트에 어떤 분야의 경험과 전문지식을 담아낼지 직접 선택할 수 있습니다."
+                    />
+                  ) : null}
+
+                  <ChatBubble
                   message={message}
                   canShowStyleReferences={visibleMessages.some(
                     (candidate) =>
@@ -2256,11 +2733,11 @@ export function ProjectChatContainer({
                   hasVisualizedPersona={
                     message.id === visualizedPersonaMessageId
                   }
-                  hasConfirmedRfp={hasConfirmedLatestRfp}
                   hasVisualizedRfp={hasVisualizedLatestRfp}
                   hasConfirmedCompany={hasConfirmedLatestCompany}
-                  hasVisualizedCompany={hasVisualizedLatestCompany}
-                  latestCompanyMessageId={latestCompanyMessage?.id ?? null}
+                  latestCompanyMessageId={
+                    latestRfpMessage ? null : latestCompanyMessage?.id ?? null
+                  }
                   confirmedDirectionKinds={confirmedDirectionKinds}
                   confirmedKeywordKinds={confirmedKeywordKinds}
                   isProblemStatementsConfirmed={isProblemStatementsConfirmed}
@@ -2272,11 +2749,22 @@ export function ProjectChatContainer({
                   latestKeywordMessageIds={latestKeywordMessageIds}
                   latestProblemStatementsMessageId={latestProblemStatementsMessageId}
                   latestDirectionMessageIds={latestDirectionMessageIds}
+                  showDirectionWidgets={
+                    message.role === 'assistant' &&
+                    message.id === latestStep4AssistantMessageId &&
+                    /<<AIDEE_DIRECTION_WIDGETS>>/i.test(message.content) &&
+                    !allDirectionResearchConfirmed
+                  }
                   directionArtifactKindOverride={
                     directionKindsByMessageId.get(message.id) ?? null
                   }
                   latestRfpMessageId={latestRfpMessage?.id ?? null}
-                  onChoice={(value) => submitMessage(value)}
+                  onChoice={(value, action) =>
+                    submitMessage(value, undefined, action)
+                  }
+                  onConfirmArtifact={confirmArtifact}
+                  onVisualizeArtifact={visualizeArtifact}
+                  onSubmitStyleKeywords={submitStyleKeywordSelections}
                   onConfirmKeyword={confirmKeywordCard}
                   onConfirmPersona={confirmPersonaCard}
                   onDownloadRfp={downloadRfp}
@@ -2288,8 +2776,8 @@ export function ProjectChatContainer({
                   onVisualizeDirection={visualizeDirectionArtifact}
                   onConfirmDirection={confirmDirectionArtifact}
                   onVisualizeRfp={visualizeProjectReport}
-                  onConfirmCompany={(id) => setConfirmedCompanyMessageId(id)}
-                  onVisualizeCompany={() => setCompanyModalOpen(true)}
+                  onConfirmCompany={confirmStep7}
+                  onVisualizeCompany={() => void generateAndVisualizeProjectReport()}
                   onModelReady={(url) => setMeshyModelUrl(url)}
                   onOpenModelViewer={() => setModelViewerOpen(true)}
                   onSelectDesignRendering={setSelectedRenderingImage}
@@ -2298,8 +2786,41 @@ export function ProjectChatContainer({
                   visualizedKeywordCards={visualizedKeywordCards}
                   visualizedDirectionArtifacts={visualizedDirectionArtifacts}
                   visualizedProblemStatements={visualizedProblemStatements}
+                  selectedStep5WidgetKinds={selectedStep5WidgetKinds}
                 />
-              ))
+
+                  {isStep2Entry ? (
+                    <div className="step-2-agent-customization flex w-full flex-col gap-4">
+                      <div className="step-2-agent-customization-list grid w-full grid-cols-4 gap-4">
+                        {STEP_2_AGENT_NAMES.map((agentName) => (
+                          <AgentCustomizationBox
+                            key={agentName}
+                            agentName={agentName}
+                            completed={step2Customization[agentName].completed}
+                            onCustomize={() => setCustomizingStep2Agent(agentName)}
+                            onEdit={() => setCustomizingStep2Agent(agentName)}
+                          />
+                        ))}
+                      </div>
+                      <div className="step-2-customization-completion flex w-full flex-col items-center gap-2 text-center">
+                        <p className="whitespace-nowrap">
+                          {step2CompletedAgentCount} / {STEP_2_AGENT_NAMES.length}{' '}
+                          명 커스터마이징 완료
+                        </p>
+                        <button
+                          className="step-2-customization-completion__button h-11 rounded-lg border border-zinc-200 bg-white px-8 shadow-sm disabled:cursor-not-allowed disabled:opacity-50"
+                          disabled={!isStep2CustomizationComplete}
+                          onClick={completeStep2Customization}
+                          type="button"
+                        >
+                          완료
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+                )
+              })
             ) : (
               <div className="flex min-h-[420px] items-center justify-center text-sm font-medium text-zinc-400">
                 {isPending
@@ -2391,7 +2912,7 @@ export function ProjectChatContainer({
             >
               <button
                 type="button"
-                disabled={isPending}
+                disabled={isPending || debate.isOpen}
                 aria-expanded={isExpertMenuOpen}
                 aria-label={
                   language === 'ENG' ? 'Select AI Mentor' : 'AI 전문가 선택'
@@ -2405,6 +2926,7 @@ export function ProjectChatContainer({
                 ref={textareaRef}
                 rows={1}
                 value={input}
+                disabled={debate.isOpen}
                 onChange={(event) => {
                   setInput(event.target.value)
                   requestAnimationFrame(resizeComposer)
@@ -2420,7 +2942,7 @@ export function ProjectChatContainer({
               />
               <button
                 type="submit"
-                disabled={isPending || !input.trim()}
+                disabled={isPending || debate.isOpen || !input.trim()}
                 aria-label="메시지 전송"
                 className="mb-0.5 flex h-[clamp(28px,2.96svh,32px)] w-[clamp(28px,2.96svh,32px)] shrink-0 items-center justify-center rounded-full text-stone-300 transition hover:bg-blue-50 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-40"
               >
@@ -2437,6 +2959,52 @@ export function ProjectChatContainer({
           </div>
         </div>
       </section>
+
+      {customizingStep2Agent ? (
+        <AgentCustomizationModal
+          key={customizingStep2Agent}
+          agent={STEP_2_AGENT_CUSTOMIZATION_DATA[customizingStep2Agent]}
+          initialSelections={
+            step2Customization[customizingStep2Agent].selections
+          }
+          onClose={() => setCustomizingStep2Agent(null)}
+          onComplete={(selections) =>
+            confirmStep2Agent(customizingStep2Agent, selections)
+          }
+        />
+      ) : null}
+
+      {isStep2TeamModalOpen ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4"
+          role="presentation"
+          onClick={() => setIsStep2TeamModalOpen(false)}
+        >
+          <section
+            aria-labelledby="step-2-team-complete-title"
+            aria-modal="true"
+            className="w-full max-w-sm rounded-lg border border-zinc-200 bg-white p-6 text-center shadow-lg"
+            role="dialog"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <p>기획전략가 · 디자이너 · 엔지니어 · 마케터</p>
+            <h2 id="step-2-team-complete-title" className="mt-4 font-semibold">
+              당신만의 AI 팀 구성이 완료되었습니다! 🎉
+            </h2>
+            <p className="mt-2">
+              프로젝트에 맞춰 전문 AI 에이전트들이 준비를 마쳤습니다. 이제 STEP
+              3 제품 사용자 정의부터 시작합니다.
+            </p>
+            <button
+              type="button"
+              className="mt-6 h-11 rounded-lg border border-zinc-200 bg-white px-8 shadow-sm"
+              onClick={() => void confirmStep2Team()}
+            >
+              확인
+            </button>
+          </section>
+        </div>
+      ) : null}
 
       <LibraryPanel
         artifacts={availableArtifacts}
@@ -2524,7 +3092,7 @@ export function ProjectChatContainer({
         }}
         planLabel={userPlanLabel}
         selectedArtifactKind={selectedArtifactKind}
-        tokenCount={userTokenCount}
+        tokenCount={debate.availableTokens}
         userAvatarUrl={userAvatarUrl}
       />
 
@@ -4766,6 +5334,61 @@ function DirectionResearchWidgets({
   )
 }
 
+function Step5ChoiceWidgets({
+  disabled,
+  kind,
+  onSelect,
+  selected,
+}: {
+  disabled: boolean
+  kind: Step5WidgetKind
+  onSelect: (value: string) => void
+  selected: boolean
+}) {
+  const widgets =
+    kind === 'shape'
+      ? [
+          ['1', '직선으로 둘러싸인 다각형', '삼각형·사각형처럼 곧은 선이 중심인 도형'],
+          ['2', '곡선으로 이루어진 도형', '원·타원처럼 부드러운 곡선이 중심인 도형'],
+          ['3', '직선과 곡선이 결합된 도형', '반원·둥근 모서리처럼 두 요소가 함께 있는 도형'],
+        ]
+      : [
+          ['1', '기하학적 형태', '규칙과 구조가 분명한 입체'],
+          ['2', '유기적 형태', '자연물처럼 곡선과 곡면이 이어지는 입체'],
+          ['3', '복합 형태', '여러 형태가 결합된 입체'],
+        ]
+
+  return (
+    <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-3">
+      {widgets.map(([index, title, description]) => (
+        <button
+          key={title}
+          type="button"
+          disabled={disabled || selected}
+          onClick={() => onSelect(title)}
+          className="min-h-28 rounded-[20px] border border-zinc-200 bg-white p-4 text-left shadow-sm transition hover:border-blue-200 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <span className="mb-3 flex h-7 w-7 items-center justify-center rounded-full bg-blue-600 font-['Inter'] text-sm font-bold text-white">
+            {index}
+          </span>
+          <span className="block font-['Pretendard'] text-sm font-bold text-neutral-900">
+            {title}
+          </span>
+          <span className="mt-1 block font-['Pretendard'] text-xs font-medium leading-5 text-zinc-500">
+            {description}
+          </span>
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function getStep5WidgetKind(content: string): Step5WidgetKind | null {
+  if (/<<AIDEE_STEP5_SHAPE_WIDGET>>/i.test(content)) return 'shape'
+  if (/<<AIDEE_STEP5_FORM_WIDGET>>/i.test(content)) return 'form'
+  return null
+}
+
 function StyleKeywordPickerCard({
   disabled,
   english,
@@ -5036,11 +5659,9 @@ function ChatBubble({
   directionArtifactKindOverride,
   disabled,
   hasConfirmedPersona,
-  hasConfirmedRfp,
   hasConfirmedCompany,
   hasVisualizedPersona,
   hasVisualizedRfp,
-  hasVisualizedCompany,
   isProblemStatementsConfirmed,
   isLatestEditablePersona,
   isStyleKeywordsSubmitted,
@@ -5050,10 +5671,14 @@ function ChatBubble({
   latestKeywordMessageIds,
   latestProblemStatementsMessageId,
   latestDirectionMessageIds,
+  showDirectionWidgets,
   latestRfpMessageId,
   latestCompanyMessageId,
   message,
   onChoice,
+  onConfirmArtifact,
+  onVisualizeArtifact,
+  onSubmitStyleKeywords,
   onConfirmKeyword,
   onConfirmPersona,
   onConfirmProblemStatements,
@@ -5071,6 +5696,7 @@ function ChatBubble({
   onOpenModelViewer,
   onSelectDesignRendering,
   projectId,
+  selectedStep5WidgetKinds,
   userAvatarUrl,
   visualizedKeywordCards,
   visualizedDirectionArtifacts,
@@ -5082,11 +5708,9 @@ function ChatBubble({
   directionArtifactKindOverride: DirectionArtifactKind | null
   disabled: boolean
   hasConfirmedPersona: boolean
-  hasConfirmedRfp: boolean
   hasConfirmedCompany: boolean
   hasVisualizedPersona: boolean
   hasVisualizedRfp: boolean
-  hasVisualizedCompany: boolean
   isProblemStatementsConfirmed: boolean
   isLatestEditablePersona: boolean
   isStyleKeywordsSubmitted: boolean
@@ -5096,10 +5720,24 @@ function ChatBubble({
   latestKeywordMessageIds: Partial<Record<KeywordArtifactKind, string>>
   latestProblemStatementsMessageId: string | null
   latestDirectionMessageIds: Partial<Record<DirectionArtifactKind, string>>
+  showDirectionWidgets: boolean
   latestRfpMessageId: string | null
   latestCompanyMessageId: string | null
   message: ChatMessageRecord
-  onChoice: (value: string) => void
+  onChoice: (value: string, action?: ChatAction) => void
+  onConfirmArtifact: (
+    artifactType: ArtifactType,
+    messageId: string,
+    artifactSelectedIndex?: number
+  ) => void
+  onVisualizeArtifact: (
+    artifactType: ArtifactType,
+    messageId: string,
+    artifactSelectedIndex?: number
+  ) => void
+  onSubmitStyleKeywords: (
+    selections: Partial<StyleKeywordPickerData>
+  ) => void
   onConfirmKeyword: (
     kind: KeywordArtifactKind,
     messageId: string
@@ -5112,13 +5750,16 @@ function ChatBubble({
     messageId: string
   ) => void
   onOpenMoodboardModal: () => void
-  onVisualizeKeyword: (data: KeywordCardData) => void
+  onVisualizeKeyword: (data: KeywordCardData, messageId: string) => void
   onVisualizeDirection: (
     kind: DirectionArtifactKind,
     messageId: string,
     content: string
   ) => void
-  onVisualizeProblemStatements: (data: ProblemStatementsData) => void
+  onVisualizeProblemStatements: (
+    data: ProblemStatementsData,
+    messageId: string
+  ) => void
   onVisualizePersona: (
     messageId: string,
     personaCard?: PersonaCardData | null
@@ -5138,6 +5779,7 @@ function ChatBubble({
     Record<DirectionArtifactKind, string>
   >
   visualizedProblemStatements: ProblemStatementsData | null
+  selectedStep5WidgetKinds: Set<Step5WidgetKind>
 }) {
   const [hintModalOpen, setHintModalOpen] = useState(false)
   const [selectedHintIndex, setSelectedHintIndex] = useState<number | null>(null)
@@ -5153,6 +5795,9 @@ function ChatBubble({
   const [meshyModelUrl, setMeshyModelUrl] = useState<string | null>(null)
   const [meshyError, setMeshyError] = useState<string | null>(null)
   const [moodboardImages, setMoodboardImages] = useState<MoodboardGridImage[] | null>(null)
+  const [isMoodboardConfirmed, setIsMoodboardConfirmed] = useState(false)
+  const [isSelectedDesignVisualized, setIsSelectedDesignVisualized] =
+    useState(false)
   const [selectedStyleKeywords, setSelectedStyleKeywords] = useState<
     Partial<Record<keyof StyleKeywordPickerData, string[]>>
   >({})
@@ -5206,6 +5851,25 @@ function ChatBubble({
       setMeshyStatus('FAILED')
     }
   }
+
+  function visualizeSelectedConcept() {
+    if (
+      selectedDesignIndex === null ||
+      !message.generatedImageBlock?.images[selectedDesignIndex]
+    ) {
+      return
+    }
+
+    setIsSelectedDesignVisualized(true)
+
+    onVisualizeArtifact(
+      message.generatedImageBlock.purpose === 'modeling'
+        ? 'modeling'
+        : 'design',
+      message.id,
+      selectedDesignIndex
+    )
+  }
   const isUser = message.role === 'user'
   const rfpBlock = extractRfpJsonBlock(message.content)
   const projectDirection = !isUser
@@ -5214,7 +5878,12 @@ function ChatBubble({
   const projectDirectionSplit = projectDirection
     ? splitProjectDirectionContent(rfpBlock.cleanedText)
     : null
-  const directionWidgets = !isUser && hasDirectionWidgets(rfpBlock.cleanedText)
+  const directionWidgets = !isUser && showDirectionWidgets
+  const step5WidgetKind = !isUser
+    ? getStep5WidgetKind(message.content)
+    : null
+  const [locallySelectedStep5Widget, setLocallySelectedStep5Widget] =
+    useState(false)
   const styleKeywordPickerData =
     !isUser && message.id === latestStyleKeywordPickerMessageId
       ? parseStyleKeywordPickerData(message.content)
@@ -5251,6 +5920,13 @@ function ChatBubble({
     : ''
   const choiceSplit = splitAssistantChoices(cleanedContent)
   const displayContent = choiceSplit.displayContent
+  const nextStageStartStep = getStageStartStep(displayContent)
+  const canStartStep2 = message.availableActions?.includes('start_step_2') ?? false
+  const canStartStep3 = message.availableActions?.includes('start_step_3') ?? false
+  const canStayInStep1 =
+    message.availableActions?.includes('stay_in_step_1') ?? false
+  const canStayInStep2 =
+    message.availableActions?.includes('stay_in_step_2') ?? false
   const isPersonaCardMessage = Boolean(message.personaCardBlock)
   const shouldShowHints =
     !isUser &&
@@ -5266,6 +5942,9 @@ function ChatBubble({
       : shouldShowHints
         ? buildFallbackHintChoices(displayContent)
         : []
+  const isStep5WidgetSelected =
+    locallySelectedStep5Widget ||
+    (step5WidgetKind !== null && selectedStep5WidgetKinds.has(step5WidgetKind))
 
   useEffect(() => {
     if (!meshyTaskId || meshyStatus === 'SUCCEEDED' || meshyStatus === 'FAILED') return
@@ -5367,10 +6046,29 @@ function ChatBubble({
             <div className="mt-5">
               {message.generatedImageBlock.purpose === 'moodboard_candidate' ? (
                 moodboardImages ? (
-                  <MoodboardGrid
-                    images={moodboardImages}
-                    onOpenModal={onOpenMoodboardModal}
-                  />
+                  <>
+                    <MoodboardGrid
+                      images={moodboardImages}
+                      onOpenModal={onOpenMoodboardModal}
+                    />
+                    <div className="mt-4 flex flex-wrap justify-end gap-3">
+                      <button
+                        type="button"
+                        disabled={disabled || isMoodboardConfirmed}
+                        onClick={() => {
+                          setIsMoodboardConfirmed(true)
+                          onConfirmArtifact('moodboard', message.id)
+                        }}
+                        className={`rounded-[30px] px-5 py-[3px] font-['Pretendard'] text-xs font-semibold transition ${
+                          isMoodboardConfirmed
+                            ? 'bg-neutral-500 text-white'
+                            : 'bg-[#DDF444] text-black hover:brightness-95'
+                        }`}
+                      >
+                        {isMoodboardConfirmed ? '무드보드 확정 완료' : '확정하기'}
+                      </button>
+                    </div>
+                  </>
                 ) : (
                   <MoodboardCandidates
                     candidates={
@@ -5389,14 +6087,17 @@ function ChatBubble({
                     searchQuery={message.generatedImageBlock.prompt}
                     onBoardReady={(imgs) => {
                       setMoodboardImages(imgs)
-                      onChoice('스타일 레퍼런스를 선택하고 무드보드를 만들었어요.')
                     }}
                   />
                 )
-              ) : message.generatedImageBlock.purpose === 'design' ? (
+              ) : message.generatedImageBlock.purpose === 'design' ||
+                message.generatedImageBlock.purpose === 'modeling' ? (
                 <div className="flex w-full max-w-[600px] flex-col gap-3 pt-1">
                   <p className="font-['Pretendard'] text-xs font-medium text-neutral-400">
-                    생성된 이미지 {message.generatedImageBlock.images.length}장
+                    {message.generatedImageBlock.purpose === 'modeling'
+                      ? '생성된 3D 모델링 시안 '
+                      : '생성된 2D 렌더링 시안 '}
+                    {message.generatedImageBlock.images.length}장
                   </p>
                   <div className="grid aspect-[25/16] w-full grid-cols-2 grid-rows-2 overflow-hidden rounded-[20px]">
                     {message.generatedImageBlock.images.map((image, index) => (
@@ -5414,7 +6115,7 @@ function ChatBubble({
                           setMeshyError(null)
                           onSelectDesignRendering(image)
                         }}
-                        aria-label={`${index + 1}번 디자인 시안 선택`}
+                        aria-label={`${index + 1}번 ${message.generatedImageBlock?.purpose === 'modeling' ? '3D 모델링 시안' : '2D 렌더링 시안'} 선택`}
                         className={`relative min-h-0 min-w-0 overflow-hidden transition disabled:cursor-not-allowed ${
                           selectedDesignIndex === index
                             ? 'z-10 ring-4 ring-inset ring-[#3056FF]'
@@ -5423,7 +6124,7 @@ function ChatBubble({
                       >
                         <Image
                           src={image}
-                          alt={`디자인 시안 ${index + 1}`}
+                          alt={`${message.generatedImageBlock?.purpose === 'modeling' ? '3D 모델링 시안' : '2D 렌더링 시안'} ${index + 1}`}
                           fill
                           unoptimized
                           className="object-cover"
@@ -5443,7 +6144,7 @@ function ChatBubble({
                   {selectedDesignIndex !== null ? (
                     <div className="mt-4 flex w-full flex-col gap-3">
                       <p className="font-['Pretendard'] text-sm font-medium leading-7 text-stone-300">
-                        생성된 이미지 1장
+                        선택한 시안 1장
                       </p>
                       <button
                         type="button"
@@ -5455,7 +6156,7 @@ function ChatBubble({
                           )
                         }
                         className="relative aspect-[25/16] w-full overflow-hidden rounded-[20px] bg-zinc-300"
-                        aria-label="선택한 디자인 시안 크게 보기"
+                          aria-label="선택한 시안 크게 보기"
                       >
                         <Image
                           src={
@@ -5463,7 +6164,7 @@ function ChatBubble({
                               selectedDesignIndex
                             ]
                           }
-                          alt={`선택한 ${selectedDesignIndex + 1}번 디자인 시안`}
+                          alt={`선택한 ${selectedDesignIndex + 1}번 시안`}
                           fill
                           unoptimized
                           className="object-cover"
@@ -5476,7 +6177,7 @@ function ChatBubble({
                           disabled={disabled || isSelectedDesignConfirmed}
                           onClick={() =>
                             onChoice(
-                              `${selectedDesignIndex + 1}번 디자인 시안을 수정해서 다시 보여주세요`
+                              `${selectedDesignIndex + 1}번 시안을 수정해서 다시 보여주세요`
                             )
                           }
                           className="min-w-24 rounded-[30px] bg-blue-600 px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-white transition hover:bg-blue-700 disabled:bg-neutral-500 disabled:opacity-60"
@@ -5494,6 +6195,13 @@ function ChatBubble({
                             if (!image) return
 
                             setIsSelectedDesignConfirmed(true)
+                            onConfirmArtifact(
+                              message.generatedImageBlock?.purpose === 'modeling'
+                                ? 'modeling'
+                                : 'design',
+                              message.id,
+                              selectedDesignIndex
+                            )
                             fetch('/api/projects/thumbnail', {
                               method: 'POST',
                               headers: { 'Content-Type': 'application/json' },
@@ -5521,24 +6229,11 @@ function ChatBubble({
                         <div className="flex justify-end pt-1">
                           <button
                             type="button"
-                            disabled={
-                              disabled ||
-                              meshyStatus === 'uploading' ||
-                              meshyStatus === 'PENDING' ||
-                              meshyStatus === 'IN_PROGRESS' ||
-                              meshyStatus === 'SUCCEEDED'
-                            }
-                            onClick={() => void startSelectedDesignVisualization()}
+                            disabled={isSelectedDesignVisualized}
+                            onClick={visualizeSelectedConcept}
                             className="inline-flex items-center gap-1 rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
                           >
-                            {meshyStatus === 'uploading'
-                              ? '업로드 중'
-                              : meshyStatus === 'PENDING' ||
-                                  meshyStatus === 'IN_PROGRESS'
-                                ? '3D 생성 중'
-                                : meshyStatus === 'SUCCEEDED'
-                                  ? '시각화 완료'
-                                  : '시각화 하기'}
+                            {isSelectedDesignVisualized ? '시각화 완료' : '시각화 하기'}
                             <Image
                               src="/assets/icons/chat/visualize.svg"
                               alt=""
@@ -5551,26 +6246,12 @@ function ChatBubble({
                         </div>
                       ) : null}
 
-                      {(meshyStatus === 'PENDING' ||
-                        meshyStatus === 'IN_PROGRESS') && (
+                      {isSelectedDesignVisualized ? (
                         <span className="text-right font-['Pretendard'] text-xs text-zinc-500">
-                          Meshy AI 처리 중...
+                          {message.generatedImageBlock.purpose === 'modeling'
+                            ? '3D 모델링 시안 시각화가 완료되었습니다.'
+                            : '2D 렌더링 시안 시각화가 완료되었습니다.'}
                         </span>
-                      )}
-                      {meshyStatus === 'FAILED' && meshyError ? (
-                        <div className="flex flex-wrap items-center justify-end gap-2">
-                          <span className="max-w-full font-['Pretendard'] text-xs text-red-600">
-                            {meshyError}
-                          </span>
-                          <button
-                            type="button"
-                            disabled={disabled}
-                            onClick={() => void startSelectedDesignVisualization()}
-                            className="rounded-[30px] bg-[#DDF444] px-4 py-1 font-['Pretendard'] text-xs font-semibold text-black disabled:opacity-50"
-                          >
-                            다시 시도
-                          </button>
-                        </div>
                       ) : null}
                     </div>
                   ) : (
@@ -5579,7 +6260,7 @@ function ChatBubble({
                         type="button"
                         disabled={disabled}
                         onClick={() =>
-                          onChoice('현재 디자인 시안을 수정해서 다시 보여주세요')
+                          onChoice('현재 시안을 수정해서 다시 보여주세요')
                         }
                         className="rounded-[30px] bg-blue-600 px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-white disabled:opacity-50"
                       >
@@ -5687,6 +6368,23 @@ function ChatBubble({
         />
       ) : null}
 
+      {step5WidgetKind ? (
+        <Step5ChoiceWidgets
+          disabled={disabled}
+          kind={step5WidgetKind}
+          selected={isStep5WidgetSelected}
+          onSelect={(value) => {
+            setLocallySelectedStep5Widget(true)
+            onChoice(
+              value,
+              step5WidgetKind === 'shape'
+                ? 'select_step5_shape'
+                : 'select_step5_form'
+            )
+          }}
+        />
+      ) : null}
+
       {styleKeywordPickerData ? (
         <div className="flex w-full flex-col gap-4">
           {STYLE_KEYWORD_CATEGORIES.map(({ key, english }) => (
@@ -5720,13 +6418,7 @@ function ChatBubble({
               <button
                 type="button"
                 disabled={disabled}
-                onClick={() => {
-                  const lines = STYLE_KEYWORD_CATEGORIES.map(
-                    ({ key, korean }) =>
-                      `${korean}: ${(selectedStyleKeywords[key] ?? []).join(', ')}`
-                  )
-                  onChoice(`스타일 키워드를 선택했습니다.\n${lines.join('\n')}`)
-                }}
+                onClick={() => onSubmitStyleKeywords(selectedStyleKeywords)}
                 className="rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
               >
                 선택 완료
@@ -5867,7 +6559,7 @@ function ChatBubble({
           !hasVisualizedPersona ? (
             <button
               type="button"
-              disabled={disabled}
+              disabled={false}
               onClick={() =>
                 void onVisualizePersona(message.id, message.personaCardBlock)
               }
@@ -5920,8 +6612,8 @@ function ChatBubble({
             {isProblemStatementsConfirmed && !visualizedProblemStatements ? (
               <button
                 type="button"
-                disabled={disabled}
-                onClick={() => onVisualizeProblemStatements(psData)}
+                disabled={false}
+                onClick={() => onVisualizeProblemStatements(psData, message.id)}
                 className="inline-flex items-center gap-1 rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
               >
                 시각화 하기
@@ -5994,8 +6686,8 @@ function ChatBubble({
             {isConfirmed && !isCurrentCardVisualized ? (
               <button
                 type="button"
-                disabled={disabled}
-                onClick={() => onVisualizeKeyword(keywordCard)}
+                disabled={false}
+                onClick={() => onVisualizeKeyword(keywordCard, message.id)}
                 className="inline-flex items-center gap-1 rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
               >
                 시각화 하기
@@ -6051,7 +6743,7 @@ function ChatBubble({
           visualizedDirectionArtifacts[directionArtifactKind] !== message.id ? (
             <button
               type="button"
-              disabled={disabled}
+              disabled={false}
               onClick={() =>
                 onVisualizeDirection(
                   directionArtifactKind,
@@ -6076,32 +6768,78 @@ function ChatBubble({
       ) : null}
 
       <div className="flex w-full flex-wrap items-center justify-end gap-3">
-        {isProcessCheckPrompt(displayContent) ? (
+        {message.step1Completed ||
+        message.availableActions?.includes('confirm_process') ? (
           <button
             type="button"
             disabled={disabled}
-            onClick={() => onChoice('프로세스 확인하기')}
+            onClick={() => onChoice('프로세스 확인하기', 'confirm_process')}
             className="rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
           >
             프로세스 확인하기
           </button>
         ) : null}
 
-        {isStageProceedPrompt(displayContent) && !directionArtifactKind ? (
+        {canStartStep2 ? (
           <>
             <button
               type="button"
               disabled={disabled}
-              onClick={() =>
-                onChoice(
-                  isStep1EntryPrompt(displayContent)
-                    ? 'STEP 1 시작할게요'
-                    : '다음 단계로 진행할게요'
-                )
-              }
+              onClick={() => onChoice('STEP 2 시작할게요', 'start_step_2')}
               className="rounded-[30px] bg-blue-600 px-[clamp(16px,1.85svh,20px)] py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-white disabled:opacity-50"
             >
-              {isStep1EntryPrompt(displayContent) ? 'STEP 1 시작할게요' : '다음 단계로'}
+              STEP 2 시작할게요
+            </button>
+            {canStayInStep1 ? (
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={() =>
+                  onChoice('더 하고 싶은 말이 있어요', 'stay_in_step_1')
+                }
+                className="rounded-[30px] bg-[#DDF444] px-[clamp(16px,1.85svh,20px)] py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
+              >
+                더 하고 싶은 말이 있어요
+              </button>
+            ) : null}
+          </>
+        ) : null}
+
+        {canStartStep3 ? (
+          <>
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => onChoice('STEP 3 시작할게요', 'start_step_3')}
+              className="rounded-[30px] bg-blue-600 px-[clamp(16px,1.85svh,20px)] py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-white disabled:opacity-50"
+            >
+              STEP 3 시작할게요
+            </button>
+            {canStayInStep2 ? (
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={() =>
+                  onChoice('더 하고 싶은 말이 있어요', 'stay_in_step_2')
+                }
+                className="rounded-[30px] bg-[#DDF444] px-[clamp(16px,1.85svh,20px)] py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
+              >
+                더 하고 싶은 말이 있어요
+              </button>
+            ) : null}
+          </>
+        ) : null}
+
+        {!canStartStep2 && !canStartStep3 && isStageProceedPrompt(displayContent) &&
+        nextStageStartStep !== null ? (
+          <>
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => onChoice(`STEP ${nextStageStartStep} 시작할게요`)}
+              className="rounded-[30px] bg-blue-600 px-[clamp(16px,1.85svh,20px)] py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-white disabled:opacity-50"
+            >
+              STEP {nextStageStartStep} 시작할게요
             </button>
             <button
               type="button"
@@ -6119,43 +6857,24 @@ function ChatBubble({
 
       {rfpBlock.rfp && latestRfpMessageId === message.id ? (
         <div className="flex w-full flex-col items-end gap-3">
-          <div className="flex items-center justify-end gap-3">
-            <button
-              type="button"
-              disabled={disabled}
-              onClick={() => onChoice('프로젝트 기획안 수정하기')}
-              className="min-w-24 rounded-[30px] bg-blue-600 px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-white transition hover:bg-blue-700 disabled:opacity-50"
-            >
-              다시 생성하기
-            </button>
-            <button
-              type="button"
-              disabled={disabled || hasConfirmedRfp}
-              onClick={() => onChoice('프로젝트 기획안 확정하기')}
-              className="min-w-24 rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-black transition hover:brightness-95 disabled:opacity-50"
-            >
-              확정하기
-            </button>
-          </div>
-
-          {hasConfirmedRfp && !hasVisualizedRfp ? (
+          <div className="flex flex-wrap items-center justify-end gap-3">
             <button
               type="button"
               disabled={disabled}
               onClick={() => onVisualizeRfp(message.id, rfpBlock.rfp!)}
-              className="inline-flex items-center gap-1 rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
+              className="rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
             >
-              시각화 하기
-              <Image
-                src="/assets/icons/chat/visualize.svg"
-                alt=""
-                width={18}
-                height={18}
-                className="ml-0.5 h-[18px] w-[18px]"
-              />
-              <span>2</span>
+              기획안 보기
             </button>
-          ) : null}
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => onChoice('더 하고 싶은 말이 있어요')}
+              className="rounded-[30px] bg-blue-600 px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-white disabled:opacity-50"
+            >
+              더 하고 싶은 말이 있어요
+            </button>
+          </div>
 
           {hasVisualizedRfp ? (
             <button
@@ -6170,17 +6889,10 @@ function ChatBubble({
         </div>
       ) : null}
 
-      {latestCompanyMessageId === message.id ? (
+      {latestCompanyMessageId === message.id &&
+      isStep7CompletionPrompt(displayContent) ? (
         <div className="flex w-full flex-col items-end gap-3">
-          <div className="flex items-center justify-end gap-3">
-            <button
-              type="button"
-              disabled={disabled}
-              onClick={() => onChoice('협력업체 다시 추천해주세요')}
-              className="min-w-24 rounded-[30px] bg-blue-600 px-5 py-[3px] font-['Pretendard'] text-xs font-semibold leading-5 text-white transition hover:bg-blue-700 disabled:opacity-50"
-            >
-              다시 생성하기
-            </button>
+          <div className="flex items-center justify-end">
             <button
               type="button"
               disabled={disabled || hasConfirmedCompany}
@@ -6191,14 +6903,14 @@ function ChatBubble({
             </button>
           </div>
 
-          {hasConfirmedCompany && !hasVisualizedCompany ? (
+          {hasConfirmedCompany ? (
             <button
               type="button"
               disabled={disabled}
               onClick={onVisualizeCompany}
               className="inline-flex items-center gap-1 rounded-[30px] bg-[#DDF444] px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-black disabled:opacity-50"
             >
-              시각화 하기
+              시각화하기
               <Image
                 src="/assets/icons/chat/visualize.svg"
                 alt=""
@@ -6206,18 +6918,7 @@ function ChatBubble({
                 height={18}
                 className="ml-0.5 h-[18px] w-[18px]"
               />
-              <span>3</span>
-            </button>
-          ) : null}
-
-          {hasVisualizedCompany ? (
-            <button
-              type="button"
-              disabled={disabled}
-              onClick={onVisualizeCompany}
-              className="rounded-[30px] bg-blue-600 px-5 py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-white disabled:opacity-50"
-            >
-              협력업체 보기
+              <span>2</span>
             </button>
           ) : null}
         </div>
@@ -6251,7 +6952,7 @@ function ChatBubble({
             <div>
               {choices.map((choice, index) => (
                 <button
-                  key={choice.key}
+                  key={`${choice.key}-${index}`}
                   type="button"
                   onClick={() => setSelectedHintIndex(index)}
                   className={`flex w-full items-center gap-10 border-t border-gray-200 py-3 pl-6 pr-9 text-left transition ${

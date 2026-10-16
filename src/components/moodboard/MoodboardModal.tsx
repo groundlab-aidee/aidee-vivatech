@@ -24,15 +24,32 @@ export function MoodboardModal({ isOpen, onClose, projectId }: Props) {
 
   useEffect(() => {
     if (!isOpen) return
-    setLoading(true)
 
-    fetch(`/api/moodboard?projectId=${projectId}`)
-      .then((r) => r.json())
-      .then((data: { board?: MoodboardImage[] }) => {
-        setImages(data.board ?? [])
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false))
+    let cancelled = false
+
+    const loadMoodboard = async () => {
+      await Promise.resolve()
+      if (cancelled) return
+
+      setLoading(true)
+
+      try {
+        const response = await fetch(`/api/moodboard?projectId=${projectId}`)
+        const data = (await response.json()) as { board?: MoodboardImage[] }
+
+        if (!cancelled) setImages(data.board ?? [])
+      } catch {
+        // 기존 이미지는 유지하고 로딩 상태만 종료한다.
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+
+    void loadMoodboard()
+
+    return () => {
+      cancelled = true
+    }
   }, [isOpen, projectId])
 
   if (!isOpen) return null

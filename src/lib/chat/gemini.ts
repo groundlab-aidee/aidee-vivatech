@@ -60,14 +60,20 @@ function getTextFromGeminiPayload(payload: unknown) {
 
 export async function generateGeminiText({
   apiKey,
+  maxOutputTokens,
   messages,
   model = DEFAULT_TEXT_MODEL,
+  rejectTruncated = false,
   system,
+  onUsage,
 }: {
   apiKey: string
+  maxOutputTokens?: number
   messages: GeminiMessage[]
   model?: string
+  rejectTruncated?: boolean
   system: string
+  onUsage?: (usage: { inputTokens: number; outputTokens: number }) => void
 }) {
   const contents = messages
     .filter((message) => message.role !== 'system')
@@ -81,6 +87,9 @@ export async function generateGeminiText({
     {
       body: JSON.stringify({
         contents,
+        ...(maxOutputTokens
+          ? { generationConfig: { maxOutputTokens } }
+          : {}),
         systemInstruction: {
           parts: [{ text: system }],
         },
@@ -91,6 +100,28 @@ export async function generateGeminiText({
   )
 
   const payload = (await response.json().catch(() => null)) as unknown
+
+  if (onUsage && payload && typeof payload === 'object') {
+    const usageMetadata =
+      'usageMetadata' in payload &&
+      payload.usageMetadata &&
+      typeof payload.usageMetadata === 'object'
+        ? payload.usageMetadata
+        : null
+    const inputTokens =
+      usageMetadata &&
+      'promptTokenCount' in usageMetadata &&
+      typeof usageMetadata.promptTokenCount === 'number'
+        ? usageMetadata.promptTokenCount
+        : 0
+    const outputTokens =
+      usageMetadata &&
+      'candidatesTokenCount' in usageMetadata &&
+      typeof usageMetadata.candidatesTokenCount === 'number'
+        ? usageMetadata.candidatesTokenCount
+        : 0
+    onUsage({ inputTokens, outputTokens })
+  }
 
   if (!response.ok) {
     const message =
@@ -105,6 +136,32 @@ export async function generateGeminiText({
         : 'Gemini text generation failed'
 
     throw new Error(message)
+  }
+
+  const finishReasons =
+    payload && typeof payload === 'object' && 'candidates' in payload
+      ? ((payload as { candidates?: unknown }).candidates ?? [])
+      : []
+  const wasTruncated =
+    Array.isArray(finishReasons) &&
+    finishReasons.some((candidate) => {
+      if (!candidate || typeof candidate !== 'object') return false
+
+      const finishReason =
+        'finishReason' in candidate
+          ? candidate.finishReason
+          : 'finish_reason' in candidate
+            ? candidate.finish_reason
+            : null
+
+      return (
+        typeof finishReason === 'string' &&
+        ['MAX_TOKENS', 'LENGTH'].includes(finishReason.toUpperCase())
+      )
+    })
+
+  if (rejectTruncated && wasTruncated) {
+    throw new Error('Gemini response was truncated by the output token limit')
   }
 
   const text = getTextFromGeminiPayload(payload).trim()
@@ -247,16 +304,25 @@ async function generateSingleImage({
   apiKey,
   model,
   prompt,
+  referenceImages = [],
 }: {
   apiKey: string
   model: string
   prompt: string
+  referenceImages?: string[]
 }) {
+  const referenceParts = referenceImages.flatMap((image) => {
+    const match = image.match(/^data:([^;]+);base64,([\s\S]+)$/)
+    return match
+      ? [{ inlineData: { data: match[2], mimeType: match[1] } }]
+      : []
+  })
+
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1/models/${model}:generateContent`,
     {
       body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
+        contents: [{ parts: [{ text: prompt }, ...referenceParts] }],
       }),
       headers: {
         'Content-Type': 'application/json',
@@ -290,10 +356,12 @@ async function generateSingleImageWithFallback({
   apiKey,
   models,
   prompt,
+  referenceImages = [],
 }: {
   apiKey: string
   models: string[]
   prompt: string
+  referenceImages?: string[]
 }) {
   const errors: string[] = []
 
@@ -304,6 +372,7 @@ async function generateSingleImageWithFallback({
           apiKey,
           model,
           prompt,
+          referenceImages,
         }),
         model,
       }
@@ -322,6 +391,7 @@ export async function generateGeminiImages({
   model = process.env.GEMINI_IMAGE_MODEL ?? DEFAULT_IMAGE_MODEL,
   prompt,
   purpose,
+  referenceImages = [],
 }: {
   aspectRatio?: string
   apiKey: string
@@ -329,6 +399,7 @@ export async function generateGeminiImages({
   model?: string
   prompt: string
   purpose: GeneratedImageBlock['purpose']
+  referenceImages?: string[]
 }) {
   const images: string[] = []
   const models = [
@@ -350,6 +421,7 @@ export async function generateGeminiImages({
       ]
         .filter(Boolean)
         .join('\n'),
+      referenceImages,
     })
 
     usedModel = generated.model

@@ -1,13 +1,30 @@
 export type StageKey =
   | 'step_0_start'
   | 'step_1_idea'
-  | 'step_2_persona'
-  | 'step_2_research'
-  | 'step_3_direction'
-  | 'step_4_style'
+  | 'step_2_agent'
+  | 'step_3_persona'
+  | 'step_3_research'
+  | 'step_4_direction'
+  | 'step_5_style'
   | 'step_5_design'
-  | 'step_6_rfp'
-  | 'step_6_company'
+  | 'step_5_cmf'
+  | 'step_5_3d'
+  | 'step_6_structure'
+  | 'step_7_market'
+  | 'step_7_rfp'
+
+export type ChatAction =
+  | 'confirm_artifact'
+  | 'confirm_step_2_team'
+  | 'confirm_process'
+  | 'confirm_moodboard'
+  | 'visualize_artifact'
+  | 'start_step_3'
+  | 'start_step_2'
+  | 'stay_in_step_1'
+  | 'stay_in_step_2'
+  | 'select_step5_shape'
+  | 'select_step5_form'
 
 export type StageMeta = {
   currentStageKey: StageKey
@@ -20,15 +37,35 @@ export const DEFAULT_STAGE_KEY: StageKey = 'step_0_start'
 
 const NEXT_STAGE_KEY_MAP: Record<StageKey, StageKey | null> = {
   step_0_start: 'step_1_idea',
-  step_1_idea: 'step_2_persona',
-  step_2_persona: 'step_2_research',
-  step_2_research: 'step_3_direction',
-  step_3_direction: 'step_4_style',
-  step_4_style: 'step_5_design',
-  step_5_design: 'step_6_rfp',
-  step_6_rfp: 'step_6_company',
-  step_6_company: null,
+  step_1_idea: 'step_2_agent',
+  step_2_agent: 'step_3_persona',
+  step_3_persona: 'step_3_research',
+  step_3_research: 'step_4_direction',
+  step_4_direction: 'step_5_style',
+  step_5_style: 'step_5_design',
+  step_5_design: 'step_5_cmf',
+  step_5_cmf: 'step_5_3d',
+  step_5_3d: 'step_6_structure',
+  step_6_structure: 'step_7_market',
+  step_7_market: 'step_7_rfp',
+  step_7_rfp: null,
 }
+
+const STAGE_ORDER: StageKey[] = [
+  'step_0_start',
+  'step_1_idea',
+  'step_2_agent',
+  'step_3_persona',
+  'step_3_research',
+  'step_4_direction',
+  'step_5_style',
+  'step_5_design',
+  'step_5_cmf',
+  'step_5_3d',
+  'step_6_structure',
+  'step_7_market',
+  'step_7_rfp',
+]
 
 export function isKnownStageKey(value: unknown): value is StageKey {
   return (
@@ -46,32 +83,32 @@ export function getProcessStepIndex(stageKey: StageKey) {
     case 'step_0_start':
     case 'step_1_idea':
       return 1
-    case 'step_2_persona':
-    case 'step_2_research':
+    case 'step_2_agent':
       return 2
-    case 'step_3_direction':
+    case 'step_3_persona':
+    case 'step_3_research':
       return 3
-    case 'step_4_style':
+    case 'step_4_direction':
       return 4
+    case 'step_5_style':
     case 'step_5_design':
+    case 'step_5_cmf':
+    case 'step_5_3d':
       return 5
-    case 'step_6_rfp':
+    case 'step_6_structure':
       return 6
-    case 'step_6_company':
+    case 'step_7_market':
+    case 'step_7_rfp':
       return 7
   }
 }
 
 export function getLaterStageKey(left: StageKey, right: StageKey) {
-  return getProcessStepIndex(right) > getProcessStepIndex(left) ? right : left
+  return STAGE_ORDER.indexOf(right) > STAGE_ORDER.indexOf(left) ? right : left
 }
 
 export function canRequestRfpStage(stageKey: StageKey) {
-  return stageKey === 'step_5_design' || stageKey === 'step_6_rfp'
-}
-
-export function canRequestCompanyStage(stageKey: StageKey) {
-  return stageKey === 'step_6_rfp' || stageKey === 'step_6_company'
+  return stageKey === 'step_7_rfp'
 }
 
 export function hasStyleReferenceSelection(text: string) {
@@ -90,20 +127,94 @@ export function hasDesignFinalSelection(text: string) {
   )
 }
 
+export function resolveStageStartAction(
+  currentStageKey: StageKey,
+  message: string
+): StageKey | null {
+  const match = message.trim().match(/^STEP\s*([1-7])\s*시작할게요[.!?？]?$/i)
+
+  if (!match) {
+    return null
+  }
+
+  const targetStep = Number(match[1])
+  const allowedTransitions: Partial<Record<StageKey, [number, StageKey]>> = {
+    step_0_start: [1, 'step_1_idea'],
+    step_1_idea: [2, 'step_2_agent'],
+    step_2_agent: [3, 'step_3_persona'],
+    step_3_persona: [4, 'step_4_direction'],
+    step_3_research: [4, 'step_4_direction'],
+    step_4_direction: [5, 'step_5_style'],
+    step_5_3d: [6, 'step_6_structure'],
+    step_6_structure: [7, 'step_7_market'],
+  }
+  const transition = allowedTransitions[currentStageKey]
+
+  return transition?.[0] === targetStep ? transition[1] : null
+}
+
 export function resolveIntentStageKey({
+  action,
   currentStageKey,
   hasCompletedDirectionResearch = false,
-  hasCompletedStep1 = false,
+  hasCompletedDirectionFlow = false,
   hasCompletedStep2Research = false,
   lastUserMessage,
 }: {
+  action?: ChatAction | null
   currentStageKey: StageKey
   hasCompletedDirectionResearch?: boolean
-  hasCompletedStep1?: boolean
+  hasCompletedDirectionFlow?: boolean
   hasCompletedStep2Research?: boolean
   lastUserMessage: string
 }): StageKey {
-  // "STEP 1 시작할게요"는 step_0_start 프로세스 소개 후 STEP 1 진입 신호 — step_2_persona로 넘어가지 않음
+  if (action === 'start_step_2') {
+    return currentStageKey === 'step_1_idea' ? 'step_2_agent' : currentStageKey
+  }
+
+  if (action === 'start_step_3') {
+    return currentStageKey === 'step_2_agent'
+      ? 'step_3_persona'
+      : currentStageKey
+  }
+
+  if (action === 'confirm_process' || action === 'stay_in_step_1') {
+    return currentStageKey === 'step_1_idea' ? 'step_1_idea' : currentStageKey
+  }
+
+  if (action === 'confirm_moodboard') {
+    return currentStageKey === 'step_5_style'
+      ? 'step_5_design'
+      : currentStageKey
+  }
+
+  if (action === 'confirm_step_2_team' || action === 'stay_in_step_2') {
+    return currentStageKey === 'step_2_agent'
+      ? 'step_2_agent'
+      : currentStageKey
+  }
+
+  if (currentStageKey === 'step_0_start' && lastUserMessage.trim()) {
+    return 'step_1_idea'
+  }
+
+  const explicitStageStart = resolveStageStartAction(
+    currentStageKey,
+    lastUserMessage
+  )
+
+  if (
+    explicitStageStart &&
+    explicitStageStart !== 'step_2_agent' &&
+    !(
+      currentStageKey === 'step_4_direction' &&
+      (!hasCompletedDirectionResearch || !hasCompletedDirectionFlow)
+    )
+  ) {
+    return explicitStageStart
+  }
+
+  // "STEP 1 시작할게요"는 step_0_start 프로세스 소개 후 STEP 1 진입 신호다.
   if (
     (currentStageKey === 'step_0_start' || currentStageKey === 'step_1_idea') &&
     /STEP\s*1\s*시작할게요/i.test(lastUserMessage)
@@ -112,71 +223,65 @@ export function resolveIntentStageKey({
   }
 
   if (
-    currentStageKey === 'step_1_idea' &&
-    hasCompletedStep1 &&
-    /다음\s*단계로\s*진행할게요|STEP\s*2(?:로)?\s*(?:진행|넘어가|시작)/i.test(
+    currentStageKey === 'step_2_agent' &&
+    /STEP\s*3(?:로)?\s*(?:진행|넘어가|시작)|STEP\s*3\s*시작할게요/i.test(
       lastUserMessage
     )
   ) {
-    return 'step_2_persona'
+    return 'step_3_persona'
   }
 
   if (
-    currentStageKey === 'step_2_research' &&
+    currentStageKey === 'step_3_research' &&
     hasCompletedStep2Research &&
-    /(?:궁금한\s*점|더\s*탐색|추가\s*질문).*(?:없|괜찮)|없어|없습니다|다음\s*(?:단계|STEP)|STEP\s*3|넘어가/i.test(
+    /STEP\s*4\s*시작할게요|다음\s*단계로\s*진행할게요|(?:궁금한\s*점|더\s*탐색|추가\s*질문).*(?:없|괜찮)|없어|없습니다|넘어가/i.test(
       lastUserMessage
     )
   ) {
-    return 'step_3_direction'
+    return 'step_4_direction'
   }
 
   if (
-    currentStageKey === 'step_3_direction' &&
+    currentStageKey === 'step_4_direction' &&
     hasCompletedDirectionResearch &&
-    /다음\s*(?:단계|STEP)|STEP\s*4|스타일\s*(?:단계|컨셉)|넘어가|진행/i.test(
-      lastUserMessage
-    )
+    hasCompletedDirectionFlow &&
+    /STEP\s*5\s*시작할게요/i.test(lastUserMessage)
   ) {
-    return 'step_4_style'
-  }
-
-  if (
-    currentStageKey === 'step_4_style' &&
-    /스타일\s*레퍼런스를\s*선택하고\s*무드보드를\s*만들었어요|STEP\s*5|디자인\s*시안|시안\s*생성/i.test(
-      lastUserMessage
-    )
-  ) {
-    return 'step_5_design'
+    return 'step_5_style'
   }
 
   if (
     currentStageKey === 'step_5_design' &&
-    (hasDesignFinalSelection(lastUserMessage) ||
-      /다음\s*(?:단계|STEP)(?:로)?\s*(?:진행|넘어가|이동|시작|가)|STEP\s*6|기획안\s*(?:생성|작성|만들)|다음\s*단계/i.test(
-        lastUserMessage
-      ))
-  ) {
-    return 'step_6_rfp'
-  }
-
-  if (/협력\s*(?:업체|파트너)|업체\s*추천|파트너|vendor|company/i.test(lastUserMessage)) {
-    return canRequestCompanyStage(currentStageKey)
-      ? 'step_6_company'
-      : currentStageKey
-  }
-
-  if (/rfp|제안\s*요청서|프로젝트\s*기획안|기획안\s*생성|문서\s*생성|pdf/i.test(lastUserMessage)) {
-    return canRequestRfpStage(currentStageKey) ? 'step_6_rfp' : currentStageKey
-  }
-
-  if (
-    currentStageKey === 'step_6_rfp' &&
-    /다음\s*(?:단계|STEP)|STEP\s*7|협력\s*(?:업체|파트너)|파트너|넘어가|진행/i.test(
+    /2D\s*(?:렌더링\s*)?시안을\s*(?:최종\s*)?확정하고\s*시각화(?:했어요|했습니다|했어)/i.test(
       lastUserMessage
     )
   ) {
-    return 'step_6_company'
+    return 'step_5_cmf'
+  }
+
+  if (
+    currentStageKey === 'step_5_3d' &&
+    /STEP\s*6\s*시작할게요/i.test(lastUserMessage)
+  ) {
+    return 'step_6_structure'
+  }
+
+  if (
+    currentStageKey === 'step_6_structure' &&
+    /STEP\s*7\s*시작할게요/i.test(lastUserMessage)
+  ) {
+    return 'step_7_market'
+  }
+
+  if (
+    currentStageKey === 'step_7_market' &&
+    /프로젝트\s*기획안\s*시각화하기/i.test(lastUserMessage)
+  ) {
+    return 'step_7_rfp'
+  }
+
+  if (/rfp|제안\s*요청서|프로젝트\s*기획안|기획안\s*생성|문서\s*생성|pdf/i.test(lastUserMessage)) {
+    return canRequestRfpStage(currentStageKey) ? 'step_7_rfp' : currentStageKey
   }
 
   return currentStageKey
@@ -203,47 +308,25 @@ export function inferStageMetaFromText({
   }
 
   if (
-    currentStageKey === 'step_1_idea' &&
-    /STEP\s*2\.?\s*사용자\s*명확화\s*단계(?:에\s*오신\s*것을\s*환영|입니다|를\s*시작)/i.test(
-      text
-    )
+    currentStageKey.startsWith('step_3') &&
+    /(?:지금은\s*)?STEP\s*4[.]?\s*개발\s*방향\s*도출\s*단계(?:입니다|를\s*시작합니다)/i.test(text)
   ) {
     return {
       currentStageKey,
-      nextStageKey: 'step_2_persona',
-      reason: 'text_enters_step_2',
-      transition: true,
-    }
-  }
-
-  if (/STEP\s*3|방향/i.test(text) && currentStageKey.startsWith('step_2')) {
-    return {
-      currentStageKey,
-      nextStageKey: 'step_3_direction',
-      reason: 'text_mentions_step_3',
-      transition: true,
-    }
-  }
-
-  if (/STEP\s*4|스타일|레퍼런스/i.test(text) && currentStageKey === 'step_3_direction') {
-    return {
-      currentStageKey,
-      nextStageKey: 'step_4_style',
+      nextStageKey: 'step_4_direction',
       reason: 'text_mentions_step_4',
       transition: true,
     }
   }
 
   if (
-    currentStageKey === 'step_4_style' &&
-    /STEP\s*5|디자인\s*시안|3D\s*(?:디자인|렌더링)|생성된\s*이미지/i.test(
-      text
-    )
+    currentStageKey === 'step_4_direction' &&
+    /(?:지금은\s*)?STEP\s*5[.]?\s*디자인\s*컨셉\s*도출\s*단계(?:입니다|를\s*시작합니다)/i.test(text)
   ) {
     return {
       currentStageKey,
-      nextStageKey: 'step_5_design',
-      reason: 'text_enters_step_5',
+      nextStageKey: 'step_5_style',
+      reason: 'text_mentions_step_5',
       transition: true,
     }
   }

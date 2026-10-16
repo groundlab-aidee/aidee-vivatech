@@ -7,6 +7,10 @@ import { useEffect, useRef, useState } from 'react'
 
 import { AppSidebar } from '@/components/app-shell/AppSidebar'
 import {
+  AgentDebateModals,
+  DEBATE_TOKEN_COST,
+} from '@/components/project/AgentDebateModals'
+import {
   AppShellHeaderProvider,
   defaultAppShellHeader,
   type AppShellHeaderState,
@@ -144,13 +148,16 @@ function LanguageDropdown() {
 
 export function AppShell({ children, user }: AppShellProps) {
   const pathname = usePathname()
+  const projectId = pathname.match(/^\/workspace\/project\/([^/]+)/)?.[1] ?? null
   const initial = user.displayName.trim().charAt(0).toUpperCase() || 'A'
-  const tokenCount = user.tokenCount ?? 400
+  const [tokenCount, setTokenCount] = useState(user.tokenCount ?? 400)
   const [header, setHeader] = useState<AppShellHeaderState>(
     defaultAppShellHeader
   )
   const [projectChatSidebar, setProjectChatSidebar] =
     useState<ProjectChatSidebarState>(defaultProjectChatSidebarState)
+  const [isDebateConfirmOpen, setIsDebateConfirmOpen] = useState(false)
+  const [isDebateOpen, setIsDebateOpen] = useState(false)
   const isProjectChat = pathname.startsWith('/workspace/project/')
   const isDashboard = pathname.startsWith('/dashboard')
 
@@ -159,6 +166,11 @@ export function AppShell({ children, user }: AppShellProps) {
     <AppShellHeaderProvider value={{ header, setHeader }}>
       <ProjectChatSidebarProvider
         value={{
+          debate: {
+            availableTokens: tokenCount,
+            isOpen: isDebateOpen,
+            open: () => setIsDebateConfirmOpen(true),
+          },
           setSidebarState: setProjectChatSidebar,
           sidebarState: projectChatSidebar,
         }}
@@ -251,6 +263,23 @@ export function AppShell({ children, user }: AppShellProps) {
             </section>
           </div>
         </main>
+        <AgentDebateModals
+          availableTokens={tokenCount}
+          projectId={projectId}
+          isConfirmOpen={isDebateConfirmOpen}
+          isDebateOpen={isDebateOpen}
+          onCloseConfirm={() => setIsDebateConfirmOpen(false)}
+          onEnd={() => setIsDebateOpen(false)}
+          onRefundToken={() =>
+            setTokenCount((current) => current + DEBATE_TOKEN_COST)
+          }
+          onStart={() => {
+            if (tokenCount < DEBATE_TOKEN_COST) return
+            setTokenCount((current) => current - DEBATE_TOKEN_COST)
+            setIsDebateConfirmOpen(false)
+            setIsDebateOpen(true)
+          }}
+        />
       </ProjectChatSidebarProvider>
     </AppShellHeaderProvider>
     </AppLanguageProvider>

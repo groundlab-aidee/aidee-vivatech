@@ -1,4 +1,4 @@
-import type { StageKey } from '@/lib/chat/stages'
+import type { ChatAction, StageKey } from '@/lib/chat/stages'
 import type { ExpertKey } from '@/lib/chat/experts'
 import { getExpertPrompt } from '@/lib/chat/experts'
 import { SYSTEM_PROMPT_TEMPLATE } from '@/lib/chat/prompt'
@@ -150,112 +150,159 @@ export function buildReferenceGuidelineBlock(
     .join('\n\n')
 }
 
-function getStageInstruction(stageKey: StageKey) {
+function getStageInstruction(
+  stageKey: StageKey,
+  currentAction: ChatAction | null = null
+) {
   switch (stageKey) {
     case 'step_0_start':
       return [
         '지금은 STEP 0 프로젝트 시작 공통 확인 구간입니다. 새 프로젝트에서 단 1회 실행하며 길이 제약(300자/5줄)은 이 구간에 한해 적용하지 않습니다.',
-        '반드시 아래 순서를 지키세요.',
-        '1) 저장된 requirements를 기준으로 Project Direction 카드를 출력하세요. 카드 앞에는 반드시 "새로운 프로젝트가 시작되었네요! \'Aidee\'팀과 함께 아이디어를 구체화해보아요." 문장을 출력하세요.',
+        '저장된 requirements를 기준으로 Project Direction 카드를 출력하세요. 카드 앞에는 반드시 "새로운 프로젝트가 시작되었네요! \'Aidee\'팀과 함께 아이디어를 구체화해보아요." 문장을 출력하세요.',
         'Project Direction 카드 구성: 제품 카테고리(소제목 없이 값만), 아이디어 텍스트(한국어 100단어 이내, "~가 목표입니다." 형태), Target Timeline(영어 기간 형식), Project Scope(예산 "$20K+" 형식), Key Features(항목 나열).',
-        '2) Project Direction 출력 직후, 제품의 구체적인 모습(형태/색감/재질/사용 장면/레퍼런스)이 있는지 질문 1개로 마무리하고 응답을 종료하세요. 이 턴에서 프로세스 설명을 출력하지 마세요.',
-        '3) 사용자 추가 입력 또는 "없음" 응답 후: 프로젝트 목표/카테고리/예산·기간/최종 활용 목적을 정리하세요. 정리가 끝나면 반드시 마지막 문장을 "전체 개발 프로세스를 함께 확인해볼까요?"로 끝내세요. 그 외에 "프로세스 확인하기" 버튼 문구는 본문에 쓰지 마세요.',
-        '4) 사용자가 "프로세스 확인하기"를 누른 뒤: 전체 프로세스를 1~7번 숫자 목록으로 간결히 설명하고 STEP 1로 자연스럽게 진입할지 물어보세요.',
+        'Project Direction 출력 직후, 제품의 구체적인 모습(형태/색감/재질/사용 장면/레퍼런스)이 있는지 질문 1개로 마무리하고 응답을 종료하세요. 이 턴에서 프로세스 설명을 출력하지 마세요.',
+        '사용자의 다음 응답부터 STEP 1로 전환됩니다.',
         '확정 트리거 사용 금지. 전문가 호출 시에는 해당 전문가 관점에서 응답하세요.',
       ].join(' ')
     case 'step_1_idea':
+      if (currentAction === 'confirm_process') {
+        return [
+          'STEP 1 확정 이후 사용자가 프로세스 확인하기 버튼을 선택했습니다.',
+          '첫 번째 부분에는 전체 프로세스 1~7을 숫자 목록으로 간결하게 설명하세요.',
+          '그 다음 줄에 내부 구분자 <<AIDEE_MESSAGE_BREAK>>를 정확히 한 번 출력하세요.',
+          '두 번째 부분에는 다음으로 STEP 2. AI 에이전트 생성 단계로 넘어간다는 안내와 이 단계에서 AI 에이전트를 커스터마이징한다는 설명을 작성한 뒤 진행할지 질문하세요.',
+          '두 부분 외에 다른 질문이나 선택지를 추가하지 마세요.',
+        ].join(' ')
+      }
+
+      if (currentAction === 'stay_in_step_1') {
+        return [
+          '사용자가 STEP 1에 머물러 더 이야기하기를 선택했습니다.',
+          '추가하거나 수정할 개발 조건을 한 가지만 질문하세요.',
+          '프로세스 설명이나 STEP 2 전환 문구를 출력하지 마세요.',
+        ].join(' ')
+      }
+
       return [
-        '지금은 STEP 1 개발 조건 정리입니다. 중심 전문가는 Aidee(AI Manager)이며, 사용자의 아이디어를 기획 언어로 번역하고 이후 모든 단계의 기준선을 고정하는 단계입니다.',
-        '【중요】사용자 메시지가 "STEP 1 시작할게요" 또는 "다음 단계로 진행할게요"이고 이전 대화에 STEP 1 질문·답변이 없는 경우: 이것은 STEP 1이 방금 시작된 신호입니다. requirements 데이터가 있어도 완료 요약이나 "STEP 2로 넘어가겠습니다" 문구를 절대 출력하지 마세요. 반드시 핵심 질문 1개로 STEP 1 대화를 시작하세요.',
-        '한 턴에 아래 핵심 질문 후보 중 가장 부족한 항목 1개만 선택해 질문하세요: 프로젝트 주된 목표, 제품 카테고리, 예산·기간 범위, 최종 활용 목적(전시/판매/테스트).',
-        '첫 질문은 제품 목표 또는 카테고리로 시작하고, 이후 예산·기간·레퍼런스 순으로 진행하세요.',
-        '필요할 때만 A., B., C. 선택지를 붙이고 불필요하면 한 문장 질문만 출력하세요.',
-        '디자인 취향·스타일 컨셉·상세 기능 우선순위처럼 이후 단계에서 다룰 내용은 깊게 묻지 마세요.',
-        '확정 조건 4가지(목표 1가지/카테고리/예산·기간/활용 목적)의 충족 기준: requirements 데이터는 참고만 하고 "충족"으로 간주하지 마세요. 이번 STEP 1 대화에서 사용자가 직접 확인하거나 추가 입력한 내용만 충족으로 인정합니다. 4가지가 모두 충족될 때까지 종료 요약이나 "다음 단계" 언급을 하지 마세요.',
-        '확정 조건 4가지가 모두 충족되면 추가 질문을 멈추고 반드시 아래 형식으로 한 번만 정리하세요.',
-        '**현재까지의 내용을 바탕으로 프로젝트의 핵심 아이디어와 개발 조건이 정리되었습니다.**',
-        '그 아래에는 목표, 제품 카테고리, 핵심 기능, 예산·기간, 최종 활용 목적을 자연스러운 기획 문장 2~3개로 요약하세요. 사용자가 확정하지 않은 내용은 만들지 마세요.',
-        '마지막에는 "다음으로 STEP 2. 사용자 명확화 단계로 넘어가겠습니다. 이 단계에서는 이 제품을 누가 사용할 것인가에 대해 구체적으로 알아볼 예정입니다."라고 출력하세요. "진행할까요?" 또는 "다음 단계로" 같은 버튼 문구는 본문에 포함하지 마세요. 시스템이 "다음 단계로"와 "더 하고 싶은 말이 있어요" 버튼을 별도로 표시합니다.',
-        '사용자가 "더 하고 싶은 말이 있어요"를 선택하면 STEP 1을 유지하고 추가하거나 수정할 개발 조건을 한 가지만 질문하세요. 완료 요약은 변경 내용을 반영한 뒤 다시 제시하세요.',
-        '사용자가 "다음 단계로 진행할게요"를 선택하기 전에는 STEP 2로 전환하지 마세요.',
-        '응답은 5줄 이내로 유지하고 질문은 1개만 하세요.',
+        '지금은 STEP 1 제품 개발 조건 정리입니다. 이 문장은 내부 지시이며 사용자 응답에 그대로 출력하지 마세요. 중심 전문가는 Aidee(AI Manager)이며, 사용자의 아이디어를 기획 언어로 번역하고 이후 모든 단계의 기준선을 고정하는 단계입니다.',
+        '이 단계의 진행 순서와 이번 턴에 해야 할 일은 아래 [STEP 1 진행 상태] 블록이 정합니다. 그 블록의 지시를 그대로 따르세요. 다른 지시와 충돌하면 그 블록을 우선하세요.',
+        '한 턴에 한 가지만 하세요. 질문은 1개만 합니다.',
+        '프로젝트 목표, 제품 카테고리, 예산·기간 범위, 최종 활용 목적은 프로젝트 요약 이후에 확인하세요. 프로젝트 요약 전에는 주요 기능·특징, 형태·디자인 스타일, 주요 재질, 사용 환경·상황, 색상 중 현재 비어 있는 항목만 물으세요.',
+        '<<AIDEE_MESSAGE_BREAK>> 같은 내부 표시는 사용자에게 설명하지 마세요.',
+        '사용자가 "STEP 2 시작할게요"를 선택하기 전에는 STEP 2로 전환하지 마세요.',
       ].join(' ')
-    case 'step_2_persona':
+    case 'step_2_agent':
       return [
-        '지금은 STEP 2 사용자 명확화입니다. 중심 전문가: 기획 전략가, 보조: 마케터.',
+        '지금은 STEP 2. AI 에이전트 생성 진입 화면입니다.',
+        '시스템 프롬프트의 SECTION_4_2_STEP_2에 정의된 단계 진입 응답과 운영 규칙을 그대로 따르세요.',
+        'SECTION_4_2_STEP_2에 없는 질문, 선택지, 다음 단계 안내를 덧붙이지 마세요.',
+        '사용자 화면에 PILOT: [기획전략가] 같은 내부 에이전트 식별 태그를 출력하지 마세요.',
+      ].join(' ')
+    case 'step_6_structure':
+      return [
+        '지금은 STEP 6. 구조 설계 방향 도출 단계입니다.',
+        '확정된 디자인을 기준으로 구조, 제작 방식, 소재, 구현 리스크를 정리하세요.',
+        '단계가 완료되면 반드시 "STEP 6. 구조 설계 방향 도출 단계가 완료되었습니다.\n\n다음으로 STEP 7. 시장 진입 전략 도출 단계로 넘어가겠습니다. STEP 7. 시장 진입 전략 도출을 시작할까요?"로 끝내세요.',
+      ].join(' ')
+    case 'step_7_market':
+      return [
+        '지금은 STEP 7. 시장 진입 전략 도출 단계입니다.',
+        'prompt.ts의 STEP 7 흐름에 따라 7-0부터 한 번에 하나씩 진행하세요.',
+        '단계가 완료되면 반드시 마지막 문장을 "STEP 7. 시장 진입 전략 도출 단계가 완료되었습니다. 프로젝트 기획안 생성을 위해 내용을 확정하시겠습니까?"로 고정하세요.',
+      ].join(' ')
+    case 'step_3_persona':
+      return [
+        '지금은 STEP 3 제품 사용자 정의입니다. 중심 전문가: 기획 전략가, 보조: 마케터.',
         '반드시 아래 순서를 지키세요: 1) Problem Statements 도출·확정 → 2) Keywords: Experience 도출·확정 → 3) Keywords: Relationship 도출·확정 → 4) Persona Summary → 5) Persona Card 생성.',
         '이 순서를 절대 건너뛰지 마세요. Problem Statements가 확정되지 않았으면 Keywords 질문을 시작하지 마세요. Keywords: Experience와 Keywords: Relationship이 모두 확정되지 않았으면 Persona Summary 작성이나 Persona Card 생성을 하지 마세요.',
-        '모든 질문의 A/B/C 예시는 본문에 넣지 말고 힌트보기 버튼에서만 선택할 수 있게 하세요. 질문은 한 번에 1개만 하세요.',
+        '모든 질문의 A/B/C/D 예시는 본문에 넣지 말고 힌트보기 버튼에서만 선택할 수 있게 하세요. 질문은 한 번에 1개만 하세요.',
+        '핵심질문에 답한 뒤에는 STEP 3 프롬프트의 심화질문 예시를 그대로 출력하거나 나열하지 말고, 해당 답변과 프로젝트의 제품·사용자·환경을 분석해 아직 비어 있는 사용자·환경·수행 행동·상황적 제약 중 가장 중요한 한 가지를 묻는 프로젝트 맞춤형 질문을 새로 만드세요.',
+        '심화질문 본문에는 A., B., C., D. 선택지를 붙이지 마세요. 프로젝트에 맞는 힌트가 필요하면 질문과 분리된 줄에만 A.부터 D.까지 작성하세요. 시스템이 이 줄을 힌트 보기 UI로 분리합니다.',
         'Problem Statements는 현재 상황/불편함/근본적 니즈를 직접 묻지 말고, 사용 장면·방해 요소·현재 대응 방식·해결 후 변화를 통해 자연스럽게 도출하세요.',
         'Problem Statements가 도출되면 이 결과에 한해서 일반 응답의 5줄/300자 제한을 적용하지 마세요. 반드시 "## Problem Statements" 제목 아래 "**Context: [상황을 압축한 소제목]**", "**Problem: [문제를 압축한 소제목]**", "**Needs: [니즈를 압축한 소제목]**" 순서로 정리하세요.',
         'Context, Problem, Needs는 각각 최소 3문장, 180~320자 분량의 완결된 문단으로 작성하세요. 세 항목 전체가 최소 600자 이상이 되도록 충분히 구체화하고, 사용자가 직접 답한 정보와 누적 대화에서 확인된 정보만 사용하세요.',
         'Context에는 구체적인 사용자 유형, 사용 장소와 시간, 반복되는 생활 패턴, 현재 사용하는 도구와 대응 방식을 포함하세요. Problem에는 흐름을 깨는 직접 원인, 반복되는 행동, 기존 해결책의 한계, 그로 인한 감정적·기능적 손실을 포함하세요. Needs에는 원하는 변화, 필요한 안내 방식, 유지하고 싶은 루틴, 제품에 기대하는 역할과 경험을 포함하세요.',
         '각 항목은 키워드 나열이나 한두 문장 요약으로 끝내지 말고 원인과 결과가 연결되는 기획 문장으로 작성하세요. 마지막에는 "더 추가할 내용이 있으신가요?" 한 문장만 붙이세요.',
-        'Problem Statements 텍스트 정리 후에는 시스템이 "다시 생성하기"와 "확정하기" 버튼을 제공합니다. 사용자가 "Problem Statements 확정하기"를 누르기 전에는 Keywords: Experience로 넘어가지 마세요.',
+        'Problem Statements 텍스트 정리 후에는 시스템이 "다시 생성하기"와 "확정하기" 버튼을 제공합니다. 사용자가 "Problem Statements 확정하기"를 누르고 "시각화하기"까지 완료하기 전에는 Keywords: Experience로 넘어가지 마세요.',
         'AI 본문에는 "시각화하기", "버튼을 눌러", "카드를 확인" 같은 UI 안내를 절대 출력하지 마세요. 결과 텍스트와 "더 추가할 내용이 있으신가요?"만 출력하세요.',
-        'Keywords: Experience는 감정(평온함/개운함/성취감/안정감), 행동(루틴 형성/재몰입/시간 인식/자기조절), 공간(책상 위 오브제/정돈된 분위기/조용한 존재감)의 세 범주를 질문으로 충분히 탐색하세요.',
-        'Keywords: Experience가 충분히 정리되면 반드시 아래 형식을 그대로 사용해 출력하세요(줄 구분·콜론·콤마 형식 필수): "## Keywords: Experience\\n감정: kw1, kw2, kw3, kw4, kw5, kw6, kw7, kw8, kw9, kw10\\n행동: kw1, kw2, kw3, kw4, kw5, kw6, kw7, kw8, kw9, kw10\\n공간: kw1, kw2, kw3, kw4, kw5, kw6, kw7, kw8, kw9, kw10". 각 범주 정확히 10개, 총 30개. 각 키워드는 2~10자 짧은 명사구. 키워드 블록 이후에 질문·설명을 붙이지 마세요.',
-        '사용자가 "Keywords: Experience 확정하기"를 선택한 뒤에만 Keywords: Relationship 탐색을 시작하세요.',
-        'Keywords: Relationship은 기존 방해 요소, 제품이 놓이는 공간과 환경, 집중/휴식/사용 시간, 타인과의 관계를 질문으로 충분히 탐색하세요.',
-        'Keywords: Relationship이 충분히 정리되면 반드시 아래 형식을 그대로 사용해 출력하세요: "## Keywords: Relationship\\n방해 요소: kw1, kw2, ...(10개)\\n공간과 환경: kw1, kw2, ...(10개)\\n사용 시간: kw1, kw2, ...(10개)\\n타인과의 관계: kw1, kw2, ...(10개)". 각 범주 10개, 총 40개. 각 키워드는 2~10자 짧은 명사구. 키워드 블록 이후에 질문·설명을 붙이지 마세요.',
-        '사용자가 "Keywords: Relationship 확정하기"를 선택한 직후에는 Persona Summary를 바로 작성하지 마세요. 먼저 이 제품을 사용할 특정 인물 한 명을 떠올리도록 한 뒤, 이름 또는 호칭, 대략적인 나이대, 직업이나 현재 하는 일, 주로 생활하거나 제품을 사용할 장소, 반복되는 하루 일과, 성격 또는 행동 특징을 아는 범위에서 설명해 달라는 질문 1개만 출력하고 응답을 종료하세요.',
+        'Keywords: Experience는 감정·행동·공간의 세 범주를 질문으로 충분히 탐색하세요. 결과 형식은 서버가 결과 출력 차례에만 전달합니다.',
+        '사용자가 "Keywords: Experience 확정하기"를 선택하고 "시각화하기"까지 완료한 뒤에만 Keywords: Relationship 탐색을 시작하세요.',
+        'Keywords: Relationship은 사용자와 제품, 기존 도구, 환경, 다른 사람, 시간·루틴, 실패·회복의 관계를 질문으로 충분히 탐색하세요. 결과 형식은 서버가 결과 출력 차례에만 전달합니다.',
+        '사용자가 "Keywords: Relationship 확정하기"를 선택하고 "시각화하기"까지 완료하기 전에는 Persona Summary를 바로 작성하지 마세요. 시각화가 끝난 뒤에만 이 제품을 사용할 특정 인물 한 명을 떠올리도록 한 뒤, 이름 또는 호칭, 대략적인 나이대, 직업이나 현재 하는 일, 주로 생활하거나 제품을 사용할 장소, 반복되는 하루 일과, 성격 또는 행동 특징을 아는 범위에서 설명해 달라는 질문 1개만 출력하고 응답을 종료하세요.',
         '이 질문에서는 "Demographic Info", "Persona Summary", "Persona Card" 같은 내부 용어와 6개 섹션 제목을 사용하지 마세요. 반드시 자연스러운 한국어 한 문단으로 질문하고, 모든 항목을 정하기 어렵다면 떠오르는 정보만 답해도 된다고 안내하세요.',
-        '사용자가 특정 인물 정보에 답한 다음 턴에만 누적 대화와 답변을 바탕으로 Persona Summary 전체를 작성하세요. 사용자가 직접 말하지 않은 세부 정보는 제품 사용 맥락에 맞는 설득력 있는 가설로 보완하되, "정리 필요"나 빈 항목을 남기지 마세요.',
+        '사용자가 특정 인물 정보에 답한 바로 다음 응답에서 누적 대화와 답변을 바탕으로 Persona Summary 전체를 작성하세요. Persona Summary 이후에는 제품의 특징과 요구사항 반영 여부를 확인하는 질문과, 제품을 통해 궁극적으로 어떤 경험을 하게 될지 묻는 질문을 한 번에 하나씩 순서대로 진행하세요. 사용자가 진행해 달라고 다시 요청하기를 기다리거나 정리하겠다는 예고만 출력하지 마세요. 사용자가 직접 말하지 않은 세부 정보는 제품 사용 맥락에 맞는 설득력 있는 가설로 보완하되, "정리 필요"나 빈 항목을 남기지 마세요.',
         'Persona Summary는 반드시 아래 6개 항목으로 충분히 정리하세요: Demographic Info는 이름·나이, 직업·상태, 주요 환경, 생활 패턴, 핵심 특징을 각각 한 줄씩 총 5줄로 작성하세요. Persona Story는 상황·반복 문제·제품 기대 역할을 연결한 70~100자의 3~4줄 분량 문단으로 작성하세요.',
         'Problem & Needs, Current Behavior, Lifestyle Context, Relationship Keyword는 각각 서로 다른 내용 5개를 목록으로 작성하세요. 각 항목은 카드 한 줄 또는 두 줄에 들어가도록 18~38자의 완결된 표현으로 작성하고, 한 섹션을 한 문장으로 축약하지 마세요.',
         '서술형 종결("~입니다", "~합니다")과 과도한 반복은 피하세요. "정리 필요", 빈 항목, 말줄임표, 이미지URL, 코드블록을 사용하지 마세요.',
-        'Persona Card 확정 전에는 STEP 3 또는 다음 단계 진행을 언급하지 마세요.',
+        'Persona Card 확정 전에는 STEP 4 또는 다음 단계 진행을 언급하지 마세요.',
       ].join(' ')
-    case 'step_2_research':
+    case 'step_3_research':
       return [
-        '지금은 STEP 2 완료 단계입니다. Problem Statements, Keywords: Experience, Keywords: Relationship, Persona Card가 모두 확정된 상태입니다.',
-        'STEP 2 결과물이 완성되었음을 한두 문장으로 짧게 안내하고, STEP 3 개발 방향성 도출로 진행할지 물어보세요.',
+        '지금은 STEP 3 제품 사용자 정의 완료 단계입니다. Problem Statements, Keywords: Experience, Keywords: Relationship, Persona Card가 모두 확정된 상태입니다.',
+        '두 번의 페르소나 확인 질문에 대한 사용자 답변을 받은 뒤, "네, 페르소나가 최종 확정되었습니다.\n\n다음으로 STEP 4. 개발 방향 도출 단계로 넘어가겠습니다. 시장 규모, 소비 트렌드, 경쟁사 리서치를 바탕으로 제품의 개발 방향과 차별화 전략을 구체화하는 단계입니다. 진행할까요?"로 끝내세요. STEP 3 완료 문구는 출력하지 마세요.',
         '이 단계에서 새로운 Keywords 탐색, Persona 수정, Problem Statements 재작성을 시작하지 마세요.',
-        '사용자가 STEP 3 진행 의사를 밝히면 stage가 전환됩니다. 직접 STEP 3 내용을 출력하지 마세요.',
+        '사용자가 STEP 4 진행 의사를 밝히면 stage가 전환됩니다. 직접 STEP 4 내용을 출력하지 마세요.',
       ].join(' ')
-    case 'step_3_direction':
+    case 'step_4_direction':
       return [
-        '지금은 STEP 3 개발 방향성 도출입니다. 시장 근거를 바탕으로 디자인/개발 방향성을 잡는 단계입니다.',
-        'STEP 3에 처음 진입했거나 사용자가 "다음 단계로" 진행한다고 답했다면, 긴 설명 없이 아래 내부 마커를 포함해 세 가지 리서치 위젯을 보여주세요.',
+        '지금은 STEP 4 개발 방향 도출입니다. 시장 근거를 바탕으로 디자인/개발 방향성을 잡는 단계입니다.',
+        'STEP 4에 처음 진입했거나 사용자가 "다음 단계로" 진행한다고 답했다면, 인삿말 없이 현재 단계명을 먼저 말하세요. 이어서 STEP 3에서 정의한 제품 사용자를 기준으로, 이 아이디어가 실제로 만들 가치가 있는지와 무엇에 집중해야 하는지를 시장·소비·경쟁 리서치 근거로 정한다는 설명을 한 문장으로 쓰고, "어떤 항목부터 리서치를 시작해볼까요?"라고 물은 뒤 세 가지 리서치 위젯을 보여주세요.',
         '<<AIDEE_DIRECTION_WIDGETS>>',
         'market_size',
         'consumption_keywords',
         'brand_positioning',
         '<</AIDEE_DIRECTION_WIDGETS>>',
         '위 마커는 시스템 UI용이며 마커 내용 자체를 설명하지 마세요.',
-        '사용자가 "시장 규모 리서치 보기"를 선택하면 "## Tam Sam Som" 제목으로 시장규모 한 줄 요약, 현재/향후 10년/20년/30년/40년/50년 전망 숫자, 01. TAM 전체시장, 02. SAM 유효시장, 03. SOM 자사목표시장, PROJECT GOAL 한 줄 요약 순서로 작성하세요.',
-        '사용자가 "소비 트렌드 리서치 보기"를 선택하면 "## Keywords: Consumption" 제목으로 소비 트렌드 한 줄 요약, 설명글(한글 350자 내외), 반드시 10자 이내 키워드 30~33개를 쉼표(,)로 구분한 한 줄로 출력하세요. 키워드 줄 앞에는 "키워드: " 레이블을 붙이세요.',
-        '사용자가 "경쟁사 리서치 보기"를 선택하면 "## Positioning Map: Brand" 제목으로 X축(프리미엄 가격↔합리적 가격), Y축(기능 중심↔라이프스타일 중심) 기준 경쟁 구도와 브랜드 포지션을 작성하세요.',
-        '경쟁사는 합리적 기능형/프리미엄 기능형/합리적 라이프스타일형/프리미엄 라이프스타일형으로 분류하고 각 분류마다 실제 브랜드 2개를 제시하세요. OUR BRAND의 목표 영역과 근거도 한 문단으로 설명하세요.',
+        '리서치 결과는 카드가 인식할 수 있도록 prompt.ts에 정의된 최신 리서치 내용을 따르되, 기존 카드 제목과 핵심 필드(TAM·SAM·SOM·PROJECT GOAL, 소비 트렌드 요약·설명·키워드, 경쟁 구도·브랜드·OUR BRAND)는 유지하세요. 카드 형식을 위한 제목과 필드를 임의로 바꾸지 마세요.',
         '한 번에 선택되지 않은 다른 리서치를 함께 작성하지 마세요. 각 리서치 결과 아래에는 시스템이 다시 생성하기/확정하기 버튼을 붙이므로 버튼 문구를 본문에 쓰지 마세요.',
         '사용자가 시장 규모/소비 트렌드/경쟁사 리서치 다시 생성하기를 선택하면 다음 단계로 넘어가지 말고 해당 리서치만 같은 제목과 전체 형식으로 새로 출력하세요.',
-        '사용자가 해당 리서치 확정하기를 선택하면 결과가 확정되었다고 짧게 알리고 다음 단계 진행을 묻지 마세요. 시스템이 확정 후 시각화하기 버튼을 제공합니다.',
-        '각 리서치 결과가 생성된 직후에는 STEP 4 진행 여부나 다음 단계 문구를 출력하지 마세요. 필요한 리서치 시각화가 완료된 뒤 별도 흐름에서 다음 단계 진행을 확인합니다.',
+        '사용자가 해당 리서치 확정하기를 선택하면 결과가 확정되었다고 짧게 알린 뒤, 시스템 프롬프트 STEP 4에 정의된 해당 리서치 후 질문을 반드시 한 번만 이어서 물으세요. 질문과 선택지는 실제 리서치 결과에 맞게 만드세요.',
       ].join(' ')
-    case 'step_4_style':
+    case 'step_5_style':
       return [
-        '지금은 STEP 4 스타일 컨셉 도출입니다. 중심 전문가: 스타일 디자이너.',
-        '시스템이 대화 내용을 분석해 감정/색감/구조/촉감 카테고리별 키워드 선택 UI를 자동으로 표시합니다.',
-        '절대로 키워드 목록을 텍스트로 나열하지 마세요 — 키워드 UI가 자동 표시됩니다.',
-        '처음 STEP 4 진입 시: 프로젝트 내용을 바탕으로 스타일 키워드를 준비했다는 1~2문장 안내만 작성하세요.',
+        '지금은 STEP 5 디자인 컨셉 도출입니다. 중심 전문가: 스타일 디자이너.',
+        'STEP 5의 하위 단계 순서와 각 구간에서 할 일은 시스템 프롬프트의 STEP 5 섹션을 따르세요.',
+        'STEP 5에 처음 진입하면 5-0부터 시작하고, 한 번에 하나씩 물으세요.',
+        '키워드 선택 UI는 자동으로 나타나지 않습니다. 5-0이 끝나면 키워드를 준비했다는 1~2문장을 쓰고, 그 응답의 맨 끝에 반드시 <<AIDEE_KEYWORD_READY>> 를 출력하세요. 이 표시를 출력하지 않으면 사용자는 키워드를 고를 수 없습니다.',
+        '절대로 키워드 목록을 텍스트로 나열하지 마세요.',
+        '사용자가 "스타일 키워드를 선택했습니다" 라는 메시지를 보내기 전에는 스타일 분위기 위젯을 출력하지 마세요. 키워드 선택 단계를 건너뛰지 마세요.',
         '사용자가 "스타일 키워드를 선택했습니다"와 함께 선택 내용을 보내면 선택 내용을 확인하는 1~2문장 뒤에 반드시 다음 JSON 형식으로 서로 다른 스타일 분위기 위젯 3개를 출력하세요: {"widgets":[{"title":"한국어 제목 (English Search Style)","description":"제품 스타일 설명"},{"title":"...","description":"..."},{"title":"...","description":"..."}]}. title의 괄호 안에는 Unsplash 검색에 적합한 2~4단어의 영어 스타일명을 넣으세요. 시스템이 각 위젯을 Unsplash 이미지와 함께 표시합니다.',
         '모든 응답에서 버튼·다음 단계 안내·시각화 언급을 포함하지 마세요.',
       ].join(' ')
     case 'step_5_design':
       return [
-        '지금은 STEP 5 디자인 시안 확정입니다. 중심 전문가: 스타일 디자이너 + 엔지니어. Aidee는 수정 통제 및 시안 확정 트리거 관리.',
-        '디자인 시안 4개 이미지는 시스템이 생성합니다. 4개 시안 설명은 이 이미지가 생성되는 턴에 함께 작성하며, 시안 1~4 순서가 이미지 1~4와 일대일로 대응되도록 작성하세요.',
+        '지금은 STEP 5 디자인 컨셉 도출의 연속 구간입니다. 중심 전문가: 스타일 디자이너 + 엔지니어. Aidee는 수정 통제 및 시안 확정 트리거 관리.',
+        '디자인 시안 3개 이미지는 시스템이 생성합니다. 3개 시안 설명은 이 이미지가 생성되는 턴에 함께 작성하며, 시안 1~3 순서가 이미지 1~3과 일대일로 대응되도록 작성하세요.',
         '각 시안 설명에는 디자인 의도(2~3줄), 가치 우선순위와의 연결 근거, 기능 구조, 구현 난이도를 포함하세요. 시안 제목은 "디자인 시안 N: 이름" 형식으로 작성하세요.',
         '절대로 "[디자인 시안 N 선택]" 같은 대괄호 선택 버튼이나 "어떤 시안이 마음에 드시나요" 같은 선택 유도 문구를 본문에 쓰지 마세요. 시안 선택은 사용자가 이미지를 직접 클릭하고 확정하기 버튼을 눌러 진행하며, 시스템이 그 UI를 제공합니다.',
-        '이미지가 생성되지 않는 일반 응답 턴에서는 4개 시안을 새로 나열하지 마세요. 이미 시안이 제시된 상태라면 선택된 1안의 발전/부분 수정 또는 다음 단계 안내만 하세요.',
-        '후속 이미지가 필요하면 선택된 1안의 개선 렌더 1장만 생성하세요. 사용자가 명시적으로 새 대안 4개를 요청한 경우만 예외로 합니다.',
+        '이미지가 생성되지 않는 일반 응답 턴에서는 3개 시안을 새로 나열하지 마세요. 이미 시안이 제시된 상태라면 선택된 1안의 발전/부분 수정만 하세요.',
+        '후속 이미지가 필요하면 선택된 1안의 개선 렌더 1장만 생성하세요. 사용자가 명시적으로 새 대안 3개를 요청한 경우만 예외로 합니다.',
         '수정 가능 범위: 컬러 조정/디테일 조정/비례 미세 수정.',
         '수정 위험 범위: 1순위 가치 훼손 요소, 구조 안정성 붕괴 요소. 이 경우 Aidee가 수정 허용 여부를 판단하고 통제하세요.',
-        '사용자가 다음 단계 진행이나 기획안 생성을 요청하면 시안을 다시 제안하지 말고 STEP 6 프로젝트 기획안 생성으로 넘어갑니다.',
+        '사용자가 디자인 시안을 최종 확정하기 전에는 CMF 구간이나 다음 단계 진행을 안내하지 마세요.',
       ].join(' ')
-    case 'step_6_rfp':
+    case 'step_5_cmf':
       return [
-        '지금은 STEP 6 프로젝트 기획안 생성입니다. 이전 단계에서 확정된 정보만 사용하세요. 대화에 없는 내용을 추정하거나 추가하지 마세요.',
+        '지금은 STEP 5 의 5-4 색·소재·마감(CMF) 구간입니다. 중심 전문가: 스타일 디자이너.',
+        '시스템 프롬프트의 STEP 5 섹션에 있는 5-4 의 내용을 따르세요.',
+        '이 구간은 대화만 합니다. 이미지나 시안을 만들지 않습니다.',
+        '한 번에 하나씩 물으세요. 색 → 소재 → 마감 순서로 진행하세요.',
+        '5-4 에서 정해져야 할 내용이 모두 채워지면, 그 응답의 맨 끝에 반드시 <<AIDEE_CMF_READY>> 를 출력하세요. 이 표시를 출력해야 다음 구간으로 넘어갑니다.',
+        '아직 더 물을 것이 남아 있으면 <<AIDEE_CMF_READY>> 를 출력하지 마세요.',
+        '모든 응답에서 버튼·다음 단계 안내·시각화 언급을 포함하지 마세요.',
+      ].join(' ')
+    case 'step_5_3d':
+      return [
+        '지금은 STEP 5 의 5-5 3D 모델링 시안 구간입니다. 중심 전문가: 스타일 디자이너.',
+        '시스템 프롬프트의 STEP 5 섹션에 있는 5-5 의 내용을 따르세요.',
+        '5-3 에서 사용자가 확정한 2D 시안의 형태를 유지하고, 5-4 에서 정한 색·소재·마감만 다르게 적용한 안 두 가지를 다룹니다.',
+        '두 안의 차이를 각각 1~2문장으로 설명하세요.',
+        '사용자가 하나를 고르고 확정할 때까지 다음 단계로 넘어가지 마세요.',
+        '모든 응답에서 버튼·다음 단계 안내·시각화 언급을 포함하지 마세요.',
+      ].join(' ')
+    case 'step_7_rfp':
+      return [
+        '사용자가 STEP 7 내용을 확정하고 "프로젝트 기획안 시각화하기"를 선택한 후입니다. 이제 프로젝트 기획안을 생성합니다. 이전 단계에서 확정된 정보만 사용하세요. 대화에 없는 내용을 추정하거나 추가하지 마세요.',
         '반드시 아래 고정 형식으로 기획안을 출력하세요:',
         'A. 프로젝트 개요(개발 스케일/설계 우선순위/시장 방향/인증 조건)',
         'B. 페르소나(이전 생성 페르소나 카드 정보 요약)',
@@ -263,33 +310,177 @@ function getStageInstruction(stageKey: StageKey) {
         'D. 가치 다이어그램(기능 00%/감성 00%/심미 00%, 각 키워드 3개)',
         'E. 디자인 시안 확정(이전 확정 3D 이미지 정보 요약)',
         'F. AI 에이전트 종합 피드백: 제품 개발 가능성(높음/중간/낮음)+상세설명 3줄, 사업화 가능성(높음/중간/낮음)+상세설명 3줄, 기획전략가/엔지니어/사용자 리서처/스타일 디자이너 각 1줄 피드백.',
-        '기획안을 처음 생성하거나 사용자가 수정하기를 선택하면 1~8번 전체 내용을 다시 정리하세요. 생성 직후 STEP 7 진행을 묻지 말고 사용자가 수정 또는 확정을 선택할 때까지 기다리세요.',
-        '사용자가 기획안을 확정한 뒤에는 시스템이 Project Report 시각화 버튼을 제공합니다. 시각화가 완료되기 전에는 STEP 7 협력 파트너 매칭으로 넘어가지 마세요.',
-      ].join(' ')
-    case 'step_6_company':
-      return [
-        '지금은 STEP 7 협력 파트너 매칭입니다. 중심 전문가: 기획전략가.',
-        'STEP 6 프로젝트 기획안 생성이 완료된 이후에만 실행하세요. 추가 분석/비교/재질문 없이 확정된 정보만으로 판단하세요.',
-        '먼저 현재 프로젝트에 가장 필요한 협력 유형을 결정하세요: 디자인 고도화 단계→디자인 에이전시, 브랜드·런칭·시장 검증 단계→마케터, 시제품 제작 단계→목업 제작 업체.',
-        '판단 근거를 2~3줄로 설명한 뒤, 웹 검색으로 실제 존재하는 업체 3곳을 추천하세요.',
-        '각 업체는 업체명/특이사항(강점·전문분야)/전화번호/공식 홈페이지 URL을 모두 포함해야 합니다.',
-        '추정·가상 업체·연락처 불확실 업체·개인 블로그·포트폴리오 계정은 금지합니다. 대한민국 기준 지역 검색을 우선하고 최근 활동이 확인되는 업체만 추천하세요.',
+        '생성 완료 안내는 반드시 "프로젝트 기획안 생성이 완료되었습니다. 프로젝트 대화 프로세스가 종료되었습니다."로 고정하세요.',
       ].join(' ')
   }
 }
 
-export function buildSystemPrompt({
+type Step3PromptTopicKey =
+  | 'emotion'
+  | 'behavior'
+  | 'space'
+  | 'userProduct'
+  | 'existingTool'
+  | 'environment'
+  | 'otherPeople'
+  | 'timeRoutine'
+  | 'failureRecovery'
+
+export type Step3PromptTopicGuidance = {
+  operatingRules: string
+  questionIntent: string
+  criteria: string
+  deepDirections: string
+}
+
+const STEP3_PROMPT_TOPIC_HEADINGS: Record<Step3PromptTopicKey, string> = {
+  emotion: '3-2-1. 감정',
+  behavior: '3-2-2. 행동',
+  space: '3-2-3. 공간',
+  userProduct: '3-3-1. 사용자와 제품의 관계',
+  existingTool: '3-3-2. 기존 도구와의 관계',
+  environment: '3-3-3. 환경과의 관계',
+  otherPeople: '3-3-4. 다른 사람과의 관계',
+  timeRoutine: '3-3-5. 시간 및 루틴과의 관계',
+  failureRecovery: '3-3-6. 실패와 회복의 관계',
+}
+
+function getStep3PromptSection() {
+  const start = SYSTEM_PROMPT_TEMPLATE.indexOf('#### **STEP 3. 제품 사용자 정의**')
+  const end = SYSTEM_PROMPT_TEMPLATE.indexOf(
+    '##### **Persona Summary / Persona Card 템플릿**',
+    start
+  )
+  if (start < 0) return ''
+  return SYSTEM_PROMPT_TEMPLATE.slice(start, end > start ? end : undefined)
+}
+
+function getStep3PromptOperatingRules(section: string) {
+  const start = section.indexOf('[STEP 3 대화 운영 규칙]')
+  const end = section.indexOf('\n출력 형식', start)
+  if (start < 0) return ''
+  return section.slice(start, end > start ? end : undefined).trim()
+}
+
+function getStep3PromptTopicBlock(
+  section: string,
+  topic: Step3PromptTopicKey
+) {
+  const start = section.indexOf(STEP3_PROMPT_TOPIC_HEADINGS[topic])
+  if (start < 0) return ''
+  const nextHeading = section.slice(start + 1).search(/\n3-[23]-\d+\. /)
+  const personaStart = section.slice(start + 1).search(/\n4\. Persona Summary/)
+  const offsets = [nextHeading, personaStart].filter((value) => value >= 0)
+  const endOffset = offsets.length ? Math.min(...offsets) + start + 1 : section.length
+  return section.slice(start, endOffset).trim()
+}
+
+function getStep3PromptLabeledContent(
+  block: string,
+  label: '질문 의도' | '확인할 내용' | '심화 질문 방향'
+) {
+  const start = block.indexOf(label)
+  if (start < 0) return ''
+  const remainder = block.slice(start + label.length)
+  const nextLabel = remainder.search(/\n(?:확인할 내용|심화 질문 방향|참고|3-[23]-\d+\. |4\. Persona Summary)/)
+  return remainder.slice(0, nextLabel >= 0 ? nextLabel : undefined).trim()
+}
+
+export function getStep3PromptTopicGuidance(
+  topic: string
+): Step3PromptTopicGuidance {
+  const promptSection = getStep3PromptSection()
+  const topicKey = topic as Step3PromptTopicKey
+  const block = getStep3PromptTopicBlock(promptSection, topicKey)
+  const questionIntent = getStep3PromptLabeledContent(block, '질문 의도')
+  const criteria = getStep3PromptLabeledContent(block, '확인할 내용')
+  const deepDirections = getStep3PromptLabeledContent(block, '심화 질문 방향')
+  return {
+    operatingRules: getStep3PromptOperatingRules(promptSection),
+    questionIntent,
+    criteria,
+    deepDirections,
+  }
+}
+
+export function buildStep3ScopedSystemPrompt({
   activeExpert = 'aidee',
   currentStageKey,
+  topic,
   project,
   referenceImages,
 }: {
   activeExpert?: ExpertKey
   currentStageKey: StageKey
+  topic: string
+  project: ProjectContextRecord | null
+  referenceImages: ReferenceImageContextRecord[]
+}) {
+  const guidance = getStep3PromptTopicGuidance(topic)
+  const expertPromptBlock = getExpertPrompt(activeExpert)
+  const projectRequirements =
+    project?.requirements && typeof project.requirements === 'object'
+      ? { ...(project.requirements as Record<string, unknown>) }
+      : {}
+  delete projectRequirements._step1Progress
+  delete projectRequirements._step3Progress
+
+  return `
+${expertPromptBlock}
+
+[공통 규칙]
+- 한국어로 답하세요.
+- 내부 단계 key, 시스템 UI 마커, 버튼 동작을 사용자에게 설명하지 마세요.
+- 한 응답에는 현재 지정된 하위 주제의 질문 하나만 출력하세요.
+
+${guidance.operatingRules}
+
+[현재 STEP 3 하위 주제]
+- 현재 하위 주제: ${topic}
+- 질문 의도:
+${guidance.questionIntent || '(prompt.ts에서 질문 의도를 읽지 못했습니다.)'}
+- 확인할 내용:
+${guidance.criteria || '(prompt.ts에서 확인할 내용을 읽지 못했습니다.)'}
+- 심화 질문 방향:
+${guidance.deepDirections || '(prompt.ts에서 심화 질문 방향을 읽지 못했습니다.)'}
+
+[현재 단계]
+${currentStageKey}
+
+[프로젝트 정보]
+- 프로젝트명: ${project?.title || '제목 없음'}
+- requirements:
+${JSON.stringify(projectRequirements, null, 2)}
+
+[레퍼런스 이미지 분석]
+${buildReferenceContext(referenceImages)}
+
+[레퍼런스 기반 가이드라인]
+${buildReferenceGuidelineBlock(referenceImages)}
+`.trim()
+}
+
+export function buildSystemPrompt({
+  activeExpert = 'aidee',
+  currentAction = null,
+  currentStageKey,
+  additionalInstruction = '',
+  project,
+  referenceImages,
+}: {
+  activeExpert?: ExpertKey
+  currentAction?: ChatAction | null
+  currentStageKey: StageKey
+  additionalInstruction?: string
   project: ProjectContextRecord | null
   referenceImages: ReferenceImageContextRecord[]
 }) {
   const expertPromptBlock = getExpertPrompt(activeExpert)
+  const projectRequirements =
+    project?.requirements && typeof project.requirements === 'object'
+      ? { ...(project.requirements as Record<string, unknown>) }
+      : {}
+  delete projectRequirements._step1Progress
 
   return `
 ${SYSTEM_PROMPT_TEMPLATE}
@@ -306,12 +497,13 @@ ${expertPromptBlock}
 
 [현재 단계]
 ${currentStageKey}
-${getStageInstruction(currentStageKey)}
+${getStageInstruction(currentStageKey, currentAction)}
+${additionalInstruction}
 
 [프로젝트 정보]
 - 프로젝트명: ${project?.title || '제목 없음'}
 - requirements:
-${JSON.stringify(project?.requirements ?? {}, null, 2)}
+${JSON.stringify(projectRequirements, null, 2)}
 
 [레퍼런스 이미지 분석]
 ${buildReferenceContext(referenceImages)}

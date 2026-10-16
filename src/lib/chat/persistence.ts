@@ -12,11 +12,18 @@ import {
   extractPersonaCardBlock,
   type PersonaCardData,
 } from '@/lib/chat/persona-card'
-import { DEFAULT_STAGE_KEY, isKnownStageKey, type StageKey } from '@/lib/chat/stages'
+import {
+  DEFAULT_STAGE_KEY,
+  isKnownStageKey,
+  type ChatAction,
+  type StageKey,
+} from '@/lib/chat/stages'
 
 export type ChatRole = 'assistant' | 'system' | 'user'
 
 export type ChatMessageRecord = {
+  action?: ChatAction | null
+  availableActions?: ChatAction[]
   content: string
   created_at: string | null
   generatedImageBlock: GeneratedImageBlock | null
@@ -25,6 +32,7 @@ export type ChatMessageRecord = {
   role: ChatRole
   seq_order: number
   stageKey: StageKey
+  step1Completed?: boolean
 }
 
 type RawMessageRow = {
@@ -129,10 +137,106 @@ ${JSON.stringify({ stageKey })}
 <</AIDEE_STAGE>>`
 }
 
+const CHAT_ACTIONS: ChatAction[] = [
+  'confirm_artifact',
+  'confirm_step_2_team',
+  'confirm_process',
+  'confirm_moodboard',
+  'visualize_artifact',
+  'start_step_2',
+  'start_step_3',
+  'stay_in_step_1',
+  'stay_in_step_2',
+  'select_step5_shape',
+  'select_step5_form',
+]
+
+function isChatAction(value: unknown): value is ChatAction {
+  return typeof value === 'string' && CHAT_ACTIONS.includes(value as ChatAction)
+}
+
+function getMessageAction(content: string) {
+  const match = content.match(/<<AIDEE_ACTION>>\s*([\s\S]*?)\s*<<\/AIDEE_ACTION>>/i)
+
+  if (!match) {
+    return null
+  }
+
+  try {
+    const parsed = JSON.parse(match[1]) as { action?: unknown }
+    return isChatAction(parsed.action) ? parsed.action : null
+  } catch {
+    return null
+  }
+}
+
+function getAvailableActions(content: string) {
+  const match = content.match(
+    /<<AIDEE_AVAILABLE_ACTIONS>>\s*([\s\S]*?)\s*<<\/AIDEE_AVAILABLE_ACTIONS>>/i
+  )
+
+  if (!match) {
+    return []
+  }
+
+  try {
+    const parsed = JSON.parse(match[1]) as { actions?: unknown }
+    return Array.isArray(parsed.actions)
+      ? parsed.actions.filter(isChatAction)
+      : []
+  } catch {
+    return []
+  }
+}
+
+function appendInteractionBlocks({
+  action,
+  availableActions,
+  content,
+}: {
+  action?: ChatAction | null
+  availableActions?: ChatAction[]
+  content: string
+}) {
+  const blocks = [content]
+
+  if (action) {
+    blocks.push(
+      `<<AIDEE_ACTION>>\n${JSON.stringify({ action })}\n<</AIDEE_ACTION>>`
+    )
+  }
+
+  if (availableActions?.length) {
+    blocks.push(
+      `<<AIDEE_AVAILABLE_ACTIONS>>\n${JSON.stringify({ actions: availableActions })}\n<</AIDEE_AVAILABLE_ACTIONS>>`
+    )
+  }
+
+  return blocks.join('\n\n')
+}
+
 export function stripInternalBlocks(content: string) {
   return content
     .replace(/\n?<<AIDEE_STAGE>>[\s\S]*?<<\/AIDEE_STAGE>>/gi, '')
+    .replace(/\n?<<AIDEE_ACTION>>[\s\S]*?<<\/AIDEE_ACTION>>/gi, '')
+    .replace(
+      /\n?<<AIDEE_AVAILABLE_ACTIONS>>[\s\S]*?<<\/AIDEE_AVAILABLE_ACTIONS>>/gi,
+      ''
+    )
+    .replace(/\n?<<AIDEE_STEP_1_COMPLETE>>/gi, '')
+    .replace(/\n?<<AIDEE_MESSAGE_BREAK>>/gi, '')
+    .replace(
+      /^(?:\s*(?:#{1,6}\s*)?(?:\*{1,2}|_{1,2})?\s*(?:PILOT\s*:\s*\[[^\]\n]+\]|\[\s*PILOT\s*:\s*[^\]\n]+\])\s*(?:\*{1,2}|_{1,2})?\s*\n?)+/i,
+      ''
+    )
     .trim()
+}
+
+export function isStep1CompletionContent(content: string) {
+  return (
+    /<<AIDEE_STEP_1_COMPLETE>>/i.test(content) ||
+    /전체\s*개발\s*프로세스를\s*함께\s*확인해볼까요[?？]?/i.test(content)
+  )
 }
 
 export function mapMessageRow(row: RawMessageRow): ChatMessageRecord {
@@ -143,6 +247,8 @@ export function mapMessageRow(row: RawMessageRow): ChatMessageRecord {
     extractPersonaCardBlock(cleanedText)
 
   return {
+    action: getMessageAction(row.content),
+    availableActions: getAvailableActions(row.content),
     content: visibleText,
     created_at: row.created_at,
     generatedImageBlock: imageBlock,
@@ -153,6 +259,9 @@ export function mapMessageRow(row: RawMessageRow): ChatMessageRecord {
       : 'user',
     seq_order: row.seq_order ?? 0,
     stageKey: getMessageStage(row.content),
+    step1Completed:
+      getMessageStage(row.content) === 'step_1_idea' &&
+      isStep1CompletionContent(row.content),
   }
 }
 
@@ -178,6 +287,8 @@ export async function getProjectMessages({
 }
 
 export async function insertProjectMessage({
+  action,
+  availableActions,
   content,
   projectId,
   role,
@@ -186,6 +297,8 @@ export async function insertProjectMessage({
   supabase,
   userId,
 }: {
+  action?: ChatAction | null
+  availableActions?: ChatAction[]
   content: string
   projectId: string
   role: ChatRole
@@ -195,7 +308,10 @@ export async function insertProjectMessage({
   userId: string
 }) {
   const payload = {
-    content: appendStageBlock({ content, stageKey }),
+    content: appendStageBlock({
+      content: appendInteractionBlocks({ action, availableActions, content }),
+      stageKey,
+    }),
     project_id: projectId,
     role,
     seq_order: seqOrder,
