@@ -184,6 +184,7 @@ type ChatChoice = {
   key: 'A' | 'B' | 'C' | 'D'
   label: string
   value: string
+  action?: ChatAction
 }
 
 type Step5WidgetKind = 'shape' | 'form'
@@ -5334,59 +5335,30 @@ function DirectionResearchWidgets({
   )
 }
 
-function Step5ChoiceWidgets({
-  disabled,
-  kind,
-  onSelect,
-  selected,
-}: {
-  disabled: boolean
-  kind: Step5WidgetKind
-  onSelect: (value: string) => void
-  selected: boolean
-}) {
-  const widgets =
-    kind === 'shape'
-      ? [
-          ['1', '직선으로 둘러싸인 다각형', '삼각형·사각형처럼 곧은 선이 중심인 도형'],
-          ['2', '곡선으로 이루어진 도형', '원·타원처럼 부드러운 곡선이 중심인 도형'],
-          ['3', '직선과 곡선이 결합된 도형', '반원·둥근 모서리처럼 두 요소가 함께 있는 도형'],
-        ]
-      : [
-          ['1', '기하학적 형태', '규칙과 구조가 분명한 입체'],
-          ['2', '유기적 형태', '자연물처럼 곡선과 곡면이 이어지는 입체'],
-          ['3', '복합 형태', '여러 형태가 결합된 입체'],
-        ]
-
-  return (
-    <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-3">
-      {widgets.map(([index, title, description]) => (
-        <button
-          key={title}
-          type="button"
-          disabled={disabled || selected}
-          onClick={() => onSelect(title)}
-          className="min-h-28 rounded-[20px] border border-zinc-200 bg-white p-4 text-left shadow-sm transition hover:border-blue-200 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <span className="mb-3 flex h-7 w-7 items-center justify-center rounded-full bg-blue-600 font-['Inter'] text-sm font-bold text-white">
-            {index}
-          </span>
-          <span className="block font-['Pretendard'] text-sm font-bold text-neutral-900">
-            {title}
-          </span>
-          <span className="mt-1 block font-['Pretendard'] text-xs font-medium leading-5 text-zinc-500">
-            {description}
-          </span>
-        </button>
-      ))}
-    </div>
-  )
-}
-
 function getStep5WidgetKind(content: string): Step5WidgetKind | null {
   if (/<<AIDEE_STEP5_SHAPE_WIDGET>>/i.test(content)) return 'shape'
   if (/<<AIDEE_STEP5_FORM_WIDGET>>/i.test(content)) return 'form'
   return null
+}
+
+function buildStep5HintChoices(kind: Step5WidgetKind): ChatChoice[] {
+  const labels =
+    kind === 'shape'
+      ? [
+          '직선으로 둘러싸인 다각형',
+          '곡선으로 이루어진 도형',
+          '직선과 곡선이 결합된 도형',
+        ]
+      : ['기하학적 형태', '유기적 형태', '복합 형태']
+  const action: ChatAction =
+    kind === 'shape' ? 'select_step5_shape' : 'select_step5_form'
+
+  return labels.map((label, index) => ({
+    key: (['A', 'B', 'C'] as const)[index]!,
+    label,
+    value: label,
+    action,
+  }))
 }
 
 function StyleKeywordPickerCard({
@@ -5882,8 +5854,6 @@ function ChatBubble({
   const step5WidgetKind = !isUser
     ? getStep5WidgetKind(message.content)
     : null
-  const [locallySelectedStep5Widget, setLocallySelectedStep5Widget] =
-    useState(false)
   const styleKeywordPickerData =
     !isUser && message.id === latestStyleKeywordPickerMessageId
       ? parseStyleKeywordPickerData(message.content)
@@ -5935,16 +5905,21 @@ function ChatBubble({
     !isProcessCheckPrompt(displayContent) &&
     !isStageProceedPrompt(displayContent) &&
     isAssistantQuestion(displayContent)
+  const step5HintChoices =
+    !isUser && step5WidgetKind !== null
+      ? buildStep5HintChoices(step5WidgetKind)
+      : []
   const choices = isPersonaCardMessage
     ? []
     : choiceSplit.choices.length > 0
       ? choiceSplit.choices
-      : shouldShowHints
-        ? buildFallbackHintChoices(displayContent)
-        : []
-  const isStep5WidgetSelected =
-    locallySelectedStep5Widget ||
-    (step5WidgetKind !== null && selectedStep5WidgetKinds.has(step5WidgetKind))
+      : step5HintChoices.length > 0
+        ? step5HintChoices
+        : shouldShowHints
+          ? buildFallbackHintChoices(displayContent)
+          : []
+  const isStep5HintSelected =
+    step5WidgetKind !== null && selectedStep5WidgetKinds.has(step5WidgetKind)
 
   useEffect(() => {
     if (!meshyTaskId || meshyStatus === 'SUCCEEDED' || meshyStatus === 'FAILED') return
@@ -6368,23 +6343,6 @@ function ChatBubble({
         />
       ) : null}
 
-      {step5WidgetKind ? (
-        <Step5ChoiceWidgets
-          disabled={disabled}
-          kind={step5WidgetKind}
-          selected={isStep5WidgetSelected}
-          onSelect={(value) => {
-            setLocallySelectedStep5Widget(true)
-            onChoice(
-              value,
-              step5WidgetKind === 'shape'
-                ? 'select_step5_shape'
-                : 'select_step5_form'
-            )
-          }}
-        />
-      ) : null}
-
       {styleKeywordPickerData ? (
         <div className="flex w-full flex-col gap-4">
           {STYLE_KEYWORD_CATEGORIES.map(({ key, english }) => (
@@ -6517,7 +6475,7 @@ function ChatBubble({
         <div className="flex w-full justify-end">
           <button
             type="button"
-            disabled={disabled}
+            disabled={disabled || isStep5HintSelected}
             onClick={() => {
               setHintModalOpen(true)
               setSelectedHintIndex(null)
@@ -6976,7 +6934,8 @@ function ChatBubble({
                 disabled={selectedHintIndex === null || disabled}
                 onClick={() => {
                   if (selectedHintIndex !== null) {
-                    onChoice(choices[selectedHintIndex]!.label)
+                    const choice = choices[selectedHintIndex]!
+                    onChoice(choice.label, choice.action)
                     setHintModalOpen(false)
                   }
                 }}
