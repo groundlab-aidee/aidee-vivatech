@@ -143,6 +143,7 @@ const CHAT_ACTIONS: ChatAction[] = [
   'confirm_process',
   'confirm_moodboard',
   'visualize_artifact',
+  'confirm_form_design_summary',
   'start_step_2',
   'start_step_3',
   'stay_in_step_1',

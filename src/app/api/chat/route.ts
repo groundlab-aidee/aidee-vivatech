@@ -152,6 +152,9 @@ type ArtifactType =
   | 'moodboard'
   | 'design'
   | 'modeling'
+  | 'form_design'
+  | 'marketing_budget'
+  | 'development_timeline'
 
 type StyleKeywordSelections = {
   color: string[]
@@ -207,6 +210,7 @@ function normalizeChatAction(value: unknown): ChatAction | null {
     value === 'select_step5_shape' ||
     value === 'select_step5_form' ||
     value === 'visualize_artifact'
+    || value === 'confirm_form_design_summary'
     ? value
     : null
 }
@@ -283,6 +287,9 @@ function normalizeArtifactType(value: unknown): ArtifactType | null {
     value === 'moodboard' ||
     value === 'design' ||
     value === 'modeling'
+    || value === 'form_design'
+    || value === 'marketing_budget'
+    || value === 'development_timeline'
     ? value
     : null
 }
@@ -3622,6 +3629,8 @@ export async function POST(request: Request) {
             ? '시각화 생성 요청'
             : requestedAction === 'visualize_artifact' && artifactType === 'design'
               ? '2D 렌더링 시안이 확정되고 시각화되었습니다. 이제 CMF 대화를 시작하세요.'
+              : requestedAction === 'visualize_artifact' && artifactType === 'form_design'
+                ? 'Form Design 시각화가 완료되었습니다. 5-0-5 비례 대화를 이어가세요.'
               : requestedAction === 'visualize_artifact'
                 ? artifactType === 'keyword_relationship'
                   ? '확정된 내용을 시각화한 뒤 다음 단계 안내를 이어가세요.'
@@ -3793,6 +3802,14 @@ export async function POST(request: Request) {
     })
 
     if (
+      requestedAction === 'confirm_form_design_summary' &&
+      requestedStageKey === 'step_5_design' &&
+      hasStep3ArtifactEvent(existingMessages, 'form_design', 'visualized')
+    ) {
+      currentStageKey = 'step_5_style'
+    }
+
+    if (
       ((requestedAction === 'confirm_artifact' && artifactType === 'moodboard') ||
         requestedAction === 'confirm_moodboard') &&
       requestedStageKey === 'step_5_style' &&
@@ -3847,7 +3864,9 @@ export async function POST(request: Request) {
       requestedAction === 'visualize_artifact' &&
       artifactType &&
       artifactMessageId &&
+      (artifactType === 'form_design' ||
       !hasStep3ArtifactEvent(existingMessages, artifactType, 'visualized')
+      )
     ) {
       const visualizationEvent = await insertProjectMessage({
         action: 'visualize_artifact',
@@ -3865,6 +3884,13 @@ export async function POST(request: Request) {
         userId: user.id,
       })
       existingMessages.push(visualizationEvent)
+    }
+
+    if (
+      (requestedAction === 'confirm_artifact' || requestedAction === 'visualize_artifact') &&
+      (artifactType === 'marketing_budget' || artifactType === 'development_timeline')
+    ) {
+      return NextResponse.json({ currentStageKey, message: null, messages: [], nextStageKey: currentStageKey, userMessage: null })
     }
 
     const step1ConversationMessages = [

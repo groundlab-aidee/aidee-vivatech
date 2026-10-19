@@ -30,9 +30,15 @@ import {
 } from '@/lib/chat/experts'
 import type { GeneratedImagePurpose, UnsplashImageMeta } from '@/lib/chat/image-blocks'
 import type { PersonaCardData } from '@/lib/chat/persona-card'
+import { extractMarketingBudgetData, type MarketingBudgetData } from '@/lib/chat/marketing-budget'
 import { MoodboardCandidates } from '@/components/chat/MoodboardCandidates'
 import { MoodboardGrid, type MoodboardGridImage } from '@/components/chat/MoodboardGrid'
 import { MoodboardModal } from '@/components/moodboard/MoodboardModal'
+import { Step5CombinationGrid, type Step5Combination } from '@/components/project/Step5CombinationGrid'
+import { FormDesignModal } from '@/components/project/FormDesignBoard'
+import { MarketingBudgetModal } from '@/components/project/MarketingBudgetModal'
+import { DevelopmentTimelineModal } from '@/components/project/DevelopmentTimelineModal'
+import { extractDevelopmentTimelineData, type DevelopmentTimelineData } from '@/lib/chat/development-timeline'
 import { extractRfpJsonBlock, type RfpDocument } from '@/lib/chat/rfp'
 import {
   getLaterStageKey,
@@ -67,6 +73,8 @@ declare module 'react' {
 
 type ProjectChatContainerProps = {
   initialMessages: ChatMessageRecord[]
+  initialStep5Combination: Step5Combination | null
+  initialStep5CombinationHistory: Step5Combination[]
   initialStageKey: StageKey
   isNewProject: boolean
   projectId: string
@@ -122,6 +130,45 @@ function isStep2EntryAssistantMessage(message: ChatMessageRecord) {
   )
 }
 
+function getFormDesignVisualizationKey(messages: ChatMessageRecord[]) {
+  for (const message of [...messages].reverse()) {
+    if (message.role !== 'system' || !message.content.includes('AIDEE_ARTIFACT_EVENT')) continue
+    const block = message.content.match(/<<AIDEE_ARTIFACT_EVENT>>\s*([\s\S]*?)\s*<</)
+    if (!block) continue
+    try {
+      const event = JSON.parse(block[1]) as { artifactType?: string; artifactMessageId?: string; eventType?: string }
+      if (event.artifactType === 'form_design' && event.eventType === 'visualized') return event.artifactMessageId ?? null
+    } catch {}
+  }
+  return null
+}
+
+function getMarketingBudgetEventId(messages: ChatMessageRecord[], eventType: 'confirmed' | 'visualized') {
+  for (const message of [...messages].reverse()) {
+    if (message.role !== 'system' || !message.content.includes('AIDEE_ARTIFACT_EVENT')) continue
+    const block = message.content.match(/<<AIDEE_ARTIFACT_EVENT>>\s*([\s\S]*?)\s*<</)
+    if (!block) continue
+    try {
+      const event = JSON.parse(block[1]) as { artifactType?: string; artifactMessageId?: string; eventType?: string }
+      if (event.artifactType === 'marketing_budget' && event.eventType === eventType) return event.artifactMessageId ?? null
+    } catch {}
+  }
+  return null
+}
+
+function getDevelopmentTimelineEventId(messages: ChatMessageRecord[], eventType: 'confirmed' | 'visualized') {
+  for (const message of [...messages].reverse()) {
+    if (message.role !== 'system' || !message.content.includes('AIDEE_ARTIFACT_EVENT')) continue
+    const block = message.content.match(/<<AIDEE_ARTIFACT_EVENT>>\s*([\s\S]*?)\s*<</)
+    if (!block) continue
+    try {
+      const event = JSON.parse(block[1]) as { artifactType?: string; artifactMessageId?: string; eventType?: string }
+      if (event.artifactType === 'development_timeline' && event.eventType === eventType) return event.artifactMessageId ?? null
+    } catch {}
+  }
+  return null
+}
+
 type DirectionArtifactKind =
   | 'brand_positioning'
   | 'consumption_keywords'
@@ -166,6 +213,9 @@ type ArtifactType =
   | 'moodboard'
   | 'design'
   | 'modeling'
+  | 'form_design'
+  | 'marketing_budget'
+  | 'development_timeline'
 
 type KeywordCardData = {
   description: string
@@ -212,6 +262,9 @@ type LibraryArtifactKind =
   | 'consumption_keywords'
   | 'mood_board'
   | 'rendering'
+  | 'form_design'
+  | 'marketing_budget'
+  | 'development_timeline'
   | 'modeling'
   | 'project_report'
 
@@ -273,6 +326,9 @@ const LIBRARY_ARTIFACTS: LibraryArtifact[] = [
   { kind: 'brand_positioning', title: 'Positioning Map: Brand' },
   { kind: 'mood_board', title: 'Mood Board' },
   { kind: 'rendering', title: '3D Design: Rendering' },
+  { kind: 'form_design', title: 'Form Design' },
+  { kind: 'marketing_budget', title: 'Marketing Budget' },
+  { kind: 'development_timeline', title: 'Product Development Timeline' },
   { kind: 'modeling', title: '3D Design: Modeling' },
   { kind: 'project_report', title: 'Project Report' },
 ]
@@ -388,6 +444,10 @@ function stripInternalBlocksForDisplay(text: string) {
       ''
     )
     .replace(/\n?<<AIDEE_STEP5_(?:SHAPE|FORM)_WIDGET>>/g, '')
+    .replace(/\n?<<AIDEE_STEP5_COMBINATION_PREVIEW>>/g, '')
+    .replace(/\n?<<AIDEE_STEP5_FORM_SUMMARY>>/g, '')
+    .replace(/\n?<<AIDEE_MARKETING_BUDGET>>[\s\S]*?(?:\n?<<\/AIDEE_MARKETING_BUDGET>>|$)/gi, '')
+    .replace(/\n?<<AIDEE_DEVELOPMENT_TIMELINE>>[\s\S]*?(?:\n?<<\/AIDEE_DEVELOPMENT_TIMELINE>>|$)/gi, '')
     .replace(
       /\n?<<AIDEE_DIRECTION_CARD:[\s\S]*?<<\/AIDEE_DIRECTION_CARD>>/g,
       ''
@@ -1204,6 +1264,8 @@ function isStep7CompletionPrompt(content: string) {
 
 export function ProjectChatContainer({
   initialMessages,
+  initialStep5Combination,
+  initialStep5CombinationHistory,
   initialStageKey,
   isNewProject,
   projectId,
@@ -1219,6 +1281,28 @@ export function ProjectChatContainer({
   const messageScrollRef = useRef<HTMLDivElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const [messages, setMessages] = useState(initialMessages)
+  const [step5Combination, setStep5Combination] = useState<Step5Combination | null>(() => {
+    if (initialStep5Combination) return initialStep5Combination
+    const shape = [...initialMessages].reverse().find((message) => message.role === 'user' && message.action === 'select_step5_shape')?.content
+    const form = [...initialMessages].reverse().find((message) => message.role === 'user' && message.action === 'select_step5_form')?.content
+    return shape && form ? { shape, form } : null
+  })
+  const [step5CombinationHistory, setStep5CombinationHistory] = useState<Step5Combination[]>(() =>
+    initialStep5CombinationHistory.length > 0
+      ? initialStep5CombinationHistory
+      : initialStep5Combination ? [initialStep5Combination] : []
+  )
+  const [step5EditOpen, setStep5EditOpen] = useState(false)
+  const [step5Draft, setStep5Draft] = useState<Step5Combination | null>(null)
+  const [step5Saving, setStep5Saving] = useState(false)
+  const [formDesignModalOpen, setFormDesignModalOpen] = useState(false)
+  const [latestFormDesignKey, setLatestFormDesignKey] = useState<string | null>(() => getFormDesignVisualizationKey(initialMessages))
+  const [confirmedMarketingBudgetId, setConfirmedMarketingBudgetId] = useState<string | null>(() => getMarketingBudgetEventId(initialMessages, 'confirmed'))
+  const [visualizedMarketingBudgetId, setVisualizedMarketingBudgetId] = useState<string | null>(() => getMarketingBudgetEventId(initialMessages, 'visualized'))
+  const [marketingBudgetModalData, setMarketingBudgetModalData] = useState<MarketingBudgetData | null>(null)
+  const [confirmedDevelopmentTimelineId, setConfirmedDevelopmentTimelineId] = useState<string | null>(() => getDevelopmentTimelineEventId(initialMessages, 'confirmed'))
+  const [visualizedDevelopmentTimelineId, setVisualizedDevelopmentTimelineId] = useState<string | null>(() => getDevelopmentTimelineEventId(initialMessages, 'visualized'))
+  const [developmentTimelineModalData, setDevelopmentTimelineModalData] = useState<DevelopmentTimelineData | null>(null)
   const [stageKey, setStageKey] = useState(initialStageKey)
   const activeExpert = sidebarState.activeExpert
   const setActiveExpert = useCallback(
@@ -1304,6 +1388,75 @@ export function ProjectChatContainer({
     () => messages.filter((message) => message.role !== 'system'),
     [messages]
   )
+  const step5PreviewReady = step5CombinationHistory.length > 0 || visibleMessages.some(
+    (message) => message.role === 'assistant' && /<<AIDEE_STEP5_COMBINATION_PREVIEW>>/i.test(message.content)
+  )
+  const hasFormDesignVisualization = latestFormDesignKey !== null
+  const isCurrentCombinationVisualized = Boolean(
+    step5Combination && latestFormDesignKey === `${step5Combination.shape}|||${step5Combination.form}`
+  )
+
+  async function confirmStep5Combination() {
+    if (!step5Draft || step5Saving) return
+    setStep5Saving(true)
+    try {
+      const response = await fetch('/api/projects/step5-combination', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId, ...step5Draft, previousCombination: step5Combination }),
+      })
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.error || '조형 조합을 저장하지 못했습니다.')
+      setStep5Combination(step5Draft)
+      setStep5CombinationHistory(Array.isArray(result.history) ? result.history : [...step5CombinationHistory, step5Draft])
+      setStep5EditOpen(false)
+      setStep5Draft(null)
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : '조형 조합을 저장하지 못했습니다.')
+    } finally {
+      setStep5Saving(false)
+    }
+  }
+
+  async function visualizeStep5Combination() {
+    if (!step5Combination || step5Saving || isCurrentCombinationVisualized) return
+    setStep5Saving(true)
+    try {
+      const saved = await fetch('/api/projects/step5-combination', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId, ...step5Combination, saveOnly: true }),
+      })
+      const result = await saved.json()
+      if (!saved.ok) throw new Error(result.error || '조형 선택을 저장하지 못했습니다.')
+      setFormDesignModalOpen(true)
+      const response = await requestAssistantResponse({
+        action: 'visualize_artifact', artifactMessageId: `${step5Combination.shape}|||${step5Combination.form}`,
+        artifactType: 'form_design', message: '',
+      })
+      if (response) setLatestFormDesignKey(`${step5Combination.shape}|||${step5Combination.form}`)
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Form Design을 시각화하지 못했습니다.')
+    } finally {
+      setStep5Saving(false)
+    }
+  }
+
+  function visualizeMarketingBudget(data: MarketingBudgetData, messageId: string) {
+    setVisualizedMarketingBudgetId(messageId)
+    setMarketingBudgetModalData(data)
+    void requestAssistantResponse({
+      action: 'visualize_artifact', artifactMessageId: messageId,
+      artifactType: 'marketing_budget', message: '', silent: true,
+    })
+  }
+
+  function visualizeDevelopmentTimeline(data: DevelopmentTimelineData, messageId: string) {
+    setVisualizedDevelopmentTimelineId(messageId)
+    setDevelopmentTimelineModalData(data)
+    void requestAssistantResponse({
+      action: 'visualize_artifact', artifactMessageId: messageId,
+      artifactType: 'development_timeline', message: '', silent: true,
+    })
+  }
 
   useEffect(() => {
     const restoreTimer = window.setTimeout(() => {
@@ -1764,6 +1917,13 @@ export function ProjectChatContainer({
   const availableArtifacts = useMemo(() => {
     const availableKinds = new Set<LibraryArtifactKind>()
 
+    if (visualizedMarketingBudgetId) availableKinds.add('marketing_budget')
+    if (visualizedDevelopmentTimelineId) availableKinds.add('development_timeline')
+
+    if (hasFormDesignVisualization) {
+      availableKinds.add('form_design')
+    }
+
     if (latestProjectDirection) {
       availableKinds.add('project_direction')
     }
@@ -1824,6 +1984,9 @@ export function ProjectChatContainer({
       availableKinds.has(artifact.kind)
     )
   }, [
+    hasFormDesignVisualization,
+    visualizedMarketingBudgetId,
+    visualizedDevelopmentTimelineId,
     hasVisualizedLatestRfp,
     latestProjectDirection,
     latestRfp,
@@ -2707,6 +2870,16 @@ export function ProjectChatContainer({
             {visibleMessages.length > 0 ? (
               visibleMessages.map((message) => {
                 const isStep2Entry = isStep2EntryAssistantMessage(message)
+                const marketingBudget = message.role === 'assistant'
+                  ? extractMarketingBudgetData(message.content)
+                  : null
+                const isMarketingBudgetConfirmed = confirmedMarketingBudgetId === message.id
+                const isMarketingBudgetVisualized = visualizedMarketingBudgetId === message.id
+                const developmentTimeline = message.role === 'assistant'
+                  ? extractDevelopmentTimelineData(message.content)
+                  : null
+                const isDevelopmentTimelineConfirmed = confirmedDevelopmentTimelineId === message.id
+                const isDevelopmentTimelineVisualized = visualizedDevelopmentTimelineId === message.id
 
                 return (
                 <div key={message.id} className="chat-flow-item contents">
@@ -2790,6 +2963,18 @@ export function ProjectChatContainer({
                   selectedStep5WidgetKinds={selectedStep5WidgetKinds}
                 />
 
+                  {marketingBudget ? <div className="flex w-full justify-end gap-2">
+                    {!isMarketingBudgetConfirmed ? <button type="button" disabled={isPending} onClick={() => { setConfirmedMarketingBudgetId(message.id); confirmArtifact('marketing_budget', message.id) }} className="rounded-full bg-[#DDF444] px-5 py-2 text-sm font-semibold text-black disabled:opacity-50">확정하기</button> : null}
+                    {isMarketingBudgetConfirmed && !isMarketingBudgetVisualized ? <button type="button" disabled={isPending} onClick={() => visualizeMarketingBudget(marketingBudget, message.id)} className="rounded-full bg-[#DDF444] px-5 py-2 text-sm font-semibold text-black disabled:opacity-50">시각화하기</button> : null}
+                    {isMarketingBudgetVisualized ? <button type="button" onClick={() => setMarketingBudgetModalData(marketingBudget)} className="rounded-full bg-blue-600 px-5 py-2 text-sm font-semibold text-white">Marketing Budget ✓</button> : null}
+                  </div> : null}
+
+                  {developmentTimeline ? <div className="flex w-full justify-end gap-2">
+                    {!isDevelopmentTimelineConfirmed ? <button type="button" disabled={isPending} onClick={() => { setConfirmedDevelopmentTimelineId(message.id); confirmArtifact('development_timeline', message.id) }} className="rounded-full bg-[#DDF444] px-5 py-2 text-sm font-semibold text-black disabled:opacity-50">확정하기</button> : null}
+                    {isDevelopmentTimelineConfirmed && !isDevelopmentTimelineVisualized ? <button type="button" disabled={isPending} onClick={() => visualizeDevelopmentTimeline(developmentTimeline, message.id)} className="rounded-full bg-[#DDF444] px-5 py-2 text-sm font-semibold text-black disabled:opacity-50">시각화하기</button> : null}
+                    {isDevelopmentTimelineVisualized ? <button type="button" onClick={() => setDevelopmentTimelineModalData(developmentTimeline)} className="rounded-full bg-blue-600 px-5 py-2 text-sm font-semibold text-white">Product Development Timeline ✓</button> : null}
+                  </div> : null}
+
                   {isStep2Entry ? (
                     <div className="step-2-agent-customization flex w-full flex-col gap-4">
                       <div className="step-2-agent-customization-list grid w-full grid-cols-4 gap-4">
@@ -2830,9 +3015,33 @@ export function ProjectChatContainer({
               </div>
             )}
 
+            {step5PreviewReady && step5CombinationHistory.length > 0 ? step5CombinationHistory.map((combination, index) => (
+              <div key={`step5-combination-${index}`} className="flex w-full max-w-xl flex-col items-start gap-2">
+                <Step5CombinationGrid value={combination} />
+                <button type="button" onClick={() => { setStep5Draft(step5Combination ?? combination); setStep5EditOpen(true) }} className="rounded-full bg-blue-600 px-5 py-2 text-sm font-semibold text-white">수정하기</button>
+                {index === step5CombinationHistory.length - 1 && !isCurrentCombinationVisualized ? <button type="button" disabled={step5Saving} onClick={() => void visualizeStep5Combination()} className="rounded-full bg-[#DDF444] px-5 py-2 text-sm font-semibold text-black disabled:opacity-50">시각화하기</button> : null}
+              </div>
+            )) : step5PreviewReady && step5Combination ? (
+              <div className="flex w-full max-w-xl flex-col items-start gap-2">
+                <Step5CombinationGrid value={step5Combination} />
+                <button type="button" onClick={() => { setStep5Draft(step5Combination); setStep5EditOpen(true) }} className="rounded-full bg-blue-600 px-5 py-2 text-sm font-semibold text-white">수정하기</button>
+                {!isCurrentCombinationVisualized ? <button type="button" disabled={step5Saving} onClick={() => void visualizeStep5Combination()} className="rounded-full bg-[#DDF444] px-5 py-2 text-sm font-semibold text-black disabled:opacity-50">시각화하기</button> : null}
+              </div>
+            ) : null}
+
             {isPending ? <AssistantTypingBubble /> : null}
           </div>
         </section>
+
+        {step5EditOpen && step5Draft ? (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/30 p-4" onClick={() => { setStep5EditOpen(false); setStep5Draft(null) }}>
+            <section role="dialog" aria-modal="true" aria-label="조형 미리보기 수정" className="w-full max-w-3xl rounded-2xl bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
+              <div className="mb-4 flex items-center justify-between"><h2 className="text-lg font-bold">조형 미리보기 수정</h2><button type="button" aria-label="닫기" onClick={() => { setStep5EditOpen(false); setStep5Draft(null) }} className="rounded-lg px-3 py-1 text-zinc-500 hover:bg-zinc-100">닫기</button></div>
+              <Step5CombinationGrid value={step5Draft} interactive onChange={setStep5Draft} />
+              <div className="mt-5 flex justify-end"><button type="button" disabled={step5Saving} onClick={() => void confirmStep5Combination()} className="rounded-full bg-blue-600 px-6 py-2.5 text-sm font-semibold text-white disabled:opacity-50">{step5Saving ? '저장 중…' : '확정하기'}</button></div>
+            </section>
+          </div>
+        ) : null}
 
         <div className="shrink-0 px-[clamp(24px,3.7svh,40px)] pb-[clamp(16px,2.22svh,24px)] pt-2">
           {errorMessage ? (
@@ -3010,6 +3219,22 @@ export function ProjectChatContainer({
       <LibraryPanel
         artifacts={availableArtifacts}
         onSelectArtifact={(kind) => {
+          if (kind === 'marketing_budget') {
+            const summary = [...visibleMessages].reverse().find((message) => message.role === 'assistant' && extractMarketingBudgetData(message.content))
+            const data = summary ? extractMarketingBudgetData(summary.content) : null
+            if (data) setMarketingBudgetModalData(data)
+            return
+          }
+          if (kind === 'development_timeline') {
+            const summary = [...visibleMessages].reverse().find((message) => message.role === 'assistant' && extractDevelopmentTimelineData(message.content))
+            const data = summary ? extractDevelopmentTimelineData(summary.content) : null
+            if (data) setDevelopmentTimelineModalData(data)
+            return
+          }
+          if (kind === 'form_design') {
+            setFormDesignModalOpen(true)
+            return
+          }
           if (kind === 'project_direction') {
             return
           }
@@ -3102,6 +3327,9 @@ export function ProjectChatContainer({
         onClose={() => setSelectedArtifactKind(null)}
         projectDirection={latestProjectDirection}
       />
+      {formDesignModalOpen && step5Combination ? <FormDesignModal value={step5Combination} onClose={() => setFormDesignModalOpen(false)} /> : null}
+      {marketingBudgetModalData ? <MarketingBudgetModal data={marketingBudgetModalData} onClose={() => setMarketingBudgetModalData(null)} /> : null}
+      {developmentTimelineModalData ? <DevelopmentTimelineModal data={developmentTimelineModalData} onClose={() => setDevelopmentTimelineModalData(null)} /> : null}
 
       <PersonaCardModal
         data={personaCardModalData}
@@ -5843,6 +6071,7 @@ function ChatBubble({
     )
   }
   const isUser = message.role === 'user'
+  const isStep5FormSummary = !isUser && /<<AIDEE_STEP5_FORM_SUMMARY>>/i.test(message.content)
   const rfpBlock = extractRfpJsonBlock(message.content)
   const projectDirection = !isUser
     ? extractProjectDirectionCard(rfpBlock.cleanedText)
@@ -6881,6 +7110,8 @@ function ChatBubble({
           ) : null}
         </div>
       ) : null}
+
+      {isStep5FormSummary ? <div className="flex w-full justify-end"><button type="button" disabled={disabled} onClick={() => onChoice('5-0-6 정리를 확정합니다.', 'confirm_form_design_summary')} className="rounded-[30px] bg-[#DDF444] px-5 py-2 text-sm font-semibold text-black disabled:opacity-50">확정하기</button></div> : null}
 
       {hintModalOpen && choices.length > 0 ? (
         <div
