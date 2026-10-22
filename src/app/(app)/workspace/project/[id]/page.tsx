@@ -6,7 +6,7 @@ import { getProjectForUser, getProjectMessages } from '@/lib/chat/persistence'
 import { DEFAULT_STAGE_KEY } from '@/lib/chat/stages'
 import { createClient } from '@/lib/supabase/server'
 import { getResolvedAvatarUrl } from '@/lib/supabase/user-metadata'
-import { STEP5_FORMS, STEP5_SHAPES } from '@/components/project/Step5CombinationGrid'
+import { STEP5_FORMS, STEP5_SHAPES } from '@/lib/chat/step5-combination'
 
 type ProjectPageProps = {
   params: Promise<{
