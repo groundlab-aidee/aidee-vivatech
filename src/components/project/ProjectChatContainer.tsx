@@ -5506,9 +5506,11 @@ function KeywordChip({
 }
 
 function DirectionResearchWidgets({
+  confirmedKinds,
   disabled,
   onSelect,
 }: {
+  confirmedKinds: Set<DirectionArtifactKind>
   disabled: boolean
   onSelect: (kind: DirectionArtifactKind) => void
 }) {
@@ -5544,7 +5546,7 @@ function DirectionResearchWidgets({
         <button
           key={widget.kind}
           type="button"
-          disabled={disabled}
+          disabled={disabled || confirmedKinds.has(widget.kind)}
           onClick={() => onSelect(widget.kind)}
           className="min-h-28 rounded-[20px] border border-zinc-200 bg-white p-4 text-left shadow-sm transition hover:border-blue-200 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
         >
@@ -6559,6 +6561,7 @@ function ChatBubble({
 
       {directionWidgets ? (
         <DirectionResearchWidgets
+          confirmedKinds={confirmedDirectionKinds}
           disabled={disabled}
           onSelect={(kind) => {
             const labelMap: Record<DirectionArtifactKind, string> = {

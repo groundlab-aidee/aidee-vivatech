@@ -2088,19 +2088,56 @@ function isDirectionResearchRequest(text: string) {
   )
 }
 
+const DIRECTION_RESEARCH_ARTIFACT_TYPES = [
+  'direction_market_size',
+  'direction_consumption_keywords',
+  'direction_brand_positioning',
+] as const
+
+function hasPendingStep4ResearchQuestion(
+  messages: Array<{ content: string; role?: string }>
+) {
+  const latestVisualizationIndex = messages.reduce(
+    (latestIndex, message, index) => {
+      if (message.role !== 'system') return latestIndex
+      const event = getArtifactEvent(message.content)
+      return event &&
+        event.eventType === 'visualized' &&
+        DIRECTION_RESEARCH_ARTIFACT_TYPES.includes(
+          event.artifactType as (typeof DIRECTION_RESEARCH_ARTIFACT_TYPES)[number]
+        )
+        ? index
+        : latestIndex
+    },
+    -1
+  )
+
+  if (latestVisualizationIndex < 0) return false
+
+  const messagesAfterVisualization = messages.slice(latestVisualizationIndex + 1)
+  return (
+    messagesAfterVisualization.some((message) => message.role === 'assistant') &&
+    !messagesAfterVisualization.some((message) => message.role === 'user')
+  )
+}
+
 function hasStep4NextResearchQuestion(text: string) {
-  return /(?:다음|남은|다른)\s*(?:리서치|조사).*(?:진행|시작|확인|살펴|볼까요|할까요)/i.test(
+  return /(?:다음|남은|다른)(?:\s*으로)?[\s\S]{0,30}(?:리서치|조사).*(?:진행|시작|확인|살펴|볼까요|할까요)/i.test(
     text
   )
 }
 
 function shouldKeepStep4ResearchWidgets({
+  allowWidgets,
   text,
   messages,
 }: {
+  allowWidgets: boolean
   text: string
   messages: Array<{ content: string; role: string; stageKey?: StageKey }>
 }) {
+  if (!allowWidgets) return false
+
   const hasStep4AssistantResponse = messages.some(
     (message) =>
       message.role === 'assistant' && message.stageKey === 'step_4_direction'
@@ -3619,9 +3656,42 @@ export async function POST(request: Request) {
       styleKeywordSelectionMessage,
       isInitialEntry,
     })
+    const step4ResearchFollowupInstruction =
+      requestedStageKey === 'step_4_direction' &&
+      userMessage &&
+      !isDirectionResearchRequest(userMessage) &&
+      hasPendingStep4ResearchQuestion(existingMessages)
+        ? [
+            '사용자가 방금 진행한 리서치 질문에 답했습니다.',
+            '답변을 짧게 인정한 뒤, 다음 리서치를 진행할지 묻는 문장만 이어서 출력하세요.',
+            '아직 진행하지 않은 리서치가 있을 때만 <<AIDEE_DIRECTION_WIDGETS>>를 출력하세요.',
+            '세 가지 리서치를 모두 진행했다면 위젯을 출력하지 마세요.',
+            '시각화 내용과 이전 리서치 결과를 다시 설명하지 마세요.',
+          ].join('\n')
+        : ''
+    const directionResearchVisualizationInstruction =
+      requestedAction === 'visualize_artifact' &&
+      (artifactType === 'direction_market_size' ||
+        artifactType === 'direction_consumption_keywords' ||
+        artifactType === 'direction_brand_positioning')
+        ? [
+            '시각화는 시스템이 처리했습니다.',
+            '시각화 내용, 이전 리서치 결과, 확정 안내를 설명하지 마세요.',
+            `방금 확정한 ${
+              artifactType === 'direction_market_size'
+                ? '시장 규모'
+                : artifactType === 'direction_consumption_keywords'
+                  ? '소비 트렌드'
+                  : '경쟁사'
+            } 리서치 내용을 바탕으로 사용자에게 선택지가 있는 질문을 정확히 하나만 하세요.`,
+            '이번 응답에서는 이 리서치에 대한 질문과 선택지만 출력하세요. 다음 리서치 진행 여부를 묻거나 위젯을 출력하지 마세요.',
+            '위젯 마커의 내용 자체나 내부 처리 방식을 사용자에게 설명하지 마세요.',
+          ].join('\n')
+        : ''
     const messageForModel = isInitialEntry
         ? buildInitialUserPrompt(project)
-      : userMessage ||
+      : step4ResearchFollowupInstruction ||
+        userMessage ||
         styleKeywordSelectionMessage ||
         (requestedAction === 'confirm_step_2_team'
           ? 'STEP 2 팀 구성 완료 확인'
@@ -3632,7 +3702,9 @@ export async function POST(request: Request) {
               : requestedAction === 'visualize_artifact' && artifactType === 'form_design'
                 ? 'Form Design 시각화가 완료되었습니다. 5-0-5 비례 대화를 이어가세요.'
               : requestedAction === 'visualize_artifact'
-                ? artifactType === 'keyword_relationship'
+                ? directionResearchVisualizationInstruction
+                  ? directionResearchVisualizationInstruction
+                  : artifactType === 'keyword_relationship'
                   ? '확정된 내용을 시각화한 뒤 다음 단계 안내를 이어가세요.'
                   : artifactType === 'problem_statements' ||
                       artifactType === 'keyword_experience'
@@ -4704,9 +4776,27 @@ export async function POST(request: Request) {
         }
         step3RawModelText = rawModelText
         step4RawModelText = currentStageKey === 'step_4_direction' ? rawModelText : ''
+        const hasRemainingDirectionResearch = DIRECTION_RESEARCH_ARTIFACT_TYPES.some(
+          (directionArtifactType) =>
+            !hasStep3ArtifactEvent(
+              existingMessages,
+              directionArtifactType,
+              'confirmed'
+            )
+        )
+        const hasPendingResearchQuestion = hasPendingStep4ResearchQuestion(
+          existingMessages
+        )
+        const allowStep4ResearchWidgets =
+          currentStageKey === 'step_4_direction' &&
+          (canUseStaticStep4Entry ||
+            (hasPendingResearchQuestion &&
+              !isDirectionResearchRequest(messageForModel) &&
+              hasRemainingDirectionResearch))
         if (
           currentStageKey === 'step_4_direction' &&
           !shouldKeepStep4ResearchWidgets({
+            allowWidgets: allowStep4ResearchWidgets,
             text: rawModelText,
             messages: existingMessages,
           })
