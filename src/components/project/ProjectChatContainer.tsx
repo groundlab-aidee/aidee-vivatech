@@ -36,6 +36,8 @@ import { MoodboardGrid, type MoodboardGridImage } from '@/components/chat/Moodbo
 import { MoodboardModal } from '@/components/moodboard/MoodboardModal'
 import { Step5CombinationGrid, type Step5Combination } from '@/components/project/Step5CombinationGrid'
 import { FormDesignModal } from '@/components/project/FormDesignBoard'
+import { CmfDesignModal, type CmfDesignData } from '@/components/project/CmfDesignModal'
+import { CertificationModal, type CertificationData, type CertificationRow } from '@/components/project/CertificationModal'
 import { MarketingBudgetModal } from '@/components/project/MarketingBudgetModal'
 import { DevelopmentTimelineModal } from '@/components/project/DevelopmentTimelineModal'
 import { extractDevelopmentTimelineData, type DevelopmentTimelineData } from '@/lib/chat/development-timeline'
@@ -143,6 +145,64 @@ function getFormDesignVisualizationKey(messages: ChatMessageRecord[]) {
   return null
 }
 
+function getCmfDesignVisualizationKey(messages: ChatMessageRecord[]) {
+  for (const message of [...messages].reverse()) {
+    if (message.role !== 'system' || !message.content.includes('AIDEE_ARTIFACT_EVENT')) continue
+    const block = message.content.match(/<<AIDEE_ARTIFACT_EVENT>>\s*([\s\S]*?)\s*<</)
+    if (!block) continue
+    try {
+      const event = JSON.parse(block[1]) as { artifactType?: string; artifactMessageId?: string; eventType?: string }
+      if (event.artifactType === 'cmf_design' && event.eventType === 'visualized') return event.artifactMessageId ?? null
+    } catch {}
+  }
+  return null
+}
+
+function getDesignVisualizationKey(messages: ChatMessageRecord[]) {
+  for (const message of [...messages].reverse()) {
+    if (message.role !== 'system' || !message.content.includes('AIDEE_ARTIFACT_EVENT')) continue
+    const block = message.content.match(/<<AIDEE_ARTIFACT_EVENT>>\s*([\s\S]*?)\s*<</)
+    if (!block) continue
+    try {
+      const event = JSON.parse(block[1]) as { artifactType?: string; artifactMessageId?: string; eventType?: string }
+      if (event.artifactType === 'design' && event.eventType === 'visualized') return event.artifactMessageId ?? null
+    } catch {}
+  }
+  return null
+}
+
+function getCertificationVisualizationKey(messages: ChatMessageRecord[]) {
+  for (const message of [...messages].reverse()) {
+    if (message.role !== 'system' || !message.content.includes('AIDEE_ARTIFACT_EVENT')) continue
+    const block = message.content.match(/<<AIDEE_ARTIFACT_EVENT>>\s*([\s\S]*?)\s*<</)
+    if (!block) continue
+    try {
+      const event = JSON.parse(block[1]) as { artifactType?: string; artifactMessageId?: string; eventType?: string }
+      if (event.artifactType === 'certification' && event.eventType === 'visualized') return event.artifactMessageId ?? null
+    } catch {}
+  }
+  return null
+}
+
+function hasMoodboardConfirmation(messages: ChatMessageRecord[]) {
+  return messages.some((message) => {
+    if (message.role !== 'system' || !message.content.includes('AIDEE_ARTIFACT_EVENT')) {
+      return false
+    }
+    const block = message.content.match(/<<AIDEE_ARTIFACT_EVENT>>\s*([\s\S]*?)\s*<</)
+    if (!block) return false
+    try {
+      const event = JSON.parse(block[1]) as {
+        artifactType?: string
+        eventType?: string
+      }
+      return event.artifactType === 'moodboard' && event.eventType === 'confirmed'
+    } catch {
+      return false
+    }
+  })
+}
+
 function getMarketingBudgetEventId(messages: ChatMessageRecord[], eventType: 'confirmed' | 'visualized') {
   for (const message of [...messages].reverse()) {
     if (message.role !== 'system' || !message.content.includes('AIDEE_ARTIFACT_EVENT')) continue
@@ -202,6 +262,92 @@ type BrandPositioningData = {
 
 type KeywordArtifactKind = 'experience_keywords' | 'relationship_keywords'
 
+function extractCmfDesignData(content: string): CmfDesignData | null {
+  const match = content.match(/<<AIDEE_CMF_DESIGN_DATA>>\s*([\s\S]*?)\s*<</)
+  const hasLegacySummary = /<<AIDEE_STEP5_CMF_SUMMARY>>[\s\S]*?<<\/AIDEE_STEP5_CMF_SUMMARY>>/i.test(content)
+  const hasPlainSummary = /(?:CMF\s*(?:Design\s*)?(?:요약|정리)|CMF\s*\(색[，,]?\s*소재[，,]?\s*마감\)\s*정리)/i.test(content)
+  if (!match && !hasLegacySummary && !hasPlainSummary) return null
+  if (!match) {
+    return {
+      conceptTitle: 'CMF Concept',
+      conceptDescription: '5-3 대화에서 정한 색, 소재, 마감 방향을 반영한 CMF Design입니다.',
+      color: {
+        title: '대화에서 정한 색',
+        description: '5-3 대화에서 정한 색의 역할을 반영합니다.',
+        imageQueries: [],
+        swatches: [],
+      },
+      material: {
+        title: '대화에서 정한 소재감',
+        description: '5-3 대화에서 정한 손과 몸에 닿는 느낌을 반영합니다.',
+        imageQueries: [],
+        swatches: [],
+      },
+      finish: {
+        title: '대화에서 정한 마감감',
+        description: '5-3 대화에서 정한 표면 표현과 관리 방향을 반영합니다.',
+        imageQueries: [],
+        swatches: [],
+      },
+      references: [],
+    }
+  }
+  try {
+    const parsed = JSON.parse(match[1]) as Partial<CmfDesignData>
+    const item = (value: unknown): CmfDesignData['color'] => {
+      const source = value && typeof value === 'object' ? value as Record<string, unknown> : {}
+      return {
+        title: typeof source.title === 'string' ? source.title : '내용 확인 필요',
+        description: typeof source.description === 'string' ? source.description : '',
+        imageQueries: Array.isArray(source.imageQueries) ? source.imageQueries.filter((item): item is string => typeof item === 'string') : [],
+        swatches: Array.isArray(source.swatches) ? source.swatches.filter((item): item is string => typeof item === 'string') : [],
+      }
+    }
+    return {
+      conceptTitle: typeof parsed.conceptTitle === 'string' ? parsed.conceptTitle : 'Quiet Outdoor Form',
+      conceptDescription: typeof parsed.conceptDescription === 'string' ? parsed.conceptDescription : '',
+      color: item(parsed.color),
+      material: item(parsed.material),
+      finish: item(parsed.finish),
+      references: Array.isArray(parsed.references) ? parsed.references.filter((item): item is string => typeof item === 'string' && /^https?:\/\//i.test(item)) : [],
+    }
+  } catch {
+    return null
+  }
+}
+
+function extractCertificationData(content: string): CertificationData | null {
+  const match = content.match(/<<AIDEE_CERTIFICATION_DATA>>\s*([\s\S]*?)\s*<</i)
+  if (!match) return null
+  try {
+    const parsed = JSON.parse(match[1]) as Partial<CertificationData>
+    const rows = (value: unknown): CertificationRow[] =>
+      Array.isArray(value)
+        ? value.filter((item): item is CertificationRow => {
+            if (!item || typeof item !== 'object') return false
+            const row = item as Record<string, unknown>
+            return typeof row.name === 'string' && typeof row.authority === 'string' && typeof row.detail === 'string' && typeof row.reason === 'string'
+          }).map((row) => ({
+            name: row.name,
+            authority: row.authority,
+            detail: row.detail,
+            reason: row.reason,
+            recommendation: row.recommendation === '적극 추천' ? '적극 추천' : '추천',
+          }))
+        : []
+    return {
+      title: 'Certification',
+      productContext: typeof parsed.productContext === 'string' ? parsed.productContext : '',
+      international: rows(parsed.international),
+      domestic: rows(parsed.domestic),
+      note: typeof parsed.note === 'string' ? parsed.note : '실제 대상 여부와 통과 여부는 시험 기관 확인이 필요합니다.',
+      sourceSummary: typeof parsed.sourceSummary === 'string' ? parsed.sourceSummary : '',
+    }
+  } catch {
+    return null
+  }
+}
+
 type ArtifactType =
   | 'persona'
   | 'problem_statements'
@@ -214,6 +360,8 @@ type ArtifactType =
   | 'design'
   | 'modeling'
   | 'form_design'
+  | 'cmf_design'
+  | 'certification'
   | 'marketing_budget'
   | 'development_timeline'
 
@@ -263,6 +411,8 @@ type LibraryArtifactKind =
   | 'mood_board'
   | 'rendering'
   | 'form_design'
+  | 'cmf_design'
+  | 'certification'
   | 'marketing_budget'
   | 'development_timeline'
   | 'modeling'
@@ -327,6 +477,8 @@ const LIBRARY_ARTIFACTS: LibraryArtifact[] = [
   { kind: 'mood_board', title: 'Mood Board' },
   { kind: 'rendering', title: '3D Design: Rendering' },
   { kind: 'form_design', title: 'Form Design' },
+  { kind: 'cmf_design', title: 'CMF Design' },
+  { kind: 'certification', title: 'Certification' },
   { kind: 'marketing_budget', title: 'Marketing Budget' },
   { kind: 'development_timeline', title: 'Product Development Timeline' },
   { kind: 'modeling', title: '3D Design: Modeling' },
@@ -446,6 +598,8 @@ function stripInternalBlocksForDisplay(text: string) {
     .replace(/\n?<<AIDEE_STEP5_(?:SHAPE|FORM)_WIDGET>>/g, '')
     .replace(/\n?<<AIDEE_STEP5_COMBINATION_PREVIEW>>/g, '')
     .replace(/\n?<<AIDEE_STEP5_FORM_SUMMARY>>/g, '')
+    .replace(/\n?<<AIDEE_CMF_DESIGN_DATA>>[\s\S]*?<<\/?AIDEE_CMF_DESIGN_DATA>>/g, '')
+    .replace(/\n?<<AIDEE_CERTIFICATION_DATA>>[\s\S]*?<<\/?AIDEE_CERTIFICATION_DATA>>/g, '')
     .replace(/\n?<<AIDEE_MARKETING_BUDGET>>[\s\S]*?(?:\n?<<\/AIDEE_MARKETING_BUDGET>>|$)/gi, '')
     .replace(/\n?<<AIDEE_DEVELOPMENT_TIMELINE>>[\s\S]*?(?:\n?<<\/AIDEE_DEVELOPMENT_TIMELINE>>|$)/gi, '')
     .replace(
@@ -1297,6 +1451,13 @@ export function ProjectChatContainer({
   const [step5Saving, setStep5Saving] = useState(false)
   const [formDesignModalOpen, setFormDesignModalOpen] = useState(false)
   const [latestFormDesignKey, setLatestFormDesignKey] = useState<string | null>(() => getFormDesignVisualizationKey(initialMessages))
+  const [latestCmfDesignKey, setLatestCmfDesignKey] = useState<string | null>(() => getCmfDesignVisualizationKey(initialMessages))
+  const [latestDesignRenderingKey, setLatestDesignRenderingKey] = useState<string | null>(() => getDesignVisualizationKey(initialMessages))
+  const [cmfDesignModalData, setCmfDesignModalData] = useState<CmfDesignData | null>(null)
+  const [confirmedCmfDesignMessageId, setConfirmedCmfDesignMessageId] = useState<string | null>(null)
+  const [latestCertificationKey, setLatestCertificationKey] = useState<string | null>(() => getCertificationVisualizationKey(initialMessages))
+  const [certificationModalData, setCertificationModalData] = useState<CertificationData | null>(null)
+  const [confirmedCertificationMessageId, setConfirmedCertificationMessageId] = useState<string | null>(null)
   const [confirmedMarketingBudgetId, setConfirmedMarketingBudgetId] = useState<string | null>(() => getMarketingBudgetEventId(initialMessages, 'confirmed'))
   const [visualizedMarketingBudgetId, setVisualizedMarketingBudgetId] = useState<string | null>(() => getMarketingBudgetEventId(initialMessages, 'visualized'))
   const [marketingBudgetModalData, setMarketingBudgetModalData] = useState<MarketingBudgetData | null>(null)
@@ -1365,6 +1526,8 @@ export function ProjectChatContainer({
   const [renderingModalImage, setRenderingModalImage] = useState<string | null>(
     null
   )
+  const [renderingModalMessageId, setRenderingModalMessageId] = useState<string | null>(null)
+  const [renderingModalTitle, setRenderingModalTitle] = useState('선택한 디자인')
   const [meshyModelUrl, setMeshyModelUrl] = useState<string | null>(null)
   const [modelViewerOpen, setModelViewerOpen] = useState(false)
   const [visualizedConsumptionKeywordData, setVisualizedConsumptionKeywordData] =
@@ -1391,9 +1554,43 @@ export function ProjectChatContainer({
   const step5PreviewReady = step5CombinationHistory.length > 0 || visibleMessages.some(
     (message) => message.role === 'assistant' && /<<AIDEE_STEP5_COMBINATION_PREVIEW>>/i.test(message.content)
   )
+  const latestSelectedStep5Combination = useMemo(() => {
+    const shape = [...visibleMessages].reverse().find(
+      (message) => message.role === 'user' && message.action === 'select_step5_shape',
+    )?.content
+    const form = [...visibleMessages].reverse().find(
+      (message) => message.role === 'user' && message.action === 'select_step5_form',
+    )?.content
+    return shape && form ? { shape, form } : null
+  }, [visibleMessages])
+  const activeStep5Combination = step5Combination ?? latestSelectedStep5Combination
+  const latestStep5CombinationPreviewMessageId = useMemo(() => {
+    return [...visibleMessages].reverse().find(
+      (message) =>
+        message.role === 'assistant' &&
+        /<<AIDEE_STEP5_COMBINATION_PREVIEW>>/i.test(message.content),
+    )?.id ?? null
+  }, [visibleMessages])
   const hasFormDesignVisualization = latestFormDesignKey !== null
+  const hasCmfDesignVisualization = latestCmfDesignKey !== null
+  const hasConfirmedMoodboard = useMemo(
+    () => hasMoodboardConfirmation(messages),
+    [messages]
+  )
+  const latestCmfSummaryMessage = useMemo(() => {
+    for (const message of [...visibleMessages].reverse()) {
+      if (message.role === 'assistant' && extractCmfDesignData(message.content)) return message
+    }
+    return null
+  }, [visibleMessages])
+  const latestCertificationSummaryMessage = useMemo(() => {
+    for (const message of [...visibleMessages].reverse()) {
+      if (message.role === 'assistant' && extractCertificationData(message.content)) return message
+    }
+    return null
+  }, [visibleMessages])
   const isCurrentCombinationVisualized = Boolean(
-    step5Combination && latestFormDesignKey === `${step5Combination.shape}|||${step5Combination.form}`
+    activeStep5Combination && latestFormDesignKey === `${activeStep5Combination.shape}|||${activeStep5Combination.form}`
   )
 
   async function confirmStep5Combination() {
@@ -1402,7 +1599,7 @@ export function ProjectChatContainer({
     try {
       const response = await fetch('/api/projects/step5-combination', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectId, ...step5Draft, previousCombination: step5Combination }),
+        body: JSON.stringify({ projectId, ...step5Draft, previousCombination: activeStep5Combination }),
       })
       const result = await response.json()
       if (!response.ok) throw new Error(result.error || '조형 조합을 저장하지 못했습니다.')
@@ -1418,26 +1615,88 @@ export function ProjectChatContainer({
   }
 
   async function visualizeStep5Combination() {
-    if (!step5Combination || step5Saving || isCurrentCombinationVisualized) return
+    if (!activeStep5Combination || step5Saving || isCurrentCombinationVisualized) return
     setStep5Saving(true)
     try {
       const saved = await fetch('/api/projects/step5-combination', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectId, ...step5Combination, saveOnly: true }),
+        body: JSON.stringify({ projectId, ...activeStep5Combination, saveOnly: true }),
       })
       const result = await saved.json()
       if (!saved.ok) throw new Error(result.error || '조형 선택을 저장하지 못했습니다.')
-      setFormDesignModalOpen(true)
       const response = await requestAssistantResponse({
-        action: 'visualize_artifact', artifactMessageId: `${step5Combination.shape}|||${step5Combination.form}`,
+        action: 'visualize_artifact', artifactMessageId: `${activeStep5Combination.shape}|||${activeStep5Combination.form}`,
         artifactType: 'form_design', message: '',
       })
-      if (response) setLatestFormDesignKey(`${step5Combination.shape}|||${step5Combination.form}`)
+      if (response) {
+        setLatestFormDesignKey(`${activeStep5Combination.shape}|||${activeStep5Combination.form}`)
+        setFormDesignModalOpen(true)
+      }
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Form Design을 시각화하지 못했습니다.')
     } finally {
       setStep5Saving(false)
     }
+  }
+
+  async function confirmStep5FormDesignSummary() {
+    const response = await requestAssistantResponse({
+      action: 'confirm_form_design_summary',
+      message: '5-0-6 정리를 확정합니다.',
+      silent: true,
+    })
+
+    if (response && activeStep5Combination) {
+      await visualizeStep5Combination()
+    }
+  }
+
+  function confirmCmfDesign(messageId: string) {
+    setConfirmedCmfDesignMessageId(messageId)
+    confirmArtifact('cmf_design', messageId)
+  }
+
+  function visualizeCmfDesign(data: CmfDesignData, messageId: string) {
+    setCmfDesignModalData(data)
+    setLatestCmfDesignKey(messageId)
+    void requestAssistantResponse({
+      action: 'visualize_artifact',
+      artifactMessageId: messageId,
+      artifactType: 'cmf_design',
+      message: '',
+    })
+  }
+
+  function confirmCertification(messageId: string) {
+    setConfirmedCertificationMessageId(messageId)
+    confirmArtifact('certification', messageId)
+  }
+
+  function visualizeCertification(data: CertificationData, messageId: string) {
+    setCertificationModalData(data)
+    setLatestCertificationKey(messageId)
+    void requestAssistantResponse({
+      action: 'visualize_artifact',
+      artifactMessageId: messageId,
+      artifactType: 'certification',
+      message: '',
+      silent: true,
+    })
+  }
+
+  function closeCertificationModal() {
+    setCertificationModalData(null)
+    if (!latestCertificationKey) return
+    const alreadyCompleted = messages.some(
+      (message) =>
+        message.role === 'assistant' &&
+        /STEP\s*6\.\s*구조 설계 방향 도출 단계가 완료되었습니다/i.test(message.content)
+    )
+    if (alreadyCompleted) return
+    void requestAssistantResponse({
+      action: 'complete_certification_visualization',
+      message: '',
+    })
   }
 
   function visualizeMarketingBudget(data: MarketingBudgetData, messageId: string) {
@@ -1612,8 +1871,26 @@ export function ProjectChatContainer({
       }
     }
 
+    const hasCmfSummary = visibleMessages.some(
+      (message) =>
+        message.role === 'assistant' &&
+        (/<<AIDEE_CMF_DESIGN_DATA>>/i.test(message.content) ||
+          /<<AIDEE_STEP5_CMF_SUMMARY>>[\s\S]*?<<\/AIDEE_STEP5_CMF_SUMMARY>>/i.test(
+            message.content
+          ) ||
+          /(?:CMF\s*(?:Design\s*)?(?:요약|정리)|CMF\s*\(색[，,]?\s*소재[，,]?\s*마감\)\s*정리)/i.test(
+            message.content
+          ))
+    )
+
+    if (hasCmfSummary && latestCmfDesignKey === null) {
+      inferredStageKey = 'step_5_cmf'
+    } else if (latestCmfDesignKey !== null) {
+      inferredStageKey = getLaterStageKey(inferredStageKey, 'step_5_design')
+    }
+
     return inferredStageKey
-  }, [stageKey, visibleMessages])
+  }, [latestCmfDesignKey, stageKey, visibleMessages])
   const latestProjectDirection = useMemo(() => {
     for (const message of [...visibleMessages].reverse()) {
       if (message.role !== 'assistant') {
@@ -1706,15 +1983,6 @@ export function ProjectChatContainer({
         /스타일\s*분위기를\s*선택했어요/i.test(m.content)
     )
   }, [latestMoodOptionsMessageId, visibleMessages])
-  const hasDesignImages = useMemo(
-    () =>
-      visibleMessages.some(
-        (m) =>
-          m.generatedImageBlock?.purpose === 'design' &&
-          (m.generatedImageBlock?.images.length ?? 0) > 0
-      ),
-    [visibleMessages]
-  )
   const latestMoodboardImageUrl = useMemo(() => {
     for (const m of [...visibleMessages].reverse()) {
       if (m.generatedImageBlock?.purpose === 'moodboard_candidate') {
@@ -1923,6 +2191,12 @@ export function ProjectChatContainer({
     if (hasFormDesignVisualization) {
       availableKinds.add('form_design')
     }
+    if (hasCmfDesignVisualization) {
+      availableKinds.add('cmf_design')
+    }
+    if (latestCertificationKey) {
+      availableKinds.add('certification')
+    }
 
     if (latestProjectDirection) {
       availableKinds.add('project_direction')
@@ -1968,11 +2242,17 @@ export function ProjectChatContainer({
 
     }
 
-    if (selectedRenderingImage) {
+    if (latestDesignRenderingKey || selectedRenderingImage) {
       availableKinds.add('rendering')
     }
 
-    if (meshyModelUrl) {
+    const hasGeneratedModelingImages = visibleMessages.some(
+      (message) =>
+        message.generatedImageBlock?.purpose === 'modeling' &&
+        message.generatedImageBlock.images.length > 0
+    )
+
+    if (meshyModelUrl || hasGeneratedModelingImages) {
       availableKinds.add('modeling')
     }
 
@@ -1985,12 +2265,15 @@ export function ProjectChatContainer({
     )
   }, [
     hasFormDesignVisualization,
+    hasCmfDesignVisualization,
+    latestCertificationKey,
     visualizedMarketingBudgetId,
     visualizedDevelopmentTimelineId,
     hasVisualizedLatestRfp,
     latestProjectDirection,
     latestRfp,
     latestDirectionMessageIds,
+    latestDesignRenderingKey,
     meshyModelUrl,
     selectedRenderingImage,
     visibleMessages,
@@ -2235,6 +2518,7 @@ export function ProjectChatContainer({
     message,
     silent,
     styleKeywordSelections,
+    onSuccess,
   }: {
     action?: ChatAction
     artifactMessageId?: string
@@ -2244,6 +2528,7 @@ export function ProjectChatContainer({
     message: string
     silent?: boolean
     styleKeywordSelections?: Partial<StyleKeywordPickerData>
+    onSuccess?: () => void
   }) => {
     const trimmed = message.trim()
 
@@ -2370,12 +2655,23 @@ export function ProjectChatContainer({
 
         return nextMessages
       })
-      setStageKey(
-        getLaterStageKey(
-          effectiveStageKey,
-          result.nextStageKey ?? effectiveStageKey
-        )
+      const modelingMessage = assistantMessages.find(
+        (messageItem) =>
+          messageItem.generatedImageBlock?.purpose === 'modeling' &&
+          messageItem.generatedImageBlock.images.length > 0
       )
+      if (modelingMessage?.generatedImageBlock?.images[0]) {
+        setRenderingModalMessageId(modelingMessage.id)
+        setRenderingModalTitle('3D Design: Modeling')
+        setRenderingModalImage(modelingMessage.generatedImageBlock.images[0])
+      }
+      const responseStageKey = result.nextStageKey ?? effectiveStageKey
+      setStageKey(
+        responseStageKey === 'step_5_cmf'
+          ? responseStageKey
+          : getLaterStageKey(effectiveStageKey, responseStageKey)
+      )
+      onSuccess?.()
       return assistantMessage
     } catch (error) {
       if (isExplicitStageTransition) {
@@ -2399,7 +2695,7 @@ export function ProjectChatContainer({
       if (!silent) {
         setIsPending(false)
       }
-      setActiveExpert('aidee')
+    setActiveExpert('aidee')
     }
   }, [
     activeExpert,
@@ -2453,12 +2749,34 @@ export function ProjectChatContainer({
     artifactSelectedIndex?: number
   ) {
     void requestAssistantResponse({
-      action: 'confirm_artifact',
+      action: artifactType === 'moodboard' ? 'confirm_moodboard' : 'confirm_artifact',
       artifactMessageId: messageId,
       artifactSelectedIndex,
       artifactType,
       message: '',
       silent: true,
+    })
+  }
+
+  async function confirmAndVisualizeDesign(
+    messageId: string,
+    artifactSelectedIndex: number,
+    image: string
+  ) {
+    await requestAssistantResponse({
+      action: 'confirm_artifact',
+      artifactMessageId: messageId,
+      artifactSelectedIndex,
+      artifactType: 'design',
+      message: '',
+      silent: true,
+      onSuccess: () => {
+        setLatestDesignRenderingKey(messageId)
+        setSelectedRenderingImage(image)
+        setRenderingModalMessageId(messageId)
+        setRenderingModalTitle('2D Design: Rendering')
+        setRenderingModalImage(image)
+      },
     })
   }
 
@@ -2937,6 +3255,7 @@ export function ProjectChatContainer({
                     submitMessage(value, undefined, action)
                   }
                   onConfirmArtifact={confirmArtifact}
+                  onConfirmAndVisualizeDesign={confirmAndVisualizeDesign}
                   onVisualizeArtifact={visualizeArtifact}
                   onSubmitStyleKeywords={submitStyleKeywordSelections}
                   onConfirmKeyword={confirmKeywordCard}
@@ -2960,8 +3279,33 @@ export function ProjectChatContainer({
                   visualizedKeywordCards={visualizedKeywordCards}
                   visualizedDirectionArtifacts={visualizedDirectionArtifacts}
                   visualizedProblemStatements={visualizedProblemStatements}
+                  latestCmfSummaryMessageId={latestCmfSummaryMessage?.id ?? null}
+                  confirmedCmfDesignMessageId={confirmedCmfDesignMessageId}
+                  latestCmfDesignKey={latestCmfDesignKey}
+                  latestCertificationSummaryMessageId={latestCertificationSummaryMessage?.id ?? null}
+                  confirmedCertificationMessageId={confirmedCertificationMessageId}
+                  latestCertificationKey={latestCertificationKey}
+                  hasConfirmedMoodboard={hasConfirmedMoodboard}
+                  onConfirmCmfDesign={confirmCmfDesign}
+                  onVisualizeCmfDesign={visualizeCmfDesign}
+                  onConfirmCertification={confirmCertification}
+                  onVisualizeCertification={visualizeCertification}
+                  onConfirmFormDesignSummary={confirmStep5FormDesignSummary}
                   selectedStep5WidgetKinds={selectedStep5WidgetKinds}
                 />
+
+                  {message.id === latestStep5CombinationPreviewMessageId && step5PreviewReady && activeStep5Combination ? (
+                    <div className="mt-3 flex w-full max-w-xl flex-col items-start gap-2">
+                      <Step5CombinationGrid value={activeStep5Combination} />
+                      <button
+                        type="button"
+                        onClick={() => { setStep5Draft(activeStep5Combination); setStep5EditOpen(true) }}
+                        className="rounded-full bg-blue-600 px-5 py-2 text-sm font-semibold text-white"
+                      >
+                        수정하기
+                      </button>
+                    </div>
+                  ) : null}
 
                   {marketingBudget ? <div className="flex w-full justify-end gap-2">
                     {!isMarketingBudgetConfirmed ? <button type="button" disabled={isPending} onClick={() => { setConfirmedMarketingBudgetId(message.id); confirmArtifact('marketing_budget', message.id) }} className="rounded-full bg-[#DDF444] px-5 py-2 text-sm font-semibold text-black disabled:opacity-50">확정하기</button> : null}
@@ -3015,20 +3359,6 @@ export function ProjectChatContainer({
               </div>
             )}
 
-            {step5PreviewReady && step5CombinationHistory.length > 0 ? step5CombinationHistory.map((combination, index) => (
-              <div key={`step5-combination-${index}`} className="flex w-full max-w-xl flex-col items-start gap-2">
-                <Step5CombinationGrid value={combination} />
-                <button type="button" onClick={() => { setStep5Draft(step5Combination ?? combination); setStep5EditOpen(true) }} className="rounded-full bg-blue-600 px-5 py-2 text-sm font-semibold text-white">수정하기</button>
-                {index === step5CombinationHistory.length - 1 && !isCurrentCombinationVisualized ? <button type="button" disabled={step5Saving} onClick={() => void visualizeStep5Combination()} className="rounded-full bg-[#DDF444] px-5 py-2 text-sm font-semibold text-black disabled:opacity-50">시각화하기</button> : null}
-              </div>
-            )) : step5PreviewReady && step5Combination ? (
-              <div className="flex w-full max-w-xl flex-col items-start gap-2">
-                <Step5CombinationGrid value={step5Combination} />
-                <button type="button" onClick={() => { setStep5Draft(step5Combination); setStep5EditOpen(true) }} className="rounded-full bg-blue-600 px-5 py-2 text-sm font-semibold text-white">수정하기</button>
-                {!isCurrentCombinationVisualized ? <button type="button" disabled={step5Saving} onClick={() => void visualizeStep5Combination()} className="rounded-full bg-[#DDF444] px-5 py-2 text-sm font-semibold text-black disabled:opacity-50">시각화하기</button> : null}
-              </div>
-            ) : null}
-
             {isPending ? <AssistantTypingBubble /> : null}
           </div>
         </section>
@@ -3048,22 +3378,6 @@ export function ProjectChatContainer({
             <p className="mb-3 rounded-xl bg-red-50 px-4 py-3 text-sm font-medium text-red-600">
               {errorMessage}
             </p>
-          ) : null}
-
-          {effectiveStageKey === 'step_5_design' &&
-          !hasDesignImages &&
-          !isPending ? (
-            <div className="mx-auto mb-3 flex w-full max-w-[1171px] justify-end">
-              <button
-                type="button"
-                onClick={() =>
-                  requestAssistantResponse({ forceImageGeneration: 'initial_design', message: '' })
-                }
-                className="rounded-[30px] bg-blue-600 px-6 py-2 font-['Pretendard'] text-sm font-semibold text-white shadow transition hover:bg-blue-700"
-              >
-                시안 생성하기
-              </button>
-            </div>
           ) : null}
 
           <div ref={expertMenuRef} className="relative mx-auto w-full max-w-[1171px]">
@@ -3235,6 +3549,26 @@ export function ProjectChatContainer({
             setFormDesignModalOpen(true)
             return
           }
+          if (kind === 'cmf_design' && cmfDesignModalData) {
+            setCmfDesignModalData(cmfDesignModalData)
+            return
+          }
+          if (kind === 'cmf_design') {
+            const summary = [...visibleMessages].reverse().find(
+              (message) => message.role === 'assistant' && extractCmfDesignData(message.content)
+            )
+            const data = summary ? extractCmfDesignData(summary.content) : null
+            if (data) setCmfDesignModalData(data)
+            return
+          }
+          if (kind === 'certification') {
+            const summary = [...visibleMessages].reverse().find(
+              (message) => message.role === 'assistant' && extractCertificationData(message.content)
+            )
+            const data = summary ? extractCertificationData(summary.content) : null
+            if (data) setCertificationModalData(data)
+            return
+          }
           if (kind === 'project_direction') {
             return
           }
@@ -3314,6 +3648,23 @@ export function ProjectChatContainer({
             return
           }
 
+          if (kind === 'modeling') {
+            const modelingMessage = [...visibleMessages]
+              .reverse()
+              .find(
+                (message) =>
+                  message.generatedImageBlock?.purpose === 'modeling' &&
+                  message.generatedImageBlock.images.length > 0
+              )
+            const modelingImage = modelingMessage?.generatedImageBlock?.images[0]
+            if (modelingImage) {
+              setRenderingModalTitle('3D Design: Modeling')
+              setRenderingModalImage(modelingImage)
+              setRenderingModalMessageId(modelingMessage?.id ?? null)
+            }
+            return
+          }
+
           setSelectedArtifactKind(kind)
         }}
         planLabel={userPlanLabel}
@@ -3327,7 +3678,9 @@ export function ProjectChatContainer({
         onClose={() => setSelectedArtifactKind(null)}
         projectDirection={latestProjectDirection}
       />
-      {formDesignModalOpen && step5Combination ? <FormDesignModal value={step5Combination} onClose={() => setFormDesignModalOpen(false)} /> : null}
+      {formDesignModalOpen && activeStep5Combination ? <FormDesignModal value={activeStep5Combination} onClose={() => setFormDesignModalOpen(false)} /> : null}
+      {cmfDesignModalData ? <CmfDesignModal data={cmfDesignModalData} onClose={() => setCmfDesignModalData(null)} /> : null}
+      {certificationModalData ? <CertificationModal data={certificationModalData} onClose={closeCertificationModal} /> : null}
       {marketingBudgetModalData ? <MarketingBudgetModal data={marketingBudgetModalData} onClose={() => setMarketingBudgetModalData(null)} /> : null}
       {developmentTimelineModalData ? <DevelopmentTimelineModal data={developmentTimelineModalData} onClose={() => setDevelopmentTimelineModalData(null)} /> : null}
 
@@ -3381,7 +3734,11 @@ export function ProjectChatContainer({
 
       <RenderingImageModal
         image={renderingModalImage}
-        onClose={() => setRenderingModalImage(null)}
+        title={renderingModalTitle}
+        onClose={() => {
+          setRenderingModalImage(null)
+          setRenderingModalMessageId(null)
+        }}
       />
 
       <ModelViewerModal
@@ -4815,9 +5172,11 @@ function PersonaCardModal({
 
 function RenderingImageModal({
   image,
+  title,
   onClose,
 }: {
   image: string | null
+  title: string
   onClose: () => void
 }) {
   useDismissModalOnEscape(Boolean(image), onClose)
@@ -4829,7 +5188,7 @@ function RenderingImageModal({
       className="absolute inset-0 z-[80] flex items-center justify-center bg-neutral-900/70 p-4 sm:p-6 lg:p-10"
       role="dialog"
       aria-modal="true"
-      aria-label="선택한 3D 디자인 렌더링"
+      aria-label={title}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose()
       }}
@@ -4837,7 +5196,7 @@ function RenderingImageModal({
       <article className="relative aspect-[25/16] w-[min(100%,960px)] overflow-hidden rounded-[20px] bg-zinc-300 shadow-[0px_24px_60px_rgba(0,0,0,0.24)]">
         <Image
           src={image}
-          alt="선택한 3D 디자인 렌더링"
+          alt={title}
           fill
           unoptimized
           className="object-cover"
@@ -5879,6 +6238,7 @@ function ChatBubble({
   message,
   onChoice,
   onConfirmArtifact,
+  onConfirmAndVisualizeDesign,
   onVisualizeArtifact,
   onSubmitStyleKeywords,
   onConfirmKeyword,
@@ -5903,6 +6263,18 @@ function ChatBubble({
   visualizedKeywordCards,
   visualizedDirectionArtifacts,
   visualizedProblemStatements,
+  latestCmfSummaryMessageId,
+  confirmedCmfDesignMessageId,
+  latestCmfDesignKey,
+  latestCertificationSummaryMessageId,
+  confirmedCertificationMessageId,
+  latestCertificationKey,
+  hasConfirmedMoodboard,
+  onConfirmCmfDesign,
+  onVisualizeCmfDesign,
+  onConfirmCertification,
+  onVisualizeCertification,
+  onConfirmFormDesignSummary,
 }: {
   canShowStyleReferences: boolean
   confirmedDirectionKinds: Set<DirectionArtifactKind>
@@ -5931,6 +6303,11 @@ function ChatBubble({
     artifactType: ArtifactType,
     messageId: string,
     artifactSelectedIndex?: number
+  ) => void
+  onConfirmAndVisualizeDesign: (
+    messageId: string,
+    artifactSelectedIndex: number,
+    image: string
   ) => void
   onVisualizeArtifact: (
     artifactType: ArtifactType,
@@ -5981,6 +6358,18 @@ function ChatBubble({
     Record<DirectionArtifactKind, string>
   >
   visualizedProblemStatements: ProblemStatementsData | null
+  latestCmfSummaryMessageId: string | null
+  confirmedCmfDesignMessageId: string | null
+  latestCmfDesignKey: string | null
+  latestCertificationSummaryMessageId: string | null
+  confirmedCertificationMessageId: string | null
+  latestCertificationKey: string | null
+  hasConfirmedMoodboard: boolean
+  onConfirmCmfDesign: (messageId: string) => void
+  onVisualizeCmfDesign: (data: CmfDesignData, messageId: string) => void
+  onConfirmCertification: (messageId: string) => void
+  onVisualizeCertification: (data: CertificationData, messageId: string) => void
+  onConfirmFormDesignSummary: () => void
   selectedStep5WidgetKinds: Set<Step5WidgetKind>
 }) {
   const [hintModalOpen, setHintModalOpen] = useState(false)
@@ -6074,6 +6463,8 @@ function ChatBubble({
   }
   const isUser = message.role === 'user'
   const isStep5FormSummary = !isUser && /<<AIDEE_STEP5_FORM_SUMMARY>>/i.test(message.content)
+  const cmfDesignData = !isUser ? extractCmfDesignData(message.content) : null
+  const certificationData = !isUser ? extractCertificationData(message.content) : null
   const rfpBlock = extractRfpJsonBlock(message.content)
   const projectDirection = !isUser
     ? extractProjectDirectionCard(rfpBlock.cleanedText)
@@ -6090,7 +6481,9 @@ function ChatBubble({
       ? parseStyleKeywordPickerData(message.content)
       : null
   const moodOptionsData =
-    !isUser && message.id === latestMoodOptionsMessageId
+    !isUser &&
+    !hasConfirmedMoodboard &&
+    message.id === latestMoodOptionsMessageId
       ? parseMoodOptions(message.content)
       : null
   const problemStatements = !isUser
@@ -6200,6 +6593,7 @@ function ChatBubble({
     !moodOptionsData &&
     keywordCards.length === 0 &&
     !message.personaCardBlock &&
+    !cmfDesignData &&
     !shouldRenderGeneratedImages &&
     !rfpBlock.rfp
   ) {
@@ -6401,13 +6795,19 @@ function ChatBubble({
                             if (!image) return
 
                             setIsSelectedDesignConfirmed(true)
-                            onConfirmArtifact(
-                              message.generatedImageBlock?.purpose === 'modeling'
-                                ? 'modeling'
-                                : 'design',
-                              message.id,
-                              selectedDesignIndex
-                            )
+                            if (message.generatedImageBlock?.purpose === 'design') {
+                              onConfirmAndVisualizeDesign(
+                                message.id,
+                                selectedDesignIndex,
+                                image
+                              )
+                            } else {
+                              onConfirmArtifact(
+                                'modeling',
+                                message.id,
+                                selectedDesignIndex
+                              )
+                            }
                             fetch('/api/projects/thumbnail', {
                               method: 'POST',
                               headers: { 'Content-Type': 'application/json' },
@@ -7114,7 +7514,57 @@ function ChatBubble({
         </div>
       ) : null}
 
-      {isStep5FormSummary ? <div className="flex w-full justify-end"><button type="button" disabled={disabled} onClick={() => onChoice('5-0-6 정리를 확정합니다.', 'confirm_form_design_summary')} className="rounded-[30px] bg-[#DDF444] px-5 py-2 text-sm font-semibold text-black disabled:opacity-50">확정하기</button></div> : null}
+      {isStep5FormSummary ? <div className="flex w-full justify-end"><button type="button" disabled={disabled} onClick={() => onConfirmFormDesignSummary()} className="rounded-[30px] bg-[#DDF444] px-5 py-2 text-sm font-semibold text-black disabled:opacity-50">확정하기</button></div> : null}
+
+      {cmfDesignData && latestCmfSummaryMessageId === message.id ? (
+        <div className="flex w-full flex-col items-end gap-3">
+          <button
+            type="button"
+            disabled={disabled || confirmedCmfDesignMessageId === message.id}
+            onClick={() => onConfirmCmfDesign(message.id)}
+            className={`rounded-[30px] px-5 py-2 text-sm font-semibold ${confirmedCmfDesignMessageId === message.id ? 'bg-neutral-500 text-white' : 'bg-[#DDF444] text-black disabled:opacity-50'}`}
+          >
+            확정하기
+          </button>
+          {confirmedCmfDesignMessageId === message.id && latestCmfDesignKey !== message.id ? (
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => onVisualizeCmfDesign(cmfDesignData, message.id)}
+              className="inline-flex items-center gap-1 rounded-[30px] bg-[#DDF444] px-5 py-2 text-sm font-semibold text-black disabled:opacity-50"
+            >
+              시각화하기
+              <Image src="/assets/icons/chat/visualize.svg" alt="" width={18} height={18} />
+              <span>2</span>
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
+      {certificationData && latestCertificationSummaryMessageId === message.id ? (
+        <div className="flex w-full flex-col items-end gap-3">
+          <button
+            type="button"
+            disabled={disabled || confirmedCertificationMessageId === message.id}
+            onClick={() => onConfirmCertification(message.id)}
+            className={`rounded-[30px] px-5 py-2 text-sm font-semibold ${confirmedCertificationMessageId === message.id ? 'bg-neutral-500 text-white' : 'bg-[#DDF444] text-black disabled:opacity-50'}`}
+          >
+            확정하기
+          </button>
+          {confirmedCertificationMessageId === message.id && latestCertificationKey !== message.id ? (
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => onVisualizeCertification(certificationData, message.id)}
+              className="inline-flex items-center gap-1 rounded-[30px] bg-[#DDF444] px-5 py-2 text-sm font-semibold text-black disabled:opacity-50"
+            >
+              시각화하기
+              <Image src="/assets/icons/chat/visualize.svg" alt="" width={18} height={18} />
+              <span>2</span>
+            </button>
+          ) : null}
+        </div>
+      ) : null}
 
       {hintModalOpen && choices.length > 0 ? (
         <div

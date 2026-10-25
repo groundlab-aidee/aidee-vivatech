@@ -153,6 +153,8 @@ type ArtifactType =
   | 'design'
   | 'modeling'
   | 'form_design'
+  | 'cmf_design'
+  | 'certification'
   | 'marketing_budget'
   | 'development_timeline'
 
@@ -203,13 +205,15 @@ function normalizeChatAction(value: unknown): ChatAction | null {
     value === 'confirm_artifact' ||
     value === 'confirm_process' ||
     value === 'confirm_moodboard' ||
+    value === 'confirm_and_visualize_artifact' ||
     value === 'start_step_2' ||
     value === 'start_step_3' ||
     value === 'stay_in_step_1' ||
     value === 'stay_in_step_2' ||
     value === 'select_step5_shape' ||
     value === 'select_step5_form' ||
-    value === 'visualize_artifact'
+    value === 'visualize_artifact' ||
+    value === 'complete_certification_visualization'
     || value === 'confirm_form_design_summary'
     ? value
     : null
@@ -221,6 +225,7 @@ const STEP5_WIDGET_MARKERS: Record<Step5WidgetKind, string> = {
   shape: '<<AIDEE_STEP5_SHAPE_WIDGET>>',
   form: '<<AIDEE_STEP5_FORM_WIDGET>>',
 }
+const STEP5_COMBINATION_PREVIEW_MARKER = '<<AIDEE_STEP5_COMBINATION_PREVIEW>>'
 
 function hasStep5WidgetSelection(
   messages: Array<{ action?: ChatAction | null }>,
@@ -237,6 +242,26 @@ function hasStep5WidgetMarker(
 ) {
   return messages.some((message) =>
     message.content.includes(STEP5_WIDGET_MARKERS[kind])
+  )
+}
+
+function shouldShowStep5CombinationPreview(
+  messages: Array<{ action?: ChatAction | null; content: string }>,
+  currentAction: ChatAction | null,
+) {
+  if (
+    currentAction !== 'select_step5_shape' &&
+    currentAction !== 'select_step5_form'
+  ) {
+    return false
+  }
+
+  const hasShape = messages.some((message) => message.action === 'select_step5_shape')
+  const hasForm = messages.some((message) => message.action === 'select_step5_form')
+  if (!hasShape || !hasForm) return false
+
+  return !messages.some((message) =>
+    message.content.includes(STEP5_COMBINATION_PREVIEW_MARKER),
   )
 }
 
@@ -288,6 +313,8 @@ function normalizeArtifactType(value: unknown): ArtifactType | null {
     value === 'design' ||
     value === 'modeling'
     || value === 'form_design'
+    || value === 'cmf_design'
+    || value === 'certification'
     || value === 'marketing_budget'
     || value === 'development_timeline'
     ? value
@@ -312,8 +339,12 @@ function buildArtifactEventContent({
         ? 'Keywords: Experience 확정하기'
         : artifactType === 'keyword_relationship'
           ? 'Keywords: Relationship 확정하기'
-          : artifactType === 'persona'
-            ? '페르소나 카드 확정하기'
+            : artifactType === 'persona'
+              ? '페르소나 카드 확정하기'
+            : artifactType === 'cmf_design'
+              ? 'CMF Design 확정하기'
+            : artifactType === 'certification'
+              ? 'Certification 확정하기'
             : ''
   return `<<AIDEE_ARTIFACT_EVENT>>\n${JSON.stringify({
     artifactMessageId,
@@ -485,17 +516,34 @@ function getStep5StyleProgress(
       : { phase: 'awaiting_keywords' }
   }
 
+  const answerIndexes = messages.reduce<number[]>((indexes, message, index) => {
+    if (
+      index > selectedIndex &&
+      message.role === 'user' &&
+      message.stageKey === 'step_5_style'
+    ) {
+      indexes.push(index)
+    }
+    return indexes
+  }, [])
+  const answeredCount = answerIndexes.length
+
+  // The model's summary wording can vary, so use the first assistant response
+  // after the fourth style answer as the summary boundary when the semantic
+  // summary detector does not recognize it.
+  const fourthAnswerIndex = answerIndexes[STEP5_STYLE_QUESTIONS.length - 1]
   const summaryIndex = messages.reduce(
     (latest, message, index) =>
       index > selectedIndex &&
+      index > (fourthAnswerIndex ?? Number.POSITIVE_INFINITY) &&
       message.role === 'assistant' &&
-      isStyleKeywordSummary(message.content)
+      (isStyleKeywordSummary(message.content) || fourthAnswerIndex !== undefined)
         ? index
         : latest,
     -1
   )
 
-  if (summaryIndex >= 0) {
+  if (answeredCount >= STEP5_STYLE_QUESTIONS.length && summaryIndex >= 0) {
     const hasSummaryConfirmation = messages.some(
       (message, index) => index > summaryIndex && message.role === 'user'
     )
@@ -503,13 +551,6 @@ function getStep5StyleProgress(
       ? { phase: 'mood_options' }
       : { phase: 'summary_confirmation' }
   }
-
-  const answeredCount = messages.filter(
-    (message, index) =>
-      index > selectedIndex &&
-      message.role === 'user' &&
-      message.stageKey === 'step_5_style'
-  ).length
 
   return answeredCount >= STEP5_STYLE_QUESTIONS.length
     ? { phase: 'keyword_summary' }
@@ -699,12 +740,14 @@ function buildMockRfp(projectTitle: string): RfpDocument {
 function buildMockStageResponse({
   currentStageKey,
   forceImageGeneration,
+  isCmfToDesignTransition = false,
   message,
   projectTitle,
   step1UserTurnCount = 0,
 }: {
   currentStageKey: StageKey
   forceImageGeneration?: ChatRequestBody['forceImageGeneration']
+  isCmfToDesignTransition?: boolean
   message: string
   projectTitle: string
   step1UserTurnCount?: number
@@ -733,8 +776,10 @@ function buildMockStageResponse({
 
   if (imagePurpose) {
     const imageCount =
-        imagePurpose === 'design' && forceImageGeneration !== 'design_revision'
-        ? 3
+        imagePurpose === 'design' && isCmfToDesignTransition
+        ? 4
+        : imagePurpose === 'design' && forceImageGeneration !== 'design_revision'
+          ? 3
         : imagePurpose === 'modeling'
           ? 2
           : imagePurpose === 'style_reference'
@@ -742,7 +787,9 @@ function buildMockStageResponse({
             : 1
     const text =
       imagePurpose === 'design'
-        ? '확정된 스타일 방향을 반영한 디자인 시안 3가지를 제안합니다.'
+        ? isCmfToDesignTransition
+          ? 'CMF Design 시각화 뱃지가 생성되었습니다.\n\n확정된 CMF를 바탕으로 2D 콘셉트 시안 네 가지를 비교합니다. 사용 장면과 핵심 가치에 가장 잘 맞는 시안은 무엇일까요?'
+          : '확정된 스타일 방향을 반영한 디자인 시안 3가지를 제안합니다.'
         : imagePurpose === 'modeling'
           ? '확정된 2D 시안과 CMF를 반영한 3D 모델링 시안 2가지를 제안합니다.'
           : imagePurpose === 'style_reference'
@@ -800,7 +847,7 @@ function buildMockStageResponse({
     case 'step_5_design':
       return '확정된 스타일 방향을 반영한 디자인 시안 3가지를 제안합니다.'
     case 'step_5_cmf':
-      return 'STEP 5의 색·소재·마감(CMF)을 대화로 정합니다.'
+      return 'CMF Design 요약\n\n색: 차분한 뉴트럴 톤\n소재: 편안한 패브릭 감각\n마감: 손자국이 덜 보이는 무광 표면\n\n<<AIDEE_CMF_DESIGN_DATA>>\n{"conceptTitle":"Quiet Outdoor Form","conceptDescription":"차분한 색과 편안한 소재, 관리하기 쉬운 마감으로 캠핑 중 안정적인 휴식을 돕습니다.","color":{"title":"차분한 뉴트럴 톤","description":"제품의 전체 인상을 차분하게 만들고 주변 환경과 조화시킵니다.","swatches":["#4B5563","#D6C7B2"]},"material":{"title":"편안한 패브릭 감각","description":"몸이 닿는 부분에 부드럽고 안정적인 느낌을 줍니다.","imageQueries":[]},"finish":{"title":"차분한 무광 표면","description":"빛 반사와 손자국을 줄여 관리가 쉽도록 합니다.","imageQueries":[]},"references":[]}\n<</AIDEE_CMF_DESIGN_DATA>>\n<<AIDEE_CMF_READY>>'
     case 'step_5_3d':
       return 'STEP 5의 3D 모델링 시안 구간을 시작합니다.'
     case 'step_6_structure':
@@ -2169,6 +2216,23 @@ type StyleMoodWidget = {
   title: string
 }
 
+function buildFallbackStyleMoodWidgets(): StyleMoodWidget[] {
+  return [
+    {
+      title: '편안하고 안정적인 형태 (soft reliable outdoor seating)',
+      description: '부드러운 곡선과 차분한 인상으로 편안한 휴식을 강조하는 방향',
+    },
+    {
+      title: '견고하고 구조적인 형태 (structured durable outdoor furniture)',
+      description: '직선적인 프레임과 안정적인 비례로 신뢰감을 강조하는 방향',
+    },
+    {
+      title: '자연과 어우러지는 형태 (natural minimal camping furniture)',
+      description: '어두운 자연색과 절제된 디테일로 캠핑 환경과 조화되는 방향',
+    },
+  ]
+}
+
 function parseStyleMoodWidgets(text: string): StyleMoodWidget[] {
   const widgetsMatch = text.match(/\{\s*"widgets"\s*:\s*(\[[\s\S]*?\])\s*\}/i)
 
@@ -2491,6 +2555,216 @@ function getRequirementString(
 ) {
   const value = requirements[key]
   return typeof value === 'string' && value.trim() ? value.trim() : fallback
+}
+
+const STEP7_TIMELINE_MARKER = '<<AIDEE_DEVELOPMENT_TIMELINE>>'
+
+function getStep7TimelineProgress(messages: Array<{ role: string; content: string; stageKey?: string | null }>) {
+  const step7UserText = messages
+    .filter((message) => message.role === 'user' && message.stageKey === 'step_7_market')
+    .map((message) => message.content)
+    .join('\n')
+
+  const buckets = {
+    manufacturing: /공장|생산|조립|만드는 방식|일괄|직접 만들/i.test(step7UserText),
+    documents: /견적|자료|모양 자료|재료|수량|인증/i.test(step7UserText),
+    logistics: /보관|배송|물류|주문|포장/i.test(step7UserText),
+    afterSales: /교환|환불|수리|문의|담당자|무상/i.test(step7UserText),
+    launch: /출시|시험|검증|품질|판매 준비|완성/i.test(step7UserText),
+  }
+
+  return {
+    messages,
+    step7UserMessages: messages.filter(
+      (message) => message.role === 'user' && message.stageKey === 'step_7_market',
+    ),
+    buckets,
+    isComplete:
+      messages.filter((message) => message.role === 'user').length >= 4 &&
+      buckets.manufacturing &&
+      buckets.logistics &&
+      buckets.afterSales &&
+      buckets.launch,
+  }
+}
+
+function buildStep7TimelineFallbackData(
+  project: Awaited<ReturnType<typeof getProjectForUser>>,
+  messages: Array<{ role: string; content: string; stageKey?: string | null }>,
+) {
+  const requirements = getSurveyRequirements(project)
+  const userMessages = messages
+    .filter((message) => message.role === 'user' && message.stageKey === 'step_7_market')
+    .map((message) => cleanSingleLineText(message.content))
+    .filter(Boolean)
+
+  const task = (pattern: RegExp) =>
+    userMessages.find((message) => pattern.test(message)) ?? ''
+
+  return {
+    summary: {
+      idea: getRequirementString(requirements, 'idea', ''),
+      category: formatRequirementList(requirements, 'categories', 'otherCategory'),
+      size: getRequirementString(requirements, 'size', ''),
+      features: getRequirementString(requirements, 'features', ''),
+      scope: '제품 기획 및 개발',
+      budget: getRequirementString(requirements, 'budget', ''),
+      targetUnitCost: getRequirementString(requirements, 'targetUnitCost', ''),
+      desiredDuration: getRequirementString(requirements, 'timeline', ''),
+      desiredDurationSource: '미정',
+      salesStrategy: getRequirementString(requirements, 'salesStrategy', ''),
+    },
+    stages: [
+      { tasks: [], duration: '', source: '미정' },
+      { tasks: [], duration: '', source: '미정' },
+      { tasks: [task(/시험|검증|품질|인증/i)].filter(Boolean), duration: '', source: '미정' },
+      { tasks: [task(/공장|생산|조립|만드는 방식|일괄|직접 만들/i), task(/견적|자료|모양 자료|재료|수량/i)].filter(Boolean), duration: '', source: '미정' },
+      { tasks: [task(/보관|배송|물류|주문|포장/i), task(/출시|판매 준비/i)].filter(Boolean), duration: '', source: '미정' },
+    ],
+  }
+}
+
+function buildStep7TimelineFallbackResponse(
+  project: Awaited<ReturnType<typeof getProjectForUser>>,
+  messages: Array<{ role: string; content: string }>,
+) {
+  const data = buildStep7TimelineFallbackData(project, messages)
+  return [
+    '지금까지 정한 생산과 출시 준비 내용을 기준으로 Product Development Timeline을 정리했습니다.',
+    '',
+    '확인된 내용만 일정에 반영했으며, 기간이 정해지지 않은 항목은 미정으로 남겼습니다.',
+    '',
+    STEP7_TIMELINE_MARKER,
+    JSON.stringify(data),
+    '<</AIDEE_DEVELOPMENT_TIMELINE>>',
+  ].join('\n')
+}
+
+function buildCmfToDesignEntryMessage({
+  project,
+  conversation,
+}: {
+  project: Awaited<ReturnType<typeof getProjectForUser>>
+  conversation: string
+}) {
+  const requirements = getSurveyRequirements(project)
+  const idea = getRequirementString(requirements, 'idea', '')
+  const category = formatRequirementList(requirements, 'categories', 'otherCategory')
+  const product = idea || category || '제품'
+  const coreValueMatch = conversation.match(
+    /["'“‘「]([^"'”’」]{2,80})["'”’」]\s*(?:이라는|라는)\s*핵심\s*가치/i
+  )
+  const coreValue = coreValueMatch?.[1] ?? '핵심 가치'
+
+  return [
+    'CMF Design 시각화 뱃지가 생성되었습니다.',
+    '',
+    `이제 앞서 확정한 ${product}의 사용 조건, 크기, 형태, 조형, 비례, 무드보드, 그리고 CMF를 바탕으로 제품의 모양과 구성이 보이는 2D 시안 네 가지를 비교해볼 차례입니다.`,
+    '',
+    `이 ${product}의 사용 장면과 '${coreValue}'에 가장 잘 맞는 시안은 무엇일까요?`,
+  ].join('\n')
+}
+
+function normalizeCmfSummaryMarkers(content: string) {
+  if (content.includes('<<AIDEE_CMF_DESIGN_DATA>>')) {
+    return content
+  }
+
+  const summaryMarker = /<<AIDEE_STEP5_CMF_SUMMARY>>[\s\S]*?<<\/AIDEE_STEP5_CMF_SUMMARY>>/i
+  const hasPlainSummary =
+    /(?:CMF\s*(?:Design\s*)?(?:요약|정리)|CMF\s*\(색[，,]?\s*소재[，,]?\s*마감\)\s*정리)/i.test(content) ||
+    /색\s*[:：].{2,}[\s\S]*소재\s*[:：].{2,}[\s\S]*마감\s*[:：].{2,}/i.test(content)
+  if (!summaryMarker.test(content) && !hasPlainSummary) {
+    return content
+  }
+
+  const fallbackDescription = content
+    .replace(summaryMarker, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(-240)
+
+  const dataBlock = `<<AIDEE_CMF_DESIGN_DATA>>\n${JSON.stringify({
+      conceptTitle: 'CMF Concept',
+      conceptDescription: fallbackDescription,
+      color: {
+        title: '대화에서 정한 색',
+        description: '5-3 대화에서 정한 색의 역할을 반영합니다.',
+        swatches: [],
+        imageQueries: [],
+      },
+      material: {
+        title: '대화에서 정한 소재감',
+        description: '5-3 대화에서 정한 손과 몸에 닿는 느낌을 반영합니다.',
+        swatches: [],
+        imageQueries: [],
+      },
+      finish: {
+        title: '대화에서 정한 마감감',
+        description: '5-3 대화에서 정한 표면 표현과 관리 방향을 반영합니다.',
+        swatches: [],
+        imageQueries: [],
+      },
+      references: [],
+    })}\n<</AIDEE_CMF_DESIGN_DATA>>`
+
+  return summaryMarker.test(content)
+    ? content.replace(summaryMarker, dataBlock)
+    : `${content.trim()}\n\n${dataBlock}`
+}
+
+function isCmfSummaryContent(content: string) {
+  return (
+    /<<AIDEE_CMF_DESIGN_DATA>>/i.test(content) ||
+    /<<AIDEE_STEP5_CMF_SUMMARY>>[\s\S]*?<<\/AIDEE_STEP5_CMF_SUMMARY>>/i.test(content) ||
+    /(?:CMF\s*(?:Design\s*)?(?:요약|정리)|CMF\s*\(색[，,]?\s*소재[，,]?\s*마감\)\s*정리)/i.test(content) ||
+    /색\s*[:：].{2,}[\s\S]*소재\s*[:：].{2,}[\s\S]*마감\s*[:：].{2,}/i.test(content)
+  )
+}
+
+function isCertificationSummaryContent(content: string) {
+  return (
+    /<<AIDEE_CERTIFICATION_DATA>>/i.test(content) ||
+    (/Certification/i.test(content) &&
+      /(?:국외 인증|국내 인증|인증과 안전|인증.*정리|대화.*정리)/i.test(content))
+  )
+}
+
+function normalizeCertificationSummaryMarkers(content: string) {
+  if (content.includes('<<AIDEE_CERTIFICATION_DATA>>')) return content
+
+  const cleaned = content
+    .replace(/STEP\s*6\s*\.\s*구조 설계 방향 도출 단계가 완료되었습니다\.[\s\S]*$/i, '')
+    .replace(/\n?STEP\s*7\s*\.\s*시장 진입 전략 도출[\s\S]*$/i, '')
+    .trim()
+  const certificationLines = cleaned
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, '').trim())
+    .filter((line) =>
+      /\b(?:CE|ISO(?:\s*\d+)?|KC|CPSIA|UL|FCC|RoHS|REACH)\b/i.test(line) &&
+      line.length >= 4 &&
+      line.length <= 180
+    )
+    .slice(0, 6)
+  const rows = certificationLines.map((line) => {
+    const [name, ...reasonParts] = line.split(/\s*[:：-]\s*/, 2)
+    return {
+      name: name.trim(),
+      authority: /KC|한국|국내/i.test(line) ? '국내 · 대화에서 확인' : '국외 · 대화에서 확인',
+      detail: '6-4 대화에서 확인한 인증 항목',
+      recommendation: '추천',
+      reason: (reasonParts.join(': ').trim() || line) + '을 기준으로 추천합니다.',
+    }
+  })
+  const dataBlock = `<<AIDEE_CERTIFICATION_DATA>>\n${JSON.stringify({
+    title: 'Certification',
+    productContext: cleaned.slice(0, 500),
+    international: rows.filter((row) => !/국내/.test(row.authority)),
+    domestic: rows.filter((row) => /국내/.test(row.authority)),
+    note: '인증 판단은 안내이며, 실제 대상 여부와 통과 여부는 시험 기관 확인이 필요합니다.',
+    sourceSummary: cleaned,
+  })}\n<</AIDEE_CERTIFICATION_DATA>>`
+  return `${cleaned}\n\n${dataBlock}`.trim()
 }
 
 function isStringArray(value: unknown): value is string[] {
@@ -3701,6 +3975,8 @@ export async function POST(request: Request) {
               ? '2D 렌더링 시안이 확정되고 시각화되었습니다. 이제 CMF 대화를 시작하세요.'
               : requestedAction === 'visualize_artifact' && artifactType === 'form_design'
                 ? 'Form Design 시각화가 완료되었습니다. 5-0-5 비례 대화를 이어가세요.'
+              : requestedAction === 'visualize_artifact' && artifactType === 'cmf_design'
+                ? 'CMF Design 시각화가 완료되었습니다. STEP 5-4 콘셉트 시안 흐름을 시작하세요.'
               : requestedAction === 'visualize_artifact'
                 ? directionResearchVisualizationInstruction
                   ? directionResearchVisualizationInstruction
@@ -3710,10 +3986,10 @@ export async function POST(request: Request) {
                       artifactType === 'keyword_experience'
                     ? '시각화는 시스템이 처리했습니다. 시각화 내용, 이전 결과, 확정 안내를 설명하지 마세요. [STEP 3 진행 지시]에 따라 지금 구간의 첫 질문 하나만 하세요.'
                     : '확정된 내용을 시각화한 뒤 다음 단계 안내를 이어가세요.'
-                : requestedAction === 'confirm_moodboard' ||
+              : requestedAction === 'confirm_moodboard' ||
                     (requestedAction === 'confirm_artifact' &&
                       artifactType === 'moodboard')
-                  ? '무드보드가 확정되었습니다. 확정된 무드보드와 STEP 5의 앞선 대화 내용을 바탕으로 2D 렌더링 시안을 생성하세요.'
+                  ? '무드보드가 확정되었습니다. 이제 STEP 5 프롬프트의 순서에 따라 색·소재·마감(CMF) 대화를 시작하세요. 한 번에 하나씩 질문하세요.'
                   : '')
 
     let hasCompletedMoodboard = false
@@ -3853,7 +4129,8 @@ export async function POST(request: Request) {
 
     if (
       requestedAction === 'confirm_moodboard' &&
-      (requestedStageKey !== 'step_5_style' || !hasCompletedMoodboard)
+      (!['step_5_style', 'step_5_design'].includes(requestedStageKey) ||
+        !hasCompletedMoodboard)
     ) {
       return NextResponse.json(
         { error: 'Moodboard generation must complete before confirmation' },
@@ -3874,6 +4151,13 @@ export async function POST(request: Request) {
     })
 
     if (
+      (requestedAction === 'visualize_artifact' && artifactType === 'certification') ||
+      requestedAction === 'complete_certification_visualization'
+    ) {
+      currentStageKey = 'step_6_structure'
+    }
+
+    if (
       requestedAction === 'confirm_form_design_summary' &&
       requestedStageKey === 'step_5_design' &&
       hasStep3ArtifactEvent(existingMessages, 'form_design', 'visualized')
@@ -3884,20 +4168,49 @@ export async function POST(request: Request) {
     if (
       ((requestedAction === 'confirm_artifact' && artifactType === 'moodboard') ||
         requestedAction === 'confirm_moodboard') &&
-      requestedStageKey === 'step_5_style' &&
+      (requestedStageKey === 'step_5_style' ||
+        requestedStageKey === 'step_5_design') &&
       hasCompletedMoodboard
     ) {
-      currentStageKey = 'step_5_design'
+      currentStageKey = 'step_5_cmf'
     }
 
     if (
       requestedAction === 'visualize_artifact' &&
       artifactType === 'design' &&
       requestedStageKey === 'step_5_design' &&
-      hasStep3ArtifactEvent(existingMessages, 'design', 'confirmed')
+      hasStep3ArtifactEvent(existingMessages, 'design', 'confirmed') &&
+      hasStep3ArtifactEvent(existingMessages, 'cmf_design', 'visualized')
     ) {
-      currentStageKey = 'step_5_cmf'
+      currentStageKey = 'step_5_3d'
     }
+
+    if (
+      requestedAction === 'confirm_and_visualize_artifact' &&
+      artifactType === 'design' &&
+      requestedStageKey === 'step_5_design'
+    ) {
+      currentStageKey = 'step_5_design'
+    }
+
+    if (
+      requestedAction === 'visualize_artifact' &&
+      artifactType === 'cmf_design' &&
+      (requestedStageKey === 'step_5_cmf' ||
+        requestedStageKey === 'step_5_design')
+    ) {
+      currentStageKey = 'step_5_design'
+    }
+    const isCmfToDesignTransition =
+      requestedAction === 'visualize_artifact' &&
+      artifactType === 'cmf_design' &&
+      (requestedStageKey === 'step_5_cmf' ||
+        requestedStageKey === 'step_5_design') &&
+      currentStageKey === 'step_5_design'
+    const isCertificationVisualization =
+      requestedAction === 'visualize_artifact' &&
+      artifactType === 'certification' &&
+      currentStageKey === 'step_6_structure'
     const canUseStaticStep2TeamConfirmation =
       requestedAction === 'confirm_step_2_team' &&
       currentStageKey === 'step_2_agent'
@@ -3908,6 +4221,10 @@ export async function POST(request: Request) {
       requestedAction === 'confirm_process' &&
       currentStageKey === 'step_1_idea' &&
       hasCompletedStep1
+    const canUseStaticCertificationCompletion =
+      requestedAction === 'complete_certification_visualization' &&
+      currentStageKey === 'step_6_structure' &&
+      hasStep3ArtifactEvent(existingMessages, 'certification', 'visualized')
     const nextSeqOrder =
       existingMessages.reduce(
         (maxSeq, message) => Math.max(maxSeq, message.seq_order),
@@ -3918,6 +4235,7 @@ export async function POST(request: Request) {
       isInitialEntry ||
       requestedAction === 'confirm_step_2_team' ||
       requestedAction === 'confirm_artifact' ||
+      requestedAction === 'confirm_and_visualize_artifact' ||
       requestedAction === 'visualize_artifact' ||
       (isForcedGeneration && !userMessage)
       ? null
@@ -3931,6 +4249,51 @@ export async function POST(request: Request) {
           supabase,
           userId: user.id,
         })
+
+    if (
+      requestedAction === 'confirm_and_visualize_artifact' &&
+      artifactType === 'design' &&
+      artifactMessageId
+    ) {
+      const confirmedEvent = await insertProjectMessage({
+        action: 'confirm_artifact',
+        content: buildArtifactEventContent({
+          artifactMessageId,
+          artifactSelectedIndex,
+          artifactType,
+          eventType: 'confirmed',
+        }),
+        projectId,
+        role: 'system',
+        seqOrder: nextSeqOrder,
+        stageKey: currentStageKey,
+        supabase,
+        userId: user.id,
+      })
+      const visualizedEvent = await insertProjectMessage({
+        action: 'visualize_artifact',
+        content: buildArtifactEventContent({
+          artifactMessageId,
+          artifactSelectedIndex,
+          artifactType,
+          eventType: 'visualized',
+        }),
+        projectId,
+        role: 'system',
+        seqOrder: nextSeqOrder + 1,
+        stageKey: currentStageKey,
+        supabase,
+        userId: user.id,
+      })
+      existingMessages.push(confirmedEvent, visualizedEvent)
+      return NextResponse.json({
+        currentStageKey,
+        message: null,
+        messages: [],
+        nextStageKey: currentStageKey,
+        userMessage: null,
+      })
+    }
 
     if (
       requestedAction === 'visualize_artifact' &&
@@ -3956,6 +4319,16 @@ export async function POST(request: Request) {
         userId: user.id,
       })
       existingMessages.push(visualizationEvent)
+    }
+
+    if (isCertificationVisualization) {
+      return NextResponse.json({
+        currentStageKey,
+        message: null,
+        messages: [],
+        nextStageKey: currentStageKey,
+        userMessage: null,
+      })
     }
 
     if (
@@ -4218,6 +4591,7 @@ export async function POST(request: Request) {
       !canUseStaticPersonaConfirmation &&
       !canUseStaticPersonaFollowup &&
       !canUseStaticPersonaCompletion &&
+      !canUseStaticCertificationCompletion &&
       !canUseStaticRfpConfirmation &&
       !MOCK_AI_ENABLED &&
       !apiKey
@@ -4541,18 +4915,19 @@ export async function POST(request: Request) {
       const shouldGenerateStyleImages =
         (currentStageKey !== 'step_5_cmf' &&
           body.forceImageGeneration === 'style_reference' &&
-          !hasStyleReferenceSelection(messageForModel)) ||
+          !hasStyleReferenceSelection(messageForModel) &&
+          !hasCompletedMoodboard) ||
         (currentStageKey !== 'step_5_cmf' &&
           currentStageKey === 'step_5_style' &&
           styleProgress?.phase === 'mood_options' &&
           isExplicitStep4ProceedRequest(messageForModel) &&
+          !hasCompletedMoodboard &&
           !hasExistingMoodboardCandidates)
       const shouldGenerateDesignImages =
         currentStageKey !== 'step_5_cmf' &&
+          (isCmfToDesignTransition ||
           (body.forceImageGeneration === 'initial_design' ||
-          body.forceImageGeneration === 'design_revision' ||
-          (currentStageKey === 'step_5_design' &&
-            !hasExistingDesignImages))
+          body.forceImageGeneration === 'design_revision'))
       const shouldGenerateModelingImages =
         currentStageKey === 'step_5_3d' && !hasExistingModelingImages
       const shouldGenerateRfp =
@@ -4595,6 +4970,10 @@ export async function POST(request: Request) {
         cardDebugResponseBranch = 'static-persona-completion'
         assistantContent = buildPersonaConfirmedPrompt()
         responseStageKey = 'step_3_research'
+      } else if (canUseStaticCertificationCompletion) {
+        cardDebugResponseBranch = 'static-certification-completion'
+        assistantContent = buildStructureStageCompletedPrompt()
+        responseStageKey = 'step_6_structure'
       } else if (canUseStaticRfpConfirmation) {
         cardDebugResponseBranch = 'static-rfp-confirmation'
         assistantContent = buildRfpConfirmedPrompt()
@@ -4604,6 +4983,7 @@ export async function POST(request: Request) {
         assistantContent = buildMockStageResponse({
           currentStageKey,
           forceImageGeneration: body.forceImageGeneration,
+          isCmfToDesignTransition,
           message: messageForModel,
           projectTitle: project.title || 'Mock Aidee Project',
           step1UserTurnCount: existingMessages.filter(
@@ -4717,7 +5097,11 @@ export async function POST(request: Request) {
             })
             imageBlock = await generateGeminiImages({
               apiKey: requiredApiKey,
-              count: body.forceImageGeneration === 'design_revision' ? 1 : 3,
+              count: isCmfToDesignTransition
+                ? 4
+                : body.forceImageGeneration === 'design_revision'
+                  ? 1
+                  : 3,
               prompt: buildDesignImagePrompt({
                 conversation,
                 projectTitle: project.title || 'Untitled project',
@@ -4741,7 +5125,7 @@ export async function POST(request: Request) {
           try {
             imageBlock = await generateGeminiImages({
               apiKey: requiredApiKey,
-              count: 2,
+              count: 1,
               prompt: buildModelingImagePrompt({
                 conversation,
                 projectTitle: project.title || 'Untitled project',
@@ -4759,19 +5143,29 @@ export async function POST(request: Request) {
           }
         }
 
-        const modelGenerationStartedAt = Date.now()
         let rawModelText: string
-        try {
-          rawModelText = await generateGeminiText({
-            apiKey: requiredApiKey,
-            messages: modelMessages,
-            system: finalSystemWithStep3Instruction,
-          })
-        } finally {
-          if (currentStageKey.startsWith('step_3') && process.env.NODE_ENV === 'development') {
-            console.log('[STEP3-DEBUG] response generation timing', {
-              durationMs: Date.now() - modelGenerationStartedAt,
+        if (shouldGenerateModelingImages) {
+          rawModelText = '3D Design: Modeling 시안이 생성되었습니다. 선택한 2D 시안을 바탕으로 입체적인 형태와 비율을 확인해보세요.'
+        } else if (shouldGenerateStyleImages) {
+          // 무드보드 후보 생성은 이미지 검색 결과가 핵심입니다. 후속 텍스트
+          // 생성이 비어도 이미지 응답 전체가 500으로 실패하지 않도록 고정 안내를 사용합니다.
+          rawModelText = '선택한 스타일 방향을 바탕으로 무드보드 후보를 준비했습니다.'
+        } else if (isCmfToDesignTransition) {
+          rawModelText = buildCmfToDesignEntryMessage({ project, conversation })
+        } else {
+          const modelGenerationStartedAt = Date.now()
+          try {
+            rawModelText = await generateGeminiText({
+              apiKey: requiredApiKey,
+              messages: modelMessages,
+              system: finalSystemWithStep3Instruction,
             })
+          } finally {
+            if (currentStageKey.startsWith('step_3') && process.env.NODE_ENV === 'development') {
+              console.log('[STEP3-DEBUG] response generation timing', {
+                durationMs: Date.now() - modelGenerationStartedAt,
+              })
+            }
           }
         }
         step3RawModelText = rawModelText
@@ -4971,12 +5365,22 @@ export async function POST(request: Request) {
           }
         }
 
-        let text = isUnrenderableStructuredResponse(
-          validatedStep3Text,
-          styleProgress?.phase === 'mood_options'
-        )
+        const canUseStructuredResponseFallback =
+          currentStageKey === 'step_3_persona' ||
+          (currentStageKey === 'step_5_style' &&
+            styleProgress?.phase === 'mood_options')
+        let text =
+          canUseStructuredResponseFallback &&
+          isUnrenderableStructuredResponse(
+            validatedStep3Text,
+            styleProgress?.phase === 'mood_options'
+          )
           ? '생성된 시안 이미지와 프로젝트 맥락을 바탕으로 디자인 방향을 준비했습니다.'
           : validatedStep3Text
+
+        if (isCmfToDesignTransition) {
+          text = buildCmfToDesignEntryMessage({ project, conversation })
+        }
 
         if (currentStageKey === 'step_3_persona') {
           text = sanitizeStep3Response({
@@ -5047,11 +5451,22 @@ export async function POST(request: Request) {
         ) {
           console.log('[STEP 1 DIAG] 모델 raw 응답:', JSON.stringify(text))
         }
-        const styleMoodWidgets =
+        let styleMoodWidgets =
           currentStageKey === 'step_5_style' &&
           styleProgress?.phase === 'mood_options'
+            && !hasCompletedMoodboard
             ? parseStyleMoodWidgets(text)
             : []
+
+        if (
+          currentStageKey === 'step_5_style' &&
+          styleProgress?.phase === 'mood_options' &&
+          !hasCompletedMoodboard &&
+          styleMoodWidgets.length === 0
+        ) {
+          styleMoodWidgets = buildFallbackStyleMoodWidgets()
+          text = `${text.trim()}\n\n${JSON.stringify({ widgets: styleMoodWidgets })}`.trim()
+        }
 
         if (!imageBlock && styleMoodWidgets.length > 0) {
           const unsplashKey = getUnsplashAccessKey()
@@ -5093,6 +5508,16 @@ export async function POST(request: Request) {
           imageBlock,
           text,
         })
+        const hasCmfSummaryMarker = isCmfSummaryContent(assistantContent)
+        if (hasCmfSummaryMarker) {
+          assistantContent = normalizeCmfSummaryMarkers(assistantContent)
+        }
+        const hasCertificationSummaryMarker =
+          currentStageKey === 'step_6_structure' &&
+          isCertificationSummaryContent(assistantContent)
+        if (hasCertificationSummaryMarker) {
+          assistantContent = normalizeCertificationSummaryMarkers(assistantContent)
+        }
         const stageMeta = inferStageMetaFromText({
           currentStageKey,
           text: assistantContent,
@@ -5143,6 +5568,12 @@ export async function POST(request: Request) {
             : stageMeta.transition
               ? stageMeta.nextStageKey
               : stageMeta.currentStageKey
+          if (hasCmfSummaryMarker) {
+            responseStageKey = 'step_5_cmf'
+          }
+          if (hasCertificationSummaryMarker) {
+            responseStageKey = 'step_6_structure'
+          }
         }
       }
 
@@ -5185,39 +5616,49 @@ export async function POST(request: Request) {
         assistantContent = assistantContent
           .replace('<<AIDEE_CMF_READY>>', '')
           .trim()
-        responseStageKey = 'step_5_3d'
-
-        try {
-          const modelingImageBlock = MOCK_AI_ENABLED
-            ? {
-                images: Array.from({ length: 2 }, () => MOCK_IMAGE_URL),
-                model: 'mock-ai',
-                prompt: 'Mock AI placeholder',
-                purpose: 'modeling' as const,
-                selectedImageIndex: null,
-              }
-            : await generateGeminiImages({
-                apiKey: requiredApiKey,
-                count: 2,
-                prompt: buildModelingImagePrompt({
-                  conversation,
-                  projectTitle: project.title || 'Untitled project',
-                  requirements: project.requirements,
-                  userRequest: messageForModel,
-                }),
-                purpose: 'modeling',
-                referenceImages: [getSelectedDesignReferenceImage(existingMessages)].filter(
-                  (image): image is string => Boolean(image)
-                ),
-              })
-          assistantContent = appendImageBlockIfPresent({
-            imageBlock: modelingImageBlock,
-            text: assistantContent,
-          })
-        } catch (err) {
-          console.error('3D modeling image generation failed:', err)
-          throw new Error('3D 모델링 시안 이미지 생성에 실패했습니다. 다시 시도해 주세요.')
+        if (!assistantContent.includes('<<AIDEE_CMF_DESIGN_DATA>>')) {
+          const fallbackDescription = assistantContent
+            .replace(/<</g, '')
+            .replace(/>>/g, '')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(-240)
+          assistantContent += `\n\n<<AIDEE_CMF_DESIGN_DATA>>\n${JSON.stringify({
+            conceptTitle: 'CMF Concept',
+            conceptDescription: fallbackDescription,
+            color: { title: '대화에서 정한 색', description: '5-3 대화에서 정한 색의 역할을 반영합니다.', swatches: [] },
+            material: { title: '대화에서 정한 소재감', description: '5-3 대화에서 정한 손과 몸에 닿는 느낌을 반영합니다.', imageQueries: [] },
+            finish: { title: '대화에서 정한 마감감', description: '5-3 대화에서 정한 표면 표현과 관리 방향을 반영합니다.', imageQueries: [] },
+            references: [],
+          })}\n<</AIDEE_CMF_DESIGN_DATA>>`
         }
+        const cmfDataMatch = assistantContent.match(
+          /<<AIDEE_CMF_DESIGN_DATA>>\s*([\s\S]*?)\s*<<\/?AIDEE_CMF_DESIGN_DATA>>/i
+        )
+        if (cmfDataMatch) {
+          try {
+            const cmfData = JSON.parse(cmfDataMatch[1]) as {
+              color?: { imageQueries?: unknown }
+              material?: { imageQueries?: unknown }
+              finish?: { imageQueries?: unknown }
+              references?: unknown
+            }
+            const queries = [cmfData.color, cmfData.material, cmfData.finish]
+              .flatMap((item) => Array.isArray(item?.imageQueries) ? item.imageQueries : [])
+              .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+            const unsplashKey = getUnsplashAccessKey()
+            if (unsplashKey && queries.length > 0 && (!Array.isArray(cmfData.references) || cmfData.references.length === 0)) {
+              const searchResults = await Promise.allSettled(
+                queries.slice(0, 3).map((query) => searchUnsplashPhotos({ accessKey: unsplashKey, query, perPage: 2, orientation: 'squarish' }))
+              )
+              cmfData.references = searchResults.flatMap((result) => result.status === 'fulfilled' ? result.value.map((image) => image.url) : [])
+              assistantContent = assistantContent.replace(cmfDataMatch[1], JSON.stringify(cmfData))
+            }
+          } catch (error) {
+            console.warn('[STEP 5] CMF reference image search skipped:', error)
+          }
+        }
+        responseStageKey = 'step_5_cmf'
       }
     }
 
@@ -5381,13 +5822,43 @@ export async function POST(request: Request) {
       assistantContent = stripStep6InternalNotes(assistantContent)
     }
 
+    if (currentStageKey === 'step_7_market') {
+      const step7ConversationMessages = [
+        ...existingMessages,
+        ...(savedUserMessage ? [savedUserMessage] : []),
+      ]
+      const step7TimelineProgress = getStep7TimelineProgress(
+        step7ConversationMessages,
+      )
+      const hasTimelineAlready = step7ConversationMessages.some((message) =>
+        message.content.includes(STEP7_TIMELINE_MARKER),
+      )
+
+      if (step7TimelineProgress.isComplete && !hasTimelineAlready) {
+        const fallbackResponse = buildStep7TimelineFallbackResponse(
+          project,
+          step7ConversationMessages,
+        )
+        const hasUsableTimelineSummary =
+          assistantContent.length >= 180 &&
+          !/생성된 시안 이미지와 프로젝트 맥락을 바탕으로 디자인 방향을 준비했습니다/i.test(
+            assistantContent,
+          )
+
+        assistantContent = hasUsableTimelineSummary
+          ? `${assistantContent.trim()}\n\n${fallbackResponse.slice(fallbackResponse.indexOf(STEP7_TIMELINE_MARKER))}`
+          : fallbackResponse
+      }
+    }
+
     if (currentStageKey === 'step_5_style') {
+      const step5Messages = [
+        ...existingMessages,
+        ...(savedUserMessage ? [savedUserMessage] : []),
+      ]
       const step5WidgetKind = shouldShowStep5Widget({
         currentStageKey,
-        messages: [
-          ...existingMessages,
-          ...(savedUserMessage ? [savedUserMessage] : []),
-        ],
+        messages: step5Messages,
         text: assistantContent,
       })
 
@@ -5396,6 +5867,13 @@ export async function POST(request: Request) {
         !assistantContent.includes(STEP5_WIDGET_MARKERS[step5WidgetKind])
       ) {
         assistantContent = `${assistantContent.trim()}\n\n${STEP5_WIDGET_MARKERS[step5WidgetKind]}`
+      }
+
+      if (
+        shouldShowStep5CombinationPreview(step5Messages, requestedAction) &&
+        !assistantContent.includes(STEP5_COMBINATION_PREVIEW_MARKER)
+      ) {
+        assistantContent = `${assistantContent.trim()}\n\n${STEP5_COMBINATION_PREVIEW_MARKER}`
       }
     }
 
