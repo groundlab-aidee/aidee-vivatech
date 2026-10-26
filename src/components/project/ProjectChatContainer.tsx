@@ -321,28 +321,56 @@ function extractCertificationData(content: string): CertificationData | null {
   const match = content.match(/<<AIDEE_CERTIFICATION_DATA>>\s*([\s\S]*?)\s*<</i)
   if (!match) return null
   try {
-    const parsed = JSON.parse(match[1]) as Partial<CertificationData>
+    const parsed = JSON.parse(match[1]) as Record<string, unknown>
+    const stringValue = (row: Record<string, unknown>, keys: string[]) => {
+      for (const key of keys) {
+        if (typeof row[key] === 'string' && row[key].trim()) return row[key].trim()
+      }
+      return ''
+    }
     const rows = (value: unknown): CertificationRow[] =>
       Array.isArray(value)
-        ? value.filter((item): item is CertificationRow => {
-            if (!item || typeof item !== 'object') return false
-            const row = item as Record<string, unknown>
-            return typeof row.name === 'string' && row.name.trim().length > 0
-          }).map((row) => ({
-            name: row.name.trim(),
-            authority: typeof row.authority === 'string' ? row.authority : '',
-            detail: typeof row.detail === 'string' ? row.detail : '',
-            reason: typeof row.reason === 'string' ? row.reason : '',
-            recommendation: (row.recommendation === '적극 추천' ? '적극 추천' : '추천') as CertificationRow['recommendation'],
-          })).slice(0, 3)
+        ? value
+            .map((item): CertificationRow | null => {
+              if (typeof item === 'string') {
+                const name = item.trim()
+                return name ? { name, authority: '', detail: '', reason: `${name}을 기준으로 추천합니다.`, recommendation: '추천' } : null
+              }
+              if (!item || typeof item !== 'object') return null
+              const row = item as Record<string, unknown>
+              const name = stringValue(row, ['name', 'certification', 'certificationName', 'title', 'certificate', '인증명', '인증'])
+              if (!name) return null
+              return {
+                name,
+                authority: stringValue(row, ['authority', 'organization', 'agency', 'region', '기관', '주관기관']),
+                detail: stringValue(row, ['detail', 'description', 'scope', 'type', '설명', '상세']),
+                reason: stringValue(row, ['reason', 'recommendationReason', 'why', '추천이유', '추천 이유']) || `${name}을 기준으로 추천합니다.`,
+                recommendation: /적극/.test(stringValue(row, ['recommendation', 'recommendationLevel', 'priority', '추천'])) ? '적극 추천' : '추천',
+              }
+            })
+            .filter((item): item is CertificationRow => Boolean(item))
+            .slice(0, 3)
         : []
+    const arrayValue = (keys: string[]) => {
+      for (const key of keys) {
+        if (Array.isArray(parsed[key])) return parsed[key]
+      }
+      return []
+    }
+    let international = rows(arrayValue(['international', 'internationalCertifications', 'overseas', 'foreign', '국외', '국외 인증']))
+    let domestic = rows(arrayValue(['domestic', 'domesticCertifications', 'korea', '국내', '국내 인증']))
+    const combined = rows(arrayValue(['certifications', 'items', 'recommendations', '인증 항목', '인증']))
+    if (international.length === 0 && domestic.length === 0 && combined.length > 0) {
+      international = combined.filter((row) => !/국내|한국|KC/i.test(`${row.authority} ${row.name}`)).slice(0, 3)
+      domestic = combined.filter((row) => /국내|한국|KC/i.test(`${row.authority} ${row.name}`)).slice(0, 3)
+    }
     return {
       title: 'Certification',
-      productContext: typeof parsed.productContext === 'string' ? parsed.productContext : '',
-      international: rows(parsed.international),
-      domestic: rows(parsed.domestic),
-      note: typeof parsed.note === 'string' ? parsed.note : '실제 대상 여부와 통과 여부는 시험 기관 확인이 필요합니다.',
-      sourceSummary: typeof parsed.sourceSummary === 'string' ? parsed.sourceSummary : '',
+      productContext: stringValue(parsed, ['productContext', 'context', '제품 맥락']),
+      international,
+      domestic,
+      note: stringValue(parsed, ['note', '주의', '안내']) || '실제 대상 여부와 통과 여부는 시험 기관 확인이 필요합니다.',
+      sourceSummary: stringValue(parsed, ['sourceSummary', 'summary']),
     }
   } catch {
     return null
@@ -604,6 +632,7 @@ function stripInternalBlocksForDisplay(text: string) {
     .replace(/\n?<<AIDEE_STEP5_FORM_SUMMARY>>/g, '')
     .replace(/\n?<<AIDEE_CMF_DESIGN_DATA>>[\s\S]*?<<\/?AIDEE_CMF_DESIGN_DATA>>/g, '')
     .replace(/\n?<<AIDEE_CERTIFICATION_DATA>>[\s\S]*?<<\/?AIDEE_CERTIFICATION_DATA>>/g, '')
+    .replace(/\n?<<AIDEE_STEP6_SUMMARY>>[\s\S]*?<<\/?AIDEE_STEP6_SUMMARY>>/g, '')
     .replace(/\n?<<AIDEE_MARKETING_BUDGET>>[\s\S]*?(?:\n?<<\/AIDEE_MARKETING_BUDGET>>|$)/gi, '')
     .replace(/\n?<<AIDEE_DEVELOPMENT_TIMELINE>>[\s\S]*?(?:\n?<<\/AIDEE_DEVELOPMENT_TIMELINE>>|$)/gi, '')
     .replace(

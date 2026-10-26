@@ -930,12 +930,14 @@ function buildDesignStageCompletedPrompt() {
   ].join('\n')
 }
 
-function buildStructureStageCompletedPrompt() {
+function buildStructureStageCompletedPrompt(step6Summary = '') {
   return [
+    step6Summary.trim(),
+    step6Summary.trim() ? '' : null,
     'STEP 6. 구조 설계 방향 도출 단계가 완료되었습니다.',
     '',
     '다음으로 STEP 7. 시장 진입 전략 도출 단계로 넘어가겠습니다. STEP 7. 시장 진입 전략 도출을 시작할까요?',
-  ].join('\n')
+  ].filter((line): line is string => line !== null).join('\n')
 }
 
 function buildMarketStageCompletedPrompt() {
@@ -2835,41 +2837,220 @@ function isCertificationSummaryContent(content: string) {
   )
 }
 
-function normalizeCertificationSummaryMarkers(content: string) {
-  if (content.includes('<<AIDEE_CERTIFICATION_DATA>>')) return content
+function certificationString(record: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = record[key]
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
 
-  const cleaned = content
-    .replace(/STEP\s*6\s*\.\s*구조 설계 방향 도출 단계가 완료되었습니다\.[\s\S]*$/i, '')
-    .replace(/\n?STEP\s*7\s*\.\s*시장 진입 전략 도출[\s\S]*$/i, '')
-    .trim()
-  const certificationLines = cleaned
+  return ''
+}
+
+function normalizeCertificationRow(value: unknown) {
+  if (typeof value === 'string') {
+    const name = value.trim()
+    return name
+      ? {
+          name,
+          authority: '',
+          detail: '',
+          recommendation: '추천',
+          reason: `${name}을 기준으로 추천합니다.`,
+        }
+      : null
+  }
+
+  if (!value || typeof value !== 'object') return null
+
+  const record = value as Record<string, unknown>
+  const name = certificationString(record, [
+    'name',
+    'certification',
+    'certificationName',
+    'title',
+    'certificate',
+    '인증명',
+    '인증',
+  ])
+
+  if (!name) return null
+
+  const recommendationValue = certificationString(record, [
+    'recommendation',
+    'recommendationLevel',
+    'priority',
+    '추천',
+  ])
+
+  return {
+    name,
+    authority: certificationString(record, [
+      'authority',
+      'organization',
+      'agency',
+      'region',
+      '기관',
+      '주관기관',
+    ]),
+    detail: certificationString(record, [
+      'detail',
+      'description',
+      'scope',
+      'type',
+      '설명',
+      '상세',
+    ]),
+    recommendation: /적극/.test(recommendationValue) ? '적극 추천' : '추천',
+    reason:
+      certificationString(record, [
+        'reason',
+        'recommendationReason',
+        'why',
+        '추천이유',
+        '추천 이유',
+      ]) || `${name}을 기준으로 추천합니다.`,
+  }
+}
+
+function certificationArray(payload: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    if (Array.isArray(payload[key])) return payload[key]
+  }
+
+  return []
+}
+
+function buildCertificationRows(values: unknown[]) {
+  return values
+    .map(normalizeCertificationRow)
+    .filter((row): row is NonNullable<ReturnType<typeof normalizeCertificationRow>> => Boolean(row))
+    .slice(0, 3)
+}
+
+function certificationRowsFromText(content: string) {
+  return content
     .split(/\r?\n/)
     .map((line) => line.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, '').trim())
     .filter((line) =>
-      /\b(?:CE|ISO(?:\s*\d+)?|KC|CPSIA|UL|FCC|RoHS|REACH)\b/i.test(line) &&
+      /\b(?:CE(?:\s*Mark)?|ISO(?:\s*\d+)?|KC|CPSIA|UL|FCC|RoHS|REACH)\b/i.test(line) &&
       line.length >= 4 &&
-      line.length <= 180
+      line.length <= 240
     )
+    .map((line) => {
+      const match = line.match(/\b(?:CE(?:\s*Mark)?|ISO(?:\s*\d+)?|KC|CPSIA|UL|FCC|RoHS|REACH)\b/i)
+      const name = match?.[0]?.trim() || line.split(/\s*[:：-]\s*/, 2)[0].trim()
+      return {
+        name,
+        authority: /KC|한국|국내/i.test(line) ? '국내 · 대화에서 확인' : '국외 · 대화에서 확인',
+        detail: '6-4 대화에서 확인한 인증 항목',
+        recommendation: '추천',
+        reason: `${line}을 기준으로 추천합니다.`,
+      }
+    })
+    .filter((row, index, rows) => rows.findIndex((candidate) => candidate.name.toLowerCase() === row.name.toLowerCase()) === index)
     .slice(0, 6)
-  const rows = certificationLines.map((line) => {
-    const [name, ...reasonParts] = line.split(/\s*[:：-]\s*/, 2)
-    return {
-      name: name.trim(),
-      authority: /KC|한국|국내/i.test(line) ? '국내 · 대화에서 확인' : '국외 · 대화에서 확인',
-      detail: '6-4 대화에서 확인한 인증 항목',
-      recommendation: '추천',
-      reason: (reasonParts.join(': ').trim() || line) + '을 기준으로 추천합니다.',
-    }
-  })
-  const dataBlock = `<<AIDEE_CERTIFICATION_DATA>>\n${JSON.stringify({
+}
+
+function certificationDataBlock(data: {
+  productContext: string
+  international: ReturnType<typeof buildCertificationRows>
+  domestic: ReturnType<typeof buildCertificationRows>
+  note: string
+  sourceSummary: string
+}) {
+  return `<<AIDEE_CERTIFICATION_DATA>>\n${JSON.stringify({
     title: 'Certification',
-    productContext: cleaned.slice(0, 500),
-    international: rows.filter((row) => !/국내/.test(row.authority)),
-    domestic: rows.filter((row) => /국내/.test(row.authority)),
-    note: '인증 판단은 안내이며, 실제 대상 여부와 통과 여부는 시험 기관 확인이 필요합니다.',
-    sourceSummary: cleaned,
+    ...data,
   })}\n<</AIDEE_CERTIFICATION_DATA>>`
-  return `${cleaned}\n\n${dataBlock}`.trim()
+}
+
+function extractStep6SummaryBlock(content: string) {
+  const headingMatch = content.match(
+    /(?:^|\n)\s*(?:#{1,6}\s*)?(?:STEP\s*6\s*[-:.]?\s*)?(?:구조\s*설계\s*방향\s*)?(?:주요\s*)?정리(?:\s*내용)?[\s\S]*?(?=STEP\s*6\s*\.\s*구조\s*설계\s*방향\s*도출\s*단계가\s*완료되었습니다\.|$)/i
+  )
+
+  if (!headingMatch?.[0]?.trim()) return ''
+  return headingMatch[0].trim()
+}
+
+function buildStep6SummaryBlock(summary: string) {
+  return `<<AIDEE_STEP6_SUMMARY>>\n${summary}\n<</AIDEE_STEP6_SUMMARY>>`
+}
+
+function normalizeCertificationSummaryMarkers(content: string) {
+  const step6Summary = extractStep6SummaryBlock(content)
+  const cleaned = content
+    .replace(/STEP\s*6\s*\.\s*구조 설계 방향 도출 단계가 완료되었습니다\.[\s\S]*$/i, '')
+    .replace(/\n?STEP\s*7\s*\.\s*시장 진입 전략 도출[\s\S]*$/i, '')
+    .replace(step6Summary, '')
+    .trim()
+
+  const markerMatch = cleaned.match(
+    /<<AIDEE_CERTIFICATION_DATA>>\s*([\s\S]*?)\s*<<\/AIDEE_CERTIFICATION_DATA>>/i
+  )
+
+  let payload: Record<string, unknown> = {}
+  if (markerMatch) {
+    try {
+      const parsed = JSON.parse(markerMatch[1])
+      if (parsed && typeof parsed === 'object') payload = parsed as Record<string, unknown>
+    } catch {
+      // Fall through to the text-based recovery below.
+    }
+  }
+
+  let international = buildCertificationRows(
+    certificationArray(payload, [
+      'international',
+      'internationalCertifications',
+      'overseas',
+      'foreign',
+      '국외',
+      '국외 인증',
+    ])
+  )
+  let domestic = buildCertificationRows(
+    certificationArray(payload, [
+      'domestic',
+      'domesticCertifications',
+      'korea',
+      '국내',
+      '국내 인증',
+    ])
+  )
+
+  const combined = certificationArray(payload, [
+    'certifications',
+    'items',
+    'recommendations',
+    '인증 항목',
+    '인증',
+  ])
+  if (combined.length > 0 && international.length === 0 && domestic.length === 0) {
+    const rows = buildCertificationRows(combined)
+    international = rows.filter((row) => !/국내|한국|KC/i.test(`${row.authority} ${row.name}`)).slice(0, 3)
+    domestic = rows.filter((row) => /국내|한국|KC/i.test(`${row.authority} ${row.name}`)).slice(0, 3)
+  }
+
+  if (international.length === 0 && domestic.length === 0) {
+    const recovered = certificationRowsFromText(cleaned)
+    international = recovered.filter((row) => !/국내/.test(row.authority)).slice(0, 3)
+    domestic = recovered.filter((row) => /국내/.test(row.authority)).slice(0, 3)
+  }
+
+  const dataBlock = certificationDataBlock({
+    productContext:
+      certificationString(payload, ['productContext', 'context', '제품 맥락']) || cleaned.slice(0, 500),
+    international,
+    domestic,
+    note:
+      certificationString(payload, ['note', '주의', '안내']) ||
+      '인증 판단은 안내이며, 실제 대상 여부와 통과 여부는 시험 기관 확인이 필요합니다.',
+    sourceSummary: certificationString(payload, ['sourceSummary', 'summary']) || cleaned,
+  })
+
+  const normalized = markerMatch ? cleaned.replace(markerMatch[0], dataBlock).trim() : `${cleaned}\n\n${dataBlock}`.trim()
+  return step6Summary ? `${normalized}\n\n${buildStep6SummaryBlock(step6Summary)}`.trim() : normalized
 }
 
 function isStringArray(value: unknown): value is string[] {
@@ -5166,7 +5347,20 @@ export async function POST(request: Request) {
         responseStageKey = 'step_3_research'
       } else if (canUseStaticCertificationCompletion) {
         cardDebugResponseBranch = 'static-certification-completion'
-        assistantContent = buildStructureStageCompletedPrompt()
+        const latestCertificationSummary = [...existingMessages]
+          .reverse()
+          .find(
+            (message) =>
+              message.role === 'assistant' &&
+              /<<AIDEE_CERTIFICATION_DATA>>/i.test(message.content)
+          )
+        const step6SummaryMatch = latestCertificationSummary?.content.match(
+          /<<AIDEE_STEP6_SUMMARY>>\s*([\s\S]*?)\s*<<\/AIDEE_STEP6_SUMMARY>>/i
+        )
+        const step6Summary =
+          step6SummaryMatch?.[1]?.trim() ||
+          (latestCertificationSummary ? extractStep6SummaryBlock(latestCertificationSummary.content) : '')
+        assistantContent = buildStructureStageCompletedPrompt(step6Summary)
         responseStageKey = 'step_6_structure'
       } else if (canUseStaticRfpConfirmation) {
         cardDebugResponseBranch = 'static-rfp-confirmation'
