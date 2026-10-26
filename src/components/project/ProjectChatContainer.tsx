@@ -99,6 +99,7 @@ type ForceImageGeneration =
   | 'initial_design'
   | 'persona_card'
   | 'style_reference'
+  | 'rendering'
 
 const STEP_2_AGENT_NAMES = [
   '기획전략가',
@@ -264,7 +265,7 @@ type KeywordArtifactKind = 'experience_keywords' | 'relationship_keywords'
 
 function extractCmfDesignData(content: string): CmfDesignData | null {
   const match = content.match(/<<AIDEE_CMF_DESIGN_DATA>>\s*([\s\S]*?)\s*<</)
-  const hasLegacySummary = /<<AIDEE_STEP5_CMF_SUMMARY>>[\s\S]*?<<\/AIDEE_STEP5_CMF_SUMMARY>>/i.test(content)
+  const hasLegacySummary = /<<AIDEE_STEP5_CMF_SUMMARY>>/i.test(content)
   const hasPlainSummary = /(?:CMF\s*(?:Design\s*)?(?:요약|정리)|CMF\s*\(색[，,]?\s*소재[，,]?\s*마감\)\s*정리)/i.test(content)
   if (!match && !hasLegacySummary && !hasPlainSummary) return null
   if (!match) {
@@ -326,14 +327,14 @@ function extractCertificationData(content: string): CertificationData | null {
         ? value.filter((item): item is CertificationRow => {
             if (!item || typeof item !== 'object') return false
             const row = item as Record<string, unknown>
-            return typeof row.name === 'string' && typeof row.authority === 'string' && typeof row.detail === 'string' && typeof row.reason === 'string'
+            return typeof row.name === 'string' && row.name.trim().length > 0
           }).map((row) => ({
-            name: row.name,
-            authority: row.authority,
-            detail: row.detail,
-            reason: row.reason,
-            recommendation: row.recommendation === '적극 추천' ? '적극 추천' : '추천',
-          }))
+            name: row.name.trim(),
+            authority: typeof row.authority === 'string' ? row.authority : '',
+            detail: typeof row.detail === 'string' ? row.detail : '',
+            reason: typeof row.reason === 'string' ? row.reason : '',
+            recommendation: (row.recommendation === '적극 추천' ? '적극 추천' : '추천') as CertificationRow['recommendation'],
+          })).slice(0, 3)
         : []
     return {
       title: 'Certification',
@@ -359,6 +360,7 @@ type ArtifactType =
   | 'moodboard'
   | 'design'
   | 'modeling'
+  | 'rendering'
   | 'form_design'
   | 'cmf_design'
   | 'certification'
@@ -433,6 +435,8 @@ function getImageArtifactKind(purpose?: GeneratedImagePurpose): LibraryArtifactK
       return 'rendering'
     case 'modeling':
       return 'modeling'
+    case 'rendering':
+      return 'rendering'
     default:
       return null
   }
@@ -1450,6 +1454,7 @@ export function ProjectChatContainer({
   const [step5Draft, setStep5Draft] = useState<Step5Combination | null>(null)
   const [step5Saving, setStep5Saving] = useState(false)
   const [formDesignModalOpen, setFormDesignModalOpen] = useState(false)
+  const [confirmedFormDesignSummaryMessageId, setConfirmedFormDesignSummaryMessageId] = useState<string | null>(null)
   const [latestFormDesignKey, setLatestFormDesignKey] = useState<string | null>(() => getFormDesignVisualizationKey(initialMessages))
   const [latestCmfDesignKey, setLatestCmfDesignKey] = useState<string | null>(() => getCmfDesignVisualizationKey(initialMessages))
   const [latestDesignRenderingKey, setLatestDesignRenderingKey] = useState<string | null>(() => getDesignVisualizationKey(initialMessages))
@@ -1551,9 +1556,6 @@ export function ProjectChatContainer({
     () => messages.filter((message) => message.role !== 'system'),
     [messages]
   )
-  const step5PreviewReady = step5CombinationHistory.length > 0 || visibleMessages.some(
-    (message) => message.role === 'assistant' && /<<AIDEE_STEP5_COMBINATION_PREVIEW>>/i.test(message.content)
-  )
   const latestSelectedStep5Combination = useMemo(() => {
     const shape = [...visibleMessages].reverse().find(
       (message) => message.role === 'user' && message.action === 'select_step5_shape',
@@ -1564,13 +1566,36 @@ export function ProjectChatContainer({
     return shape && form ? { shape, form } : null
   }, [visibleMessages])
   const activeStep5Combination = step5Combination ?? latestSelectedStep5Combination
+  const step5PreviewReady = Boolean(activeStep5Combination) || step5CombinationHistory.length > 0 || visibleMessages.some(
+    (message) => message.role === 'assistant' && /<<AIDEE_STEP5_COMBINATION_PREVIEW>>/i.test(message.content)
+  )
   const latestStep5CombinationPreviewMessageId = useMemo(() => {
-    return [...visibleMessages].reverse().find(
+    const markedMessage = [...visibleMessages].reverse().find(
       (message) =>
         message.role === 'assistant' &&
         /<<AIDEE_STEP5_COMBINATION_PREVIEW>>/i.test(message.content),
+    )
+    if (markedMessage) return markedMessage.id
+
+    if (!activeStep5Combination) return null
+
+    const latestShape = [...visibleMessages].reverse().find(
+      (message) => message.role === 'user' && message.action === 'select_step5_shape',
+    )
+    const latestForm = [...visibleMessages].reverse().find(
+      (message) => message.role === 'user' && message.action === 'select_step5_form',
+    )
+    const latestSelectionSeq = Math.max(
+      latestShape?.seq_order ?? -1,
+      latestForm?.seq_order ?? -1,
+    )
+
+    return [...visibleMessages].reverse().find(
+      (message) =>
+        message.role === 'assistant' &&
+        message.seq_order > latestSelectionSeq,
     )?.id ?? null
-  }, [visibleMessages])
+  }, [activeStep5Combination, visibleMessages])
   const hasFormDesignVisualization = latestFormDesignKey !== null
   const hasCmfDesignVisualization = latestCmfDesignKey !== null
   const hasConfirmedMoodboard = useMemo(
@@ -1639,16 +1664,22 @@ export function ProjectChatContainer({
     }
   }
 
-  async function confirmStep5FormDesignSummary() {
-    const response = await requestAssistantResponse({
-      action: 'confirm_form_design_summary',
-      message: '5-0-6 정리를 확정합니다.',
+  async function confirmStep5FormDesignSummary(messageId: string) {
+    setConfirmedFormDesignSummaryMessageId(messageId)
+    await requestAssistantResponse({
+      action: 'confirm_artifact',
+      artifactMessageId: messageId,
+      artifactType: 'form_design',
+      message: '',
       silent: true,
     })
+  }
 
-    if (response && activeStep5Combination) {
-      await visualizeStep5Combination()
-    }
+  async function confirmStep5CombinationPreview() {
+    await requestAssistantResponse({
+      action: 'confirm_step5_combination',
+      message: '5-0-4 조형과 형태 조합을 확정합니다.',
+    })
   }
 
   function confirmCmfDesign(messageId: string) {
@@ -1859,6 +1890,14 @@ export function ProjectChatContainer({
             'step_5_style'
           )
         }
+
+        if (/<<AIDEE_CMF_DESIGN_READY>>|<<AIDEE_2D_CONCEPT_READY>>/i.test(message.content)) {
+          inferredStageKey = getLaterStageKey(inferredStageKey, 'step_5_design')
+        } else if (/<<AIDEE_STEP5_CMF_SUMMARY>>|<<AIDEE_CMF_DESIGN_DATA>>/i.test(message.content)) {
+          inferredStageKey = getLaterStageKey(inferredStageKey, 'step_5_cmf')
+        } else if (/<<AIDEE_STEP5_(?:SHAPE_WIDGET|FORM_WIDGET|COMBINATION_PREVIEW|FORM_SUMMARY)>>/i.test(message.content)) {
+          inferredStageKey = getLaterStageKey(inferredStageKey, 'step_5_style')
+        }
       }
 
       if (
@@ -1875,9 +1914,7 @@ export function ProjectChatContainer({
       (message) =>
         message.role === 'assistant' &&
         (/<<AIDEE_CMF_DESIGN_DATA>>/i.test(message.content) ||
-          /<<AIDEE_STEP5_CMF_SUMMARY>>[\s\S]*?<<\/AIDEE_STEP5_CMF_SUMMARY>>/i.test(
-            message.content
-          ) ||
+          /<<AIDEE_STEP5_CMF_SUMMARY>>/i.test(message.content) ||
           /(?:CMF\s*(?:Design\s*)?(?:요약|정리)|CMF\s*\(색[，,]?\s*소재[，,]?\s*마감\)\s*정리)/i.test(
             message.content
           ))
@@ -2545,6 +2582,8 @@ export function ProjectChatContainer({
         ? 'step_2_agent'
         : action === 'start_step_3' && effectiveStageKey === 'step_2_agent'
           ? 'step_3_persona'
+          : action === 'start_step_6' && effectiveStageKey.startsWith('step_5')
+            ? 'step_6_structure'
         : action || resolvedTextStageKey === 'step_2_agent'
           ? effectiveStageKey
           : resolvedTextStageKey ?? effectiveStageKey
@@ -2780,18 +2819,28 @@ export function ProjectChatContainer({
     })
   }
 
-  function visualizeArtifact(
+  async function visualizeArtifact(
     artifactType: ArtifactType,
     messageId: string,
     artifactSelectedIndex?: number
   ) {
-    void requestAssistantResponse({
+    const response = await requestAssistantResponse({
       action: 'visualize_artifact',
       artifactMessageId: messageId,
       artifactSelectedIndex,
       artifactType,
       message: '',
     })
+
+    if (
+      artifactType === 'design' &&
+      response?.generatedImageBlock?.purpose === 'modeling'
+    ) {
+      await requestAssistantResponse({
+        forceImageGeneration: 'rendering',
+        message: '',
+      })
+    }
   }
 
   function confirmPersonaCard(messageId: string) {
@@ -2971,6 +3020,7 @@ export function ProjectChatContainer({
         artifactMessageId: messageId,
         artifactType: `direction_${kind}` as ArtifactType,
         message: '',
+        silent: true,
       })
 
     if (kind === 'market_size') {
@@ -3027,10 +3077,12 @@ export function ProjectChatContainer({
       return next
     })
 
-    void confirmArtifact(
-      `direction_${kind}` as ArtifactType,
-      messageId
-    )
+    void requestAssistantResponse({
+      action: 'confirm_artifact',
+      artifactMessageId: messageId,
+      artifactType: `direction_${kind}` as ArtifactType,
+      message: '',
+    })
   }
 
   function resizeComposer() {
@@ -3291,19 +3343,31 @@ export function ProjectChatContainer({
                   onConfirmCertification={confirmCertification}
                   onVisualizeCertification={visualizeCertification}
                   onConfirmFormDesignSummary={confirmStep5FormDesignSummary}
+                  onVisualizeFormDesign={visualizeStep5Combination}
+                  confirmedFormDesignSummaryMessageId={confirmedFormDesignSummaryMessageId}
                   selectedStep5WidgetKinds={selectedStep5WidgetKinds}
                 />
 
                   {message.id === latestStep5CombinationPreviewMessageId && step5PreviewReady && activeStep5Combination ? (
                     <div className="mt-3 flex w-full max-w-xl flex-col items-start gap-2">
                       <Step5CombinationGrid value={activeStep5Combination} />
-                      <button
-                        type="button"
-                        onClick={() => { setStep5Draft(activeStep5Combination); setStep5EditOpen(true) }}
-                        className="rounded-full bg-blue-600 px-5 py-2 text-sm font-semibold text-white"
-                      >
-                        수정하기
-                      </button>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => { setStep5Draft(activeStep5Combination); setStep5EditOpen(true) }}
+                          className="rounded-full bg-blue-600 px-5 py-2 text-sm font-semibold text-white"
+                        >
+                          수정하기
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isPending}
+                          onClick={() => void confirmStep5CombinationPreview()}
+                          className="rounded-full bg-[#DDF444] px-5 py-2 text-sm font-semibold text-black disabled:opacity-50"
+                        >
+                          확정하기
+                        </button>
+                      </div>
                     </div>
                   ) : null}
 
@@ -6275,6 +6339,8 @@ function ChatBubble({
   onConfirmCertification,
   onVisualizeCertification,
   onConfirmFormDesignSummary,
+  onVisualizeFormDesign,
+  confirmedFormDesignSummaryMessageId,
 }: {
   canShowStyleReferences: boolean
   confirmedDirectionKinds: Set<DirectionArtifactKind>
@@ -6369,7 +6435,9 @@ function ChatBubble({
   onVisualizeCmfDesign: (data: CmfDesignData, messageId: string) => void
   onConfirmCertification: (messageId: string) => void
   onVisualizeCertification: (data: CertificationData, messageId: string) => void
-  onConfirmFormDesignSummary: () => void
+  onConfirmFormDesignSummary: (messageId: string) => void
+  onVisualizeFormDesign: () => void
+  confirmedFormDesignSummaryMessageId: string | null
   selectedStep5WidgetKinds: Set<Step5WidgetKind>
 }) {
   const [hintModalOpen, setHintModalOpen] = useState(false)
@@ -6456,6 +6524,8 @@ function ChatBubble({
     onVisualizeArtifact(
       message.generatedImageBlock.purpose === 'modeling'
         ? 'modeling'
+        : message.generatedImageBlock.purpose === 'rendering'
+          ? 'rendering'
         : 'design',
       message.id,
       selectedDesignIndex
@@ -6691,15 +6761,18 @@ function ChatBubble({
                   />
                 )
               ) : message.generatedImageBlock.purpose === 'design' ||
-                message.generatedImageBlock.purpose === 'modeling' ? (
+                message.generatedImageBlock.purpose === 'modeling' ||
+                message.generatedImageBlock.purpose === 'rendering' ? (
                 <div className="flex w-full max-w-[600px] flex-col gap-3 pt-1">
                   <p className="font-['Pretendard'] text-xs font-medium text-neutral-400">
                     {message.generatedImageBlock.purpose === 'modeling'
                       ? '생성된 3D 모델링 시안 '
-                      : '생성된 2D 렌더링 시안 '}
+                      : message.generatedImageBlock.purpose === 'rendering'
+                        ? '생성된 3D 렌더링 이미지 '
+                        : '생성된 2D 렌더링 시안 '}
                     {message.generatedImageBlock.images.length}장
                   </p>
-                  <div className="grid aspect-[25/16] w-full grid-cols-2 grid-rows-2 overflow-hidden rounded-[20px]">
+                  <div className={message.generatedImageBlock.purpose === 'rendering' ? 'aspect-[25/16] w-full overflow-hidden rounded-[20px]' : 'grid aspect-[25/16] w-full grid-cols-2 grid-rows-2 overflow-hidden rounded-[20px]'}>
                     {message.generatedImageBlock.images.map((image, index) => (
                       <button
                         key={`${message.id}-design-img-${index}`}
@@ -6715,8 +6788,8 @@ function ChatBubble({
                           setMeshyError(null)
                           onSelectDesignRendering(image)
                         }}
-                        aria-label={`${index + 1}번 ${message.generatedImageBlock?.purpose === 'modeling' ? '3D 모델링 시안' : '2D 렌더링 시안'} 선택`}
-                        className={`relative min-h-0 min-w-0 overflow-hidden transition disabled:cursor-not-allowed ${
+                        aria-label={`${index + 1}번 ${message.generatedImageBlock?.purpose === 'modeling' ? '3D 모델링 시안' : message.generatedImageBlock?.purpose === 'rendering' ? '3D 렌더링 이미지' : '2D 렌더링 시안'} 선택`}
+                        className={`relative min-h-0 min-w-0 overflow-hidden transition disabled:cursor-not-allowed ${message.generatedImageBlock?.purpose === 'rendering' ? 'h-full w-full' : ''} ${
                           selectedDesignIndex === index
                             ? 'z-10 ring-4 ring-inset ring-[#3056FF]'
                             : 'hover:brightness-95'
@@ -6724,7 +6797,7 @@ function ChatBubble({
                       >
                         <Image
                           src={image}
-                          alt={`${message.generatedImageBlock?.purpose === 'modeling' ? '3D 모델링 시안' : '2D 렌더링 시안'} ${index + 1}`}
+                          alt={`${message.generatedImageBlock?.purpose === 'modeling' ? '3D 모델링 시안' : message.generatedImageBlock?.purpose === 'rendering' ? '3D 렌더링 이미지' : '2D 렌더링 시안'} ${index + 1}`}
                           fill
                           unoptimized
                           className="object-cover"
@@ -6803,7 +6876,9 @@ function ChatBubble({
                               )
                             } else {
                               onConfirmArtifact(
-                                'modeling',
+                                message.generatedImageBlock?.purpose === 'rendering'
+                                  ? 'rendering'
+                                  : 'modeling',
                                 message.id,
                                 selectedDesignIndex
                               )
@@ -7426,7 +7501,12 @@ function ChatBubble({
             <button
               type="button"
               disabled={disabled}
-              onClick={() => onChoice(`STEP ${nextStageStartStep} 시작할게요`)}
+              onClick={() =>
+                onChoice(
+                  `STEP ${nextStageStartStep} 시작할게요`,
+                  nextStageStartStep === 6 ? 'start_step_6' : undefined
+                )
+              }
               className="rounded-[30px] bg-blue-600 px-[clamp(16px,1.85svh,20px)] py-[3px] font-['Inter'] text-xs font-semibold leading-5 text-white disabled:opacity-50"
             >
               STEP {nextStageStartStep} 시작할게요
@@ -7514,7 +7594,29 @@ function ChatBubble({
         </div>
       ) : null}
 
-      {isStep5FormSummary ? <div className="flex w-full justify-end"><button type="button" disabled={disabled} onClick={() => onConfirmFormDesignSummary()} className="rounded-[30px] bg-[#DDF444] px-5 py-2 text-sm font-semibold text-black disabled:opacity-50">확정하기</button></div> : null}
+      {isStep5FormSummary ? (
+        <div className="flex w-full flex-col items-end gap-3">
+          {confirmedFormDesignSummaryMessageId !== message.id ? (
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => onConfirmFormDesignSummary(message.id)}
+              className="rounded-[30px] bg-[#DDF444] px-5 py-2 text-sm font-semibold text-black disabled:opacity-50"
+            >
+              확정하기
+            </button>
+          ) : (
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => onVisualizeFormDesign()}
+              className="rounded-[30px] bg-[#DDF444] px-5 py-2 text-sm font-semibold text-black disabled:opacity-50"
+            >
+              시각화하기
+            </button>
+          )}
+        </div>
+      ) : null}
 
       {cmfDesignData && latestCmfSummaryMessageId === message.id ? (
         <div className="flex w-full flex-col items-end gap-3">

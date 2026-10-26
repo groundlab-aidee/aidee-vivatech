@@ -24,10 +24,12 @@ export type ChatAction =
   | 'confirm_form_design_summary'
   | 'start_step_3'
   | 'start_step_2'
+  | 'start_step_6'
   | 'stay_in_step_1'
   | 'stay_in_step_2'
   | 'select_step5_shape'
   | 'select_step5_form'
+  | 'confirm_step5_combination'
 
 export type StageMeta = {
   currentStageKey: StageKey
@@ -171,6 +173,12 @@ export function resolveIntentStageKey({
   hasCompletedStep2Research?: boolean
   lastUserMessage: string
 }): StageKey {
+  if (action === 'start_step_6') {
+    return currentStageKey.startsWith('step_5')
+      ? 'step_6_structure'
+      : currentStageKey
+  }
+
   if (action === 'start_step_2') {
     return currentStageKey === 'step_1_idea' ? 'step_2_agent' : currentStageKey
   }

@@ -4,6 +4,7 @@ export type GeneratedImagePurpose =
   | 'moodboard_candidate'
   | 'design'
   | 'modeling'
+  | 'rendering'
   | 'thumbnail'
 
 export type UnsplashImageMeta = {

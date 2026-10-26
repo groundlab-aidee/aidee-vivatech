@@ -136,6 +136,7 @@ type ChatRequestBody = {
     | 'initial_design'
     | 'persona_card'
     | 'style_reference'
+    | 'rendering'
   message?: unknown
   projectId?: unknown
   styleKeywordSelections?: unknown
@@ -153,6 +154,7 @@ type ArtifactType =
   | 'design'
   | 'modeling'
   | 'form_design'
+  | 'rendering'
   | 'cmf_design'
   | 'certification'
   | 'marketing_budget'
@@ -208,10 +210,12 @@ function normalizeChatAction(value: unknown): ChatAction | null {
     value === 'confirm_and_visualize_artifact' ||
     value === 'start_step_2' ||
     value === 'start_step_3' ||
+    value === 'start_step_6' ||
     value === 'stay_in_step_1' ||
     value === 'stay_in_step_2' ||
     value === 'select_step5_shape' ||
     value === 'select_step5_form' ||
+    value === 'confirm_step5_combination' ||
     value === 'visualize_artifact' ||
     value === 'complete_certification_visualization'
     || value === 'confirm_form_design_summary'
@@ -249,16 +253,15 @@ function shouldShowStep5CombinationPreview(
   messages: Array<{ action?: ChatAction | null; content: string }>,
   currentAction: ChatAction | null,
 ) {
-  if (
-    currentAction !== 'select_step5_shape' &&
-    currentAction !== 'select_step5_form'
-  ) {
-    return false
-  }
-
   const hasShape = messages.some((message) => message.action === 'select_step5_shape')
   const hasForm = messages.some((message) => message.action === 'select_step5_form')
   if (!hasShape || !hasForm) return false
+
+  // The action can be lost when a saved user message is replayed or when the
+  // form selection is submitted through a restored client state. Once both
+  // selections exist, the combination preview is the deterministic next
+  // artifact; it must not depend on the current request's action field.
+  void currentAction
 
   return !messages.some((message) =>
     message.content.includes(STEP5_COMBINATION_PREVIEW_MARKER),
@@ -313,6 +316,7 @@ function normalizeArtifactType(value: unknown): ArtifactType | null {
     value === 'design' ||
     value === 'modeling'
     || value === 'form_design'
+    || value === 'rendering'
     || value === 'cmf_design'
     || value === 'certification'
     || value === 'marketing_budget'
@@ -2149,7 +2153,7 @@ function hasPendingStep4ResearchQuestion(
       if (message.role !== 'system') return latestIndex
       const event = getArtifactEvent(message.content)
       return event &&
-        event.eventType === 'visualized' &&
+        (event.eventType === 'confirmed' || event.eventType === 'visualized') &&
         DIRECTION_RESEARCH_ARTIFACT_TYPES.includes(
           event.artifactType as (typeof DIRECTION_RESEARCH_ARTIFACT_TYPES)[number]
         )
@@ -2169,8 +2173,16 @@ function hasPendingStep4ResearchQuestion(
 }
 
 function hasStep4NextResearchQuestion(text: string) {
-  return /(?:다음|남은|다른)(?:\s*으로)?[\s\S]{0,30}(?:리서치|조사).*(?:진행|시작|확인|살펴|볼까요|할까요)/i.test(
-    text
+  return (
+    /(?:다음|남은|다른)(?:\s*으로)?[\s\S]{0,30}(?:리서치|조사).*(?:진행|시작|확인|살펴|볼까요|할까요)/i.test(
+      text
+    ) ||
+    /(?:어떤|어느|무슨)[\s\S]{0,30}(?:항목|리서치|조사)[\s\S]{0,30}(?:진행|시작|확인|살펴|볼까요|할까요)/i.test(
+      text
+    ) ||
+    /(?:리서치|조사)[\s\S]{0,30}(?:무엇부터|어떤 것부터|어떤 항목부터|어느 항목부터)[\s\S]{0,20}(?:진행|시작|확인|살펴|볼까요|할까요)/i.test(
+      text
+    )
   )
 }
 
@@ -2358,8 +2370,8 @@ async function generateStyleKeywords(
           contents: [{ parts: [{ text: prompt }], role: 'user' }],
           generationConfig: { temperature: 0.7, maxOutputTokens: 1024 },
         }),
-      }
-    )
+    }
+  )
     if (!res.ok) return fallback
 
     const data = (await res.json()) as {
@@ -2558,6 +2570,79 @@ function getRequirementString(
 }
 
 const STEP7_TIMELINE_MARKER = '<<AIDEE_DEVELOPMENT_TIMELINE>>'
+const STEP7_MARKETING_BUDGET_MARKER = '<<AIDEE_MARKETING_BUDGET>>'
+
+function getStep7MarketingBudgetProgress(
+  messages: Array<{ role: string; content: string; stageKey?: string | null }>,
+) {
+  const step7Text = messages
+    .filter((message) => message.stageKey === 'step_7_market')
+    .map((message) => message.content)
+    .join('\n')
+
+  const buckets = {
+    pricing: /판매s*(가격|가)|가격|견적s*(가격|금액)/i.test(step7Text),
+    profit: /남는s*돈|개당s*(수익|이익)|마진|원가|판매s*이익/i.test(step7Text),
+    quantity: /생산s*(수량|량)|처음s*만들|만들s*수량|판매s*(수량|개수)/i.test(step7Text),
+    sequence: /예산.*순서|투자.*순서|먼저s*투자|우선s*투자|돈을s*쓰는/i.test(step7Text),
+    timing: /돈이s*더s*필요|추가s*(비용|자금)|자금.*필요|비용.*발생/i.test(step7Text),
+    target: /첫s*판매|판매s*목표|목표s*(수량|개수)|펀딩.*판매/i.test(step7Text),
+  }
+
+  return {
+    buckets,
+    isComplete:
+      buckets.pricing &&
+      buckets.profit &&
+      buckets.quantity &&
+      buckets.sequence &&
+      buckets.target,
+  }
+}
+
+function buildStep7MarketingBudgetFallbackResponse(
+  project: Awaited<ReturnType<typeof getProjectForUser>>,
+  messages: Array<{ role: string; content: string; stageKey?: string | null }>,
+) {
+  const requirements = getSurveyRequirements(project)
+  const userMessages = messages
+    .filter((message) => message.role === 'user' && message.stageKey === 'step_7_market')
+    .map((message) => cleanSingleLineText(message.content))
+    .filter(Boolean)
+  const activity = (pattern: RegExp, name: string) =>
+    userMessages.some((message) => pattern.test(message))
+      ? { name, purpose: '대화에서 확인된 판매 준비 활동', target: '대화에서 확인된 대상' }
+      : null
+
+  const data = {
+    currency: 'KRW',
+    totalBudget: {
+      amount: null,
+      source: getRequirementString(requirements, 'budget', '') ? '사용자 지정' : '미정',
+    },
+    allocations: [],
+    recommendation: {
+      amount: null,
+      percent: null,
+      source: '미정',
+      reason: '대화에서 확인된 금액을 기준으로 시험 기관과 실제 예산을 확인해야 합니다.',
+    },
+    activities: [
+      activity(/마케팅|홍보|광고|펀딩/i, '마케팅 및 판매 준비'),
+      activity(/온라인|쇼핑몰|자사몰|플랫폼/i, '온라인 판매'),
+    ].filter((item): item is { name: string; purpose: string; target: string } => Boolean(item)),
+  }
+
+  return [
+    '지금까지 7-2에서 정한 판매 가격과 예산 운용 내용을 기준으로 Marketing Budget을 정리했습니다.',
+    '',
+    '대화에서 금액이 명확하게 정해지지 않은 항목은 임의로 채우지 않고 미정으로 남겼습니다.',
+    '',
+    STEP7_MARKETING_BUDGET_MARKER,
+    JSON.stringify(data),
+    '<</AIDEE_MARKETING_BUDGET>>',
+  ].join('\n')
+}
 
 function getStep7TimelineProgress(messages: Array<{ role: string; content: string; stageKey?: string | null }>) {
   const step7UserText = messages
@@ -2670,7 +2755,7 @@ function normalizeCmfSummaryMarkers(content: string) {
     return content
   }
 
-  const summaryMarker = /<<AIDEE_STEP5_CMF_SUMMARY>>[\s\S]*?<<\/AIDEE_STEP5_CMF_SUMMARY>>/i
+  const summaryMarker = /<<AIDEE_STEP5_CMF_SUMMARY>>[\s\S]*?(?:<<\/AIDEE_STEP5_CMF_SUMMARY>>|$)/i
   const hasPlainSummary =
     /(?:CMF\s*(?:Design\s*)?(?:요약|정리)|CMF\s*\(색[，,]?\s*소재[，,]?\s*마감\)\s*정리)/i.test(content) ||
     /색\s*[:：].{2,}[\s\S]*소재\s*[:：].{2,}[\s\S]*마감\s*[:：].{2,}/i.test(content)
@@ -2716,10 +2801,30 @@ function normalizeCmfSummaryMarkers(content: string) {
 function isCmfSummaryContent(content: string) {
   return (
     /<<AIDEE_CMF_DESIGN_DATA>>/i.test(content) ||
-    /<<AIDEE_STEP5_CMF_SUMMARY>>[\s\S]*?<<\/AIDEE_STEP5_CMF_SUMMARY>>/i.test(content) ||
+    /<<AIDEE_STEP5_CMF_SUMMARY>>/i.test(content) ||
     /(?:CMF\s*(?:Design\s*)?(?:요약|정리)|CMF\s*\(색[，,]?\s*소재[，,]?\s*마감\)\s*정리)/i.test(content) ||
     /색\s*[:：].{2,}[\s\S]*소재\s*[:：].{2,}[\s\S]*마감\s*[:：].{2,}/i.test(content)
   )
+}
+
+function getStep5StageFromContent(content: string): StageKey | null {
+  if (/<<AIDEE_CMF_DESIGN_READY>>|<<AIDEE_2D_CONCEPT_READY>>/i.test(content)) {
+    return 'step_5_design'
+  }
+
+  if (/<<AIDEE_STEP5_CMF_SUMMARY>>|<<AIDEE_CMF_DESIGN_DATA>>/i.test(content)) {
+    return 'step_5_cmf'
+  }
+
+  if (
+    /<<AIDEE_STEP5_(?:SHAPE_WIDGET|FORM_WIDGET|COMBINATION_PREVIEW|FORM_SUMMARY)>>/i.test(
+      content
+    )
+  ) {
+    return 'step_5_style'
+  }
+
+  return null
 }
 
 function isCertificationSummaryContent(content: string) {
@@ -3668,9 +3773,9 @@ function buildModelingImagePrompt({
   userRequest: string
 }) {
   return [
-    'Create two standalone 3D product concept images based on the selected 2D design.',
-    'The output must show the actual project product in both images, never a moodboard, stock photo, environment image, or unrelated object.',
-    'Keep the selected 2D form and proportions unchanged. Apply only two different CMF directions from the conversation.',
+    'Create one standalone 3D product concept image based on the selected 2D design.',
+    'The output must show the actual project product, never a moodboard, stock photo, environment image, or unrelated object.',
+    'Keep the selected 2D form and proportions unchanged. Apply the confirmed CMF direction from the conversation.',
     `Project title: ${projectTitle}`,
     `User request: ${userRequest}`,
     '',
@@ -3681,9 +3786,36 @@ function buildModelingImagePrompt({
     conversation,
     '',
     'Output direction:',
-    '- realistic product modeling visualization, one complete product per image',
-    '- show the same selected form in both images; vary only color, material, and finish',
+    '- realistic product modeling visualization showing one complete product',
+    '- keep the selected form unchanged and apply the confirmed color, material, and finish',
     '- no text overlay, no UI, no watermark, no collage, no grid',
+  ].join('\n')
+}
+
+function buildRenderingImagePrompt({
+  conversation,
+  projectTitle,
+  requirements,
+  userRequest,
+}: {
+  conversation: string
+  projectTitle: string
+  requirements: unknown
+  userRequest: string
+}) {
+  return [
+    'Create one final 3D product rendering image for the confirmed project product.',
+    'Keep the confirmed 2D design, proportions, colors, materials, and finish unchanged.',
+    'Show the product clearly in its real use environment based on the conversation and project context.',
+    'Create exactly one complete product image. Do not create a collage, grid, alternate concepts, text, UI, or watermark.',
+    `Project title: ${projectTitle}`,
+    `User request: ${userRequest}`,
+    '',
+    'Project requirements:',
+    JSON.stringify(requirements ?? {}, null, 2),
+    '',
+    'Conversation and confirmed design decisions:',
+    conversation,
   ].join('\n')
 }
 
@@ -3944,7 +4076,8 @@ export async function POST(request: Request) {
           ].join('\n')
         : ''
     const directionResearchVisualizationInstruction =
-      requestedAction === 'visualize_artifact' &&
+      (requestedAction === 'confirm_artifact' ||
+        requestedAction === 'visualize_artifact') &&
       (artifactType === 'direction_market_size' ||
         artifactType === 'direction_consumption_keywords' ||
         artifactType === 'direction_brand_positioning')
@@ -3962,13 +4095,26 @@ export async function POST(request: Request) {
             '위젯 마커의 내용 자체나 내부 처리 방식을 사용자에게 설명하지 마세요.',
           ].join('\n')
         : ''
+    const directionResearchResultInstruction =
+      requestedStageKey === 'step_4_direction' &&
+      isDirectionResearchRequest(userMessage)
+        ? [
+            '이번 응답은 선택한 리서치 결과만 출력하세요.',
+            '리서치 내용을 정리한 뒤 질문, 선택지, 다음 리서치 안내, <<AIDEE_DIRECTION_WIDGETS>>를 출력하지 마세요.',
+            '리서치 확정 후 질문은 사용자가 확정하기를 누른 다음 서버가 별도로 요청합니다.',
+          ].join('\n')
+        : ''
     const messageForModel = isInitialEntry
         ? buildInitialUserPrompt(project)
       : step4ResearchFollowupInstruction ||
+        directionResearchResultInstruction ||
+        directionResearchVisualizationInstruction ||
         userMessage ||
         styleKeywordSelectionMessage ||
         (requestedAction === 'confirm_step_2_team'
           ? 'STEP 2 팀 구성 완료 확인'
+          : requestedAction === 'confirm_step5_combination'
+            ? '5-0-4 조형과 형태 조합이 확정되었습니다. 이제 제품의 비례에 대한 첫 질문 하나만 하세요.'
           : isForcedGeneration
             ? '시각화 생성 요청'
             : requestedAction === 'visualize_artifact' && artifactType === 'design'
@@ -4128,6 +4274,16 @@ export async function POST(request: Request) {
     }
 
     if (
+      requestedAction === 'start_step_6' &&
+      !requestedStageKey.startsWith('step_5')
+    ) {
+      return NextResponse.json(
+        { error: 'STEP 5 completion is required' },
+        { status: 409 }
+      )
+    }
+
+    if (
       requestedAction === 'confirm_moodboard' &&
       (!['step_5_style', 'step_5_design'].includes(requestedStageKey) ||
         !hasCompletedMoodboard)
@@ -4178,9 +4334,34 @@ export async function POST(request: Request) {
     if (
       requestedAction === 'visualize_artifact' &&
       artifactType === 'design' &&
-      requestedStageKey === 'step_5_design' &&
+      (requestedStageKey === 'step_5_cmf' ||
+        requestedStageKey === 'step_5_design' ||
+        requestedStageKey === 'step_5_3d') &&
       hasStep3ArtifactEvent(existingMessages, 'design', 'confirmed') &&
       hasStep3ArtifactEvent(existingMessages, 'cmf_design', 'visualized')
+    ) {
+      currentStageKey = 'step_5_3d'
+    }
+
+    if (
+      requestedAction === 'visualize_artifact' &&
+      artifactType === 'rendering' &&
+      requestedStageKey === 'step_5_3d'
+    ) {
+      currentStageKey = 'step_6_structure'
+    }
+
+    if (
+      body.forceImageGeneration === 'rendering' &&
+      (requestedStageKey === 'step_5_cmf' ||
+        requestedStageKey === 'step_5_design' ||
+        requestedStageKey === 'step_5_3d') &&
+      existingMessages.some(
+        (message) =>
+          message.role === 'assistant' &&
+          message.generatedImageBlock?.purpose === 'modeling' &&
+          message.generatedImageBlock.images.length > 0
+      )
     ) {
       currentStageKey = 'step_5_3d'
     }
@@ -4200,6 +4381,16 @@ export async function POST(request: Request) {
         requestedStageKey === 'step_5_design')
     ) {
       currentStageKey = 'step_5_design'
+    }
+
+    if (
+      requestedAction === 'visualize_artifact' &&
+      artifactType === 'form_design' &&
+      (requestedStageKey === 'step_4_direction' ||
+        requestedStageKey === 'step_5_style' ||
+        requestedStageKey === 'step_5_design')
+    ) {
+      currentStageKey = 'step_5_style'
     }
     const isCmfToDesignTransition =
       requestedAction === 'visualize_artifact' &&
@@ -4930,6 +5121,9 @@ export async function POST(request: Request) {
           body.forceImageGeneration === 'design_revision'))
       const shouldGenerateModelingImages =
         currentStageKey === 'step_5_3d' && !hasExistingModelingImages
+      const shouldGenerateRenderingImages =
+        currentStageKey === 'step_5_3d' &&
+        body.forceImageGeneration === 'rendering'
       const shouldGenerateRfp =
         currentStageKey === 'step_7_rfp' &&
         (!hasExistingRfp || isRfpRevisionMessage)
@@ -5141,11 +5335,33 @@ export async function POST(request: Request) {
             console.error('3D modeling image generation failed:', err)
             throw new Error('3D 모델링 시안 이미지 생성에 실패했습니다. 다시 시도해 주세요.')
           }
+        } else if (shouldGenerateRenderingImages) {
+          try {
+            imageBlock = await generateGeminiImages({
+              apiKey: requiredApiKey,
+              count: 1,
+              prompt: buildRenderingImagePrompt({
+                conversation,
+                projectTitle: project.title || 'Untitled project',
+                requirements: project.requirements,
+                userRequest: messageForModel,
+              }),
+              purpose: 'rendering',
+              referenceImages: [getSelectedDesignReferenceImage(existingMessages)].filter(
+                (image): image is string => Boolean(image)
+              ),
+            })
+          } catch (err) {
+            console.error('3D rendering image generation failed:', err)
+            throw new Error('3D 렌더링 이미지 생성에 실패했습니다. 다시 시도해 주세요.')
+          }
         }
 
         let rawModelText: string
         if (shouldGenerateModelingImages) {
           rawModelText = '3D Design: Modeling 시안이 생성되었습니다. 선택한 2D 시안을 바탕으로 입체적인 형태와 비율을 확인해보세요.'
+        } else if (shouldGenerateRenderingImages) {
+          rawModelText = '확정된 제품을 실제 사용 장면에서 확인할 수 있는 최종 이미지를 준비했습니다.'
         } else if (shouldGenerateStyleImages) {
           // 무드보드 후보 생성은 이미지 검색 결과가 핵심입니다. 후속 텍스트
           // 생성이 비어도 이미지 응답 전체가 500으로 실패하지 않도록 고정 안내를 사용합니다.
@@ -5574,6 +5790,8 @@ export async function POST(request: Request) {
           if (hasCertificationSummaryMarker) {
             responseStageKey = 'step_6_structure'
           }
+          const step5StageFromContent = getStep5StageFromContent(assistantContent)
+          if (step5StageFromContent) responseStageKey = step5StageFromContent
         }
       }
 
@@ -5833,8 +6051,15 @@ export async function POST(request: Request) {
       const hasTimelineAlready = step7ConversationMessages.some((message) =>
         message.content.includes(STEP7_TIMELINE_MARKER),
       )
+      const looksLikeTimelineSummary =
+        /Product\s*Development\s*Timeline|생산과\s*출시\s*준비.*(?:정리|요약)|개발\s*일정.*(?:정리|요약)/i.test(
+          assistantContent,
+        )
 
-      if (step7TimelineProgress.isComplete && !hasTimelineAlready) {
+      if (
+        (step7TimelineProgress.isComplete || looksLikeTimelineSummary) &&
+        !hasTimelineAlready
+      ) {
         const fallbackResponse = buildStep7TimelineFallbackResponse(
           project,
           step7ConversationMessages,
@@ -5849,15 +6074,34 @@ export async function POST(request: Request) {
           ? `${assistantContent.trim()}\n\n${fallbackResponse.slice(fallbackResponse.indexOf(STEP7_TIMELINE_MARKER))}`
           : fallbackResponse
       }
+
+      const hasMarketingBudgetAlready = step7ConversationMessages.some(
+        (message) => message.content.includes(STEP7_MARKETING_BUDGET_MARKER),
+      )
+      const marketingBudgetProgress = getStep7MarketingBudgetProgress(
+        step7ConversationMessages,
+      )
+
+      if (
+        marketingBudgetProgress.isComplete &&
+        !hasMarketingBudgetAlready &&
+        !assistantContent.includes(STEP7_MARKETING_BUDGET_MARKER)
+      ) {
+        const fallbackResponse = buildStep7MarketingBudgetFallbackResponse(
+          project,
+          step7ConversationMessages,
+        )
+        assistantContent = `${assistantContent.trim()}\n\n${fallbackResponse.slice(fallbackResponse.indexOf(STEP7_MARKETING_BUDGET_MARKER))}`
+      }
     }
 
-    if (currentStageKey === 'step_5_style') {
+    if (currentStageKey === 'step_5_style' || responseStageKey === 'step_5_style') {
       const step5Messages = [
         ...existingMessages,
         ...(savedUserMessage ? [savedUserMessage] : []),
       ]
       const step5WidgetKind = shouldShowStep5Widget({
-        currentStageKey,
+        currentStageKey: 'step_5_style',
         messages: step5Messages,
         text: assistantContent,
       })

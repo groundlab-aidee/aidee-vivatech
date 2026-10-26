@@ -78,7 +78,6 @@ export function CertificationModal({
           </div>
         </header>
 
-        {data.productContext ? <p className="mt-6 rounded-xl bg-zinc-50 p-4 text-sm leading-6 text-zinc-600">{data.productContext}</p> : null}
         {(['international', 'domestic'] as const).map((key) => (
           <section key={key} className="mt-6 overflow-hidden rounded-xl border border-zinc-200">
             <h3 className="p-4 text-lg font-bold text-zinc-900">{key === 'international' ? '국외 인증' : '국내 인증'}</h3>
