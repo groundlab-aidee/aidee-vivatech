@@ -7,7 +7,12 @@ import {
   buildStep3ScopedSystemPrompt,
   getStep3PromptTopicGuidance,
 } from '@/lib/chat/context'
-import { isExpertKey, type ExpertKey } from '@/lib/chat/experts'
+import {
+  getExpertDefinition,
+  getExpertPrompt,
+  isExpertKey,
+  type ExpertKey,
+} from '@/lib/chat/experts'
 import {
   appendImageBlockIfPresent,
   generateGeminiImages,
@@ -216,6 +221,7 @@ function normalizeChatAction(value: unknown): ChatAction | null {
     value === 'select_step5_shape' ||
     value === 'select_step5_form' ||
     value === 'confirm_step5_combination' ||
+    value === 'return_to_aidee' ||
     value === 'visualize_artifact' ||
     value === 'complete_certification_visualization'
     || value === 'confirm_form_design_summary'
@@ -413,6 +419,45 @@ function normalizeStage(value: unknown): StageKey {
 
 function normalizeExpert(value: unknown): ExpertKey {
   return isExpertKey(value) ? value : 'aidee'
+}
+
+function appendExpertResponseMarker(content: string, expert: ExpertKey) {
+  return `${content.trim()}\n\n<<AIDEE_EXPERT_RESPONSE>>\n${JSON.stringify({ expert })}\n<</AIDEE_EXPERT_RESPONSE>>`
+}
+
+function appendExpertUserMarker(content: string, expert: ExpertKey) {
+  return `${content.trim()}\n\n<<AIDEE_EXPERT_USER_MESSAGE>>\n${JSON.stringify({ expert })}\n<</AIDEE_EXPERT_USER_MESSAGE>>`
+}
+
+function getExpertConversationKey(content: string): ExpertKey | null {
+  const match = content.match(
+    /<<AIDEE_EXPERT_(?:RESPONSE|USER_MESSAGE)>>\s*([\s\S]*?)\s*<<\/AIDEE_EXPERT_(?:RESPONSE|USER_MESSAGE)>>/i
+  )
+  if (!match) return null
+
+  try {
+    const parsed = JSON.parse(match[1]) as { expert?: unknown }
+    return isExpertKey(parsed.expert) && parsed.expert !== 'aidee'
+      ? parsed.expert
+      : null
+  } catch {
+    return null
+  }
+}
+
+function isExpertConversationMessage(message: ChatMessageRecord) {
+  return getExpertConversationKey(message.content) !== null
+}
+
+function formatExpertConversationMessageForModel(message: { content: string; role: string }) {
+  const expert = getExpertConversationKey(message.content)
+  if (!expert) return message.content
+
+  const cleanContent = message.content
+    .replace(/\n?<<AIDEE_EXPERT_(?:RESPONSE|USER_MESSAGE)>>[\s\S]*?<<\/AIDEE_EXPERT_(?:RESPONSE|USER_MESSAGE)>>/gi, '')
+    .trim()
+  const role = message.role === 'user' ? '사용자 질문' : '에이전트 답변'
+  return `[전문가 대화 기록 — ${getExpertDefinition(expert).label} ${role}]\n${cleanContent}`
 }
 
 function buildConversation(messages: Array<{ content: string; role: string }>) {
@@ -4219,6 +4264,11 @@ export async function POST(request: Request) {
         : undefined
     const activeExpert = normalizeExpert(body.activeExpert)
     const userMessage = typeof body.message === 'string' ? body.message.trim() : ''
+    const isReturningToAidee = requestedAction === 'return_to_aidee'
+    const isExpertConversation = activeExpert !== 'aidee' && !isReturningToAidee
+    const stepProgressMessages = existingMessages.filter(
+      (message) => !isExpertConversationMessage(message)
+    )
     const styleKeywordSelections = normalizeStyleKeywordSelections(
       body.styleKeywordSelections
     )
@@ -4226,7 +4276,7 @@ export async function POST(request: Request) {
       ? buildStyleKeywordSelectionMessage(styleKeywordSelections)
       : ''
     const isForcedGeneration = Boolean(body.forceImageGeneration)
-    const hasAssistantMessage = existingMessages.some(
+    const hasAssistantMessage = stepProgressMessages.some(
       (message) => message.role === 'assistant'
     )
     const isInitialEntry =
@@ -4247,7 +4297,7 @@ export async function POST(request: Request) {
       requestedStageKey === 'step_4_direction' &&
       userMessage &&
       !isDirectionResearchRequest(userMessage) &&
-      hasPendingStep4ResearchQuestion(existingMessages)
+      hasPendingStep4ResearchQuestion(stepProgressMessages)
         ? [
             '사용자가 방금 진행한 리서치 질문에 답했습니다.',
             '답변을 짧게 인정한 뒤, 다음 리서치를 진행할지 묻는 문장만 이어서 출력하세요.',
@@ -4285,7 +4335,11 @@ export async function POST(request: Request) {
             '리서치 확정 후 질문은 사용자가 확정하기를 누른 다음 서버가 별도로 요청합니다.',
           ].join('\n')
         : ''
-    const messageForModel = isInitialEntry
+    const messageForModel = isReturningToAidee
+        ? '통합 Aidee로 돌아왔습니다. 에이전트 대화 전 멈춰 있던 STEP 위치에서 이어서 답변하세요.'
+      : isExpertConversation
+        ? userMessage
+      : isInitialEntry
         ? buildInitialUserPrompt(project)
       : step4ResearchFollowupInstruction ||
         directionResearchResultInstruction ||
@@ -4391,14 +4445,17 @@ export async function POST(request: Request) {
     const isPersonaRevisionMessage =
       !isInitialEntry && isPersonaCardRevisionRequest(messageForModel)
     const canUseStaticPersonaConfirmation =
+      !isExpertConversation &&
       isPersonaConfirmMessage && requestedStageKey.startsWith('step_3')
     const canUseStaticPersonaFollowup =
+      !isExpertConversation &&
       !isInitialEntry &&
       !isPersonaConfirmMessage &&
       hasPersonaFeatureCheckPrompt(existingMessages) &&
       !hasPersonaExperienceCheckPrompt(existingMessages) &&
       requestedStageKey.startsWith('step_3')
     const canUseStaticPersonaCompletion =
+      !isExpertConversation &&
       !isInitialEntry &&
       !isPersonaConfirmMessage &&
       hasPersonaExperienceCheckPrompt(existingMessages) &&
@@ -4408,19 +4465,20 @@ export async function POST(request: Request) {
     const isRfpRevisionMessage =
       !isInitialEntry && isRfpRevisionRequest(messageForModel)
     const canUseStaticRfpConfirmation =
+      !isExpertConversation &&
       isRfpConfirmMessage && requestedStageKey === 'step_7_rfp'
 
     if (!messageForModel) {
       return NextResponse.json({ error: 'message is required' }, { status: 400 })
     }
 
-    const hasCompletedStep1 = existingMessages.some(
+    const hasCompletedStep1 = stepProgressMessages.some(
       (existingMessage) => existingMessage.step1Completed
     )
-    const hasConfirmedProcess = existingMessages.some(
+    const hasConfirmedProcess = stepProgressMessages.some(
       (existingMessage) => existingMessage.action === 'confirm_process'
     )
-    const canStartStep3 = existingMessages.some((existingMessage) =>
+    const canStartStep3 = stepProgressMessages.some((existingMessage) =>
       existingMessage.availableActions?.includes('start_step_3')
     )
 
@@ -4481,11 +4539,15 @@ export async function POST(request: Request) {
       currentStageKey: directionResearchRequest
         ? 'step_4_direction'
         : requestedStageKey,
-      hasCompletedDirectionResearch: hasDirectionResearch(existingMessages),
-      hasCompletedDirectionFlow: hasCompletedDirectionFlow(existingMessages),
-      hasCompletedStep2Research: hasAllKeywordResults(existingMessages),
+      hasCompletedDirectionResearch: hasDirectionResearch(stepProgressMessages),
+      hasCompletedDirectionFlow: hasCompletedDirectionFlow(stepProgressMessages),
+      hasCompletedStep2Research: hasAllKeywordResults(stepProgressMessages),
       lastUserMessage: messageForModel,
     })
+
+    if (isExpertConversation || isReturningToAidee) {
+      currentStageKey = requestedStageKey
+    }
 
     if (
       (requestedAction === 'visualize_artifact' && artifactType === 'certification') ||
@@ -4587,6 +4649,7 @@ export async function POST(request: Request) {
       requestedAction === 'confirm_step_2_team' &&
       currentStageKey === 'step_2_agent'
     const canUseStaticStep4Entry =
+      !isExpertConversation &&
       currentStageKey === 'step_4_direction' &&
       /^STEP\s*4\s*시작할게요[.!?？]?$/i.test(messageForModel.trim())
     const canUseStaticProcessConfirmation =
@@ -4609,11 +4672,14 @@ export async function POST(request: Request) {
       requestedAction === 'confirm_artifact' ||
       requestedAction === 'confirm_and_visualize_artifact' ||
       requestedAction === 'visualize_artifact' ||
+      requestedAction === 'return_to_aidee' ||
       (isForcedGeneration && !userMessage)
       ? null
       : await insertProjectMessage({
           action: requestedAction,
-          content: userMessage,
+          content: isExpertConversation
+            ? appendExpertUserMarker(userMessage, activeExpert)
+            : userMessage,
           projectId,
           role: 'user',
           seqOrder: nextSeqOrder,
@@ -4711,7 +4777,7 @@ export async function POST(request: Request) {
     }
 
     const step1ConversationMessages = [
-      ...existingMessages,
+      ...stepProgressMessages,
       ...(savedUserMessage ? [savedUserMessage] : []),
     ]
     const hasStep1ProjectSummaryBeforeProgress = step1ConversationMessages.some(
@@ -4998,8 +5064,12 @@ export async function POST(request: Request) {
         ...existingMessages,
         ...(savedUserMessage ? [savedUserMessage] : []),
       ]
-      if (currentStageKey.startsWith('step_3')) {
-        const phase = getStep3Phase(conversationMessages)
+      const stepConversationMessages = [
+        ...stepProgressMessages,
+        ...(savedUserMessage && !isExpertConversation ? [savedUserMessage] : []),
+      ]
+      if (currentStageKey.startsWith('step_3') && !isExpertConversation) {
+        const phase = getStep3Phase(stepConversationMessages)
         step3Progress = getStep3ProgressFromProject(project)
         if (!step3Progress && (phase === 'experience_dialogue' || phase === 'relationship_dialogue')) {
           step3Progress = createStep3Progress(
@@ -5026,8 +5096,8 @@ export async function POST(request: Request) {
           step3Progress?.section === 'experience' &&
           areStep3TopicsComplete(step3Progress, 'experience') &&
           phase === 'relationship_dialogue' &&
-          hasStep3ArtifactEvent(conversationMessages, 'keyword_experience', 'confirmed') &&
-          hasStep3ArtifactEvent(conversationMessages, 'keyword_experience', 'visualized')
+          hasStep3ArtifactEvent(stepConversationMessages, 'keyword_experience', 'confirmed') &&
+          hasStep3ArtifactEvent(stepConversationMessages, 'keyword_experience', 'visualized')
         ) {
           step3Progress = {
             ...step3Progress,
@@ -5046,7 +5116,7 @@ export async function POST(request: Request) {
           step3Judgement = await assessStep3Topic({
             apiKey: MOCK_AI_ENABLED ? '' : getGeminiApiKey() ?? '',
             progress: step3Progress,
-            conversation: conversationMessages,
+            conversation: stepConversationMessages,
             userMessage: savedUserMessage.content,
           }).catch((error) => {
             console.error('[STEP3-DEBUG] AI judgement failed:', error)
@@ -5137,7 +5207,7 @@ export async function POST(request: Request) {
       const modelMessages: GeminiMessage[] =
         modelConversationMessages.length > 0
           ? modelConversationMessages.map((message) => ({
-              content: message.content,
+              content: formatExpertConversationMessageForModel(message),
               role: message.role,
             }))
           : [{ content: messageForModel, role: 'user' }]
@@ -5148,14 +5218,26 @@ export async function POST(request: Request) {
               Boolean(styleKeywordSelectionMessage)
             )
           : null
-      const step3PromptPhase = getStep3Phase(conversationMessages)
+        const step3PromptPhase = getStep3Phase(stepConversationMessages)
       const useStep3ScopedPrompt = Boolean(
+        !isExpertConversation &&
         currentStageKey === 'step_3_persona' &&
         step3Progress &&
         (step3PromptPhase === 'experience_dialogue' ||
           step3PromptPhase === 'relationship_dialogue')
       )
-      const systemPrompt = useStep3ScopedPrompt
+      const expertConversationSystemPrompt = [
+        '[전문가 직접 대화 모드]',
+        getExpertPrompt(activeExpert),
+        '사용자의 직전 질문에 직접 답하세요.',
+        '현재 STEP의 질문이나 진행 상태를 이어서 말하지 마세요.',
+        'STEP 번호, 다음 단계, 확정하기, 시각화하기, 위젯, 버튼, 요약 문구를 출력하지 마세요.',
+        '사용자의 직전 질문에 대한 답변만 제공하고, STEP 진행을 위한 질문을 덧붙이지 마세요.',
+        '답변에 필요한 프로젝트 맥락은 이전 대화에서 참고하되, 사용자가 결정하지 않은 내용은 결정된 것으로 취급하지 마세요.',
+      ].join('\\n')
+      const systemPrompt = isExpertConversation
+        ? expertConversationSystemPrompt
+        : useStep3ScopedPrompt
         ? buildStep3ScopedSystemPrompt({
             activeExpert,
             currentStageKey,
@@ -5167,13 +5249,21 @@ export async function POST(request: Request) {
             activeExpert,
             currentAction: requestedAction,
             currentStageKey,
-            additionalInstruction: '',
+            additionalInstruction: isExpertConversation
+              ? [
+                  '[전문가 직접 대화 모드 — 이 지시는 현재 STEP 진행 지시보다 우선합니다]',
+                  '선택된 전문가로서 사용자의 직전 질문에 직접 답하세요.',
+                  '현재 STEP의 질문, 다음 단계 안내, 요약, 확정, 시각화, 위젯, 버튼 문구를 출력하지 마세요.',
+                  '사용자의 질문에 답하는 데 필요한 경우에만 이전 대화의 결정 내용을 참고하세요.',
+                  '답변은 사용자의 직전 질문에 대한 내용으로 끝내고, STEP 진행을 위한 질문을 덧붙이지 마세요.',
+                ].join('\\n')
+              : '',
             project,
             referenceImages,
           })
       const step3ProgressInstruction =
-        currentStageKey.startsWith('step_3')
-          ? getStep3GateInstruction(conversationMessages, step3Progress)
+        !isExpertConversation && currentStageKey.startsWith('step_3')
+          ? getStep3GateInstruction(stepConversationMessages, step3Progress)
           : ''
       const step1ProgressInstruction =
         currentStageKey === 'step_1_idea'
@@ -5233,18 +5323,22 @@ export async function POST(request: Request) {
                     '문단 다음 줄에 "전체 개발 프로세스를 함께 확인해볼까요?"를 정확히 출력하고, 그 다음 줄에 완료 마커를 출력하세요.',
                   ].join('\n')
           : ''
-      const system = [
-        systemPrompt,
-        step1ProgressInstruction,
-        step3ProgressInstruction ? step3ProgressInstruction : '',
-      ]
-        .filter(Boolean)
-        .join('\n\n')
+      const system = isExpertConversation
+        ? systemPrompt
+        : [
+            systemPrompt,
+            step1ProgressInstruction,
+            step3ProgressInstruction ? step3ProgressInstruction : '',
+          ]
+            .filter(Boolean)
+            .join('\n\n')
       const finalSystem =
+        !isExpertConversation &&
         styleProgress && currentStageKey === 'step_5_style'
           ? `${system}\n\n${buildStep5StyleProgressInstruction(styleProgress)}`
           : system
       const finalSystemWithStep3Instruction =
+        !isExpertConversation &&
         currentStageKey.startsWith('step_3') && step3ProgressInstruction
           ? `${finalSystem}\n\n[STEP 3 진행 지시]\n${step3ProgressInstruction}`
           : finalSystem
@@ -5282,10 +5376,12 @@ export async function POST(request: Request) {
           existingMessage.generatedImageBlock.images.length > 0
       )
       const shouldGeneratePersonaCardImage =
-        body.forceImageGeneration === 'persona_card' ||
-        isPersonaCardVisualizationRequest(messageForModel)
+        !isExpertConversation &&
+        (body.forceImageGeneration === 'persona_card' ||
+          isPersonaCardVisualizationRequest(messageForModel))
       const shouldGenerateStyleImages =
-        (currentStageKey !== 'step_5_cmf' &&
+        !isExpertConversation &&
+        ((currentStageKey !== 'step_5_cmf' &&
           body.forceImageGeneration === 'style_reference' &&
           !hasStyleReferenceSelection(messageForModel) &&
           !hasCompletedMoodboard) ||
@@ -5294,18 +5390,22 @@ export async function POST(request: Request) {
           styleProgress?.phase === 'mood_options' &&
           isExplicitStep4ProceedRequest(messageForModel) &&
           !hasCompletedMoodboard &&
-          !hasExistingMoodboardCandidates)
+          !hasExistingMoodboardCandidates))
       const shouldGenerateDesignImages =
+        !isExpertConversation &&
         currentStageKey !== 'step_5_cmf' &&
           (isCmfToDesignTransition ||
           (body.forceImageGeneration === 'initial_design' ||
           body.forceImageGeneration === 'design_revision'))
       const shouldGenerateModelingImages =
+        !isExpertConversation &&
         currentStageKey === 'step_5_3d' && !hasExistingModelingImages
       const shouldGenerateRenderingImages =
+        !isExpertConversation &&
         currentStageKey === 'step_5_3d' &&
         body.forceImageGeneration === 'rendering'
       const shouldGenerateRfp =
+        !isExpertConversation &&
         currentStageKey === 'step_7_rfp' &&
         (!hasExistingRfp || isRfpRevisionMessage)
 
@@ -5616,7 +5716,7 @@ export async function POST(request: Request) {
         if (currentStageKey === 'step_5_design') {
           console.log('[STEP 5 DESIGN DIAG] 모델 텍스트 raw:', JSON.stringify(rawModelText))
         }
-        const step3Phase = getStep3Phase(conversationMessages)
+        const step3Phase = getStep3Phase(stepConversationMessages)
         const isStep3DialogueTurn = Boolean(
           step3Progress &&
           (step3Phase === 'experience_dialogue' || step3Phase === 'relationship_dialogue') &&
@@ -5780,6 +5880,7 @@ export async function POST(request: Request) {
           (currentStageKey === 'step_5_style' &&
             styleProgress?.phase === 'mood_options')
         let text =
+          !isExpertConversation &&
           canUseStructuredResponseFallback &&
           isUnrenderableStructuredResponse(
             validatedStep3Text,
@@ -5792,7 +5893,7 @@ export async function POST(request: Request) {
           text = buildCmfToDesignEntryMessage({ project, conversation })
         }
 
-        if (currentStageKey === 'step_3_persona') {
+        if (!isExpertConversation && currentStageKey === 'step_3_persona') {
           text = sanitizeStep3Response({
             messages: conversationMessages,
             phase: getStep3Phase(conversationMessages),
@@ -5834,6 +5935,7 @@ export async function POST(request: Request) {
         }
 
         const shouldAutoCreatePersonaSummary =
+          !isExpertConversation &&
           currentStageKey.startsWith('step_3') &&
           hasConfirmedStep3Artifacts(conversationMessages) &&
           hasPersonaDetailAnswer(conversationMessages) &&
@@ -5862,6 +5964,7 @@ export async function POST(request: Request) {
           console.log('[STEP 1 DIAG] 모델 raw 응답:', JSON.stringify(text))
         }
         let styleMoodWidgets =
+          !isExpertConversation &&
           currentStageKey === 'step_5_style' &&
           styleProgress?.phase === 'mood_options'
             && !hasCompletedMoodboard
@@ -5869,6 +5972,7 @@ export async function POST(request: Request) {
             : []
 
         if (
+          !isExpertConversation &&
           currentStageKey === 'step_5_style' &&
           styleProgress?.phase === 'mood_options' &&
           !hasCompletedMoodboard &&
@@ -6008,6 +6112,7 @@ export async function POST(request: Request) {
       // Inject style keyword picker only on genuine step_5 entry
       // Guard with currentStageKey to prevent injection during step 3 direction research
       if (
+        !isExpertConversation &&
         responseStageKey === 'step_5_style' &&
         currentStageKey === 'step_5_style' &&
         assistantContent.includes('<<AIDEE_KEYWORD_READY>>') &&
@@ -6021,8 +6126,9 @@ export async function POST(request: Request) {
           `\n\n<<AIDEE_STYLE_KEYWORD_PICKER>>\n${JSON.stringify(keywords)}\n<</AIDEE_STYLE_KEYWORD_PICKER>>`
       }
 
-      if (
-        currentStageKey === 'step_5_cmf' &&
+    if (
+      !isExpertConversation &&
+      currentStageKey === 'step_5_cmf' &&
         assistantContent.includes('<<AIDEE_CMF_READY>>')
       ) {
         assistantContent = assistantContent
@@ -6075,6 +6181,7 @@ export async function POST(request: Request) {
     }
 
     if (
+      !isExpertConversation &&
       step1AssessmentFailed &&
       currentStageKey === 'step_1_idea' &&
       !isInitialEntry &&
@@ -6086,9 +6193,10 @@ export async function POST(request: Request) {
         'STEP 1 보충 질문을 이어가겠습니다.\n\n제품의 구체적인 모습이나 추가 설명 중 아직 정해지지 않은 내용을 한 가지 알려주세요.'
     }
 
-    if (currentStageKey === 'step_1_idea' && step1TurnNumber === 5 && step1Progress) {
+    if (!isExpertConversation && currentStageKey === 'step_1_idea' && step1TurnNumber === 5 && step1Progress) {
       assistantContent = buildStep1ProjectSummary(project, step1Progress)
     } else if (
+      !isExpertConversation &&
       currentStageKey === 'step_1_idea' &&
       step1TurnNumber >= 10 &&
       !hasCompletedStep1 &&
@@ -6098,6 +6206,7 @@ export async function POST(request: Request) {
     }
 
     if (
+      !isExpertConversation &&
       currentStageKey === 'step_1_idea' &&
       step1TurnNumber >= 6 &&
       step1TurnNumber <= 9
@@ -6126,7 +6235,7 @@ export async function POST(request: Request) {
         : confirmationQuestion
     }
 
-    if (currentStageKey === 'step_1_idea' && step1TurnNumber !== 5 && step1TurnNumber < 10) {
+    if (!isExpertConversation && currentStageKey === 'step_1_idea' && step1TurnNumber !== 5 && step1TurnNumber < 10) {
       assistantContent = assistantContent
         .replace(/\s*<<AIDEE_STEP_1_COMPLETE>>\s*/gi, '\n')
         .replace(
@@ -6137,6 +6246,7 @@ export async function POST(request: Request) {
     }
 
     if (
+      !isExpertConversation &&
       currentStageKey === 'step_1_idea' &&
       step1TurnNumber >= 6 &&
       step1TurnNumber <= 9 &&
@@ -6150,13 +6260,13 @@ export async function POST(request: Request) {
       })
     }
 
-    if (currentStageKey === 'step_1_idea') {
+    if (!isExpertConversation && currentStageKey === 'step_1_idea') {
       assistantContent = assistantContent
         .replace(/\s*<<AIDEE_PROJECT_SUMMARY>>\s*/gi, '\n')
         .trim()
     }
 
-    if (currentStageKey.startsWith('step_3')) {
+    if (!isExpertConversation && currentStageKey.startsWith('step_3')) {
       if (
         step3Progress &&
         step3Progress.topics[step3Progress.currentTopic].status === 'pending' &&
@@ -6234,7 +6344,7 @@ export async function POST(request: Request) {
       assistantContent = stripStep6InternalNotes(assistantContent)
     }
 
-    if (currentStageKey === 'step_7_market') {
+    if (!isExpertConversation && currentStageKey === 'step_7_market') {
       const step7ConversationMessages = [
         ...existingMessages,
         ...(savedUserMessage ? [savedUserMessage] : []),
@@ -6289,7 +6399,10 @@ export async function POST(request: Request) {
       }
     }
 
-    if (currentStageKey === 'step_5_style' || responseStageKey === 'step_5_style') {
+    if (
+      !isExpertConversation &&
+      (currentStageKey === 'step_5_style' || responseStageKey === 'step_5_style')
+    ) {
       const step5Messages = [
         ...existingMessages,
         ...(savedUserMessage ? [savedUserMessage] : []),
@@ -6317,6 +6430,13 @@ export async function POST(request: Request) {
 
     if (styleKeywordSelections) {
       assistantContent = `${assistantContent.trim()}\n\n<<AIDEE_STYLE_KEYWORDS_SELECTED>>\n${JSON.stringify(styleKeywordSelections)}\n<</AIDEE_STYLE_KEYWORDS_SELECTED>>`
+    }
+
+    if (isExpertConversation) {
+      responseStageKey = requestedStageKey
+      assistantContent = appendExpertResponseMarker(assistantContent, activeExpert)
+    } else if (isReturningToAidee) {
+      responseStageKey = requestedStageKey
     }
 
     if (currentStageKey === 'step_4_direction' && process.env.NODE_ENV === 'development') {

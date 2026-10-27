@@ -150,6 +150,7 @@ const CHAT_ACTIONS: ChatAction[] = [
   'stay_in_step_2',
   'select_step5_shape',
   'select_step5_form',
+  'return_to_aidee',
 ]
 
 function isChatAction(value: unknown): value is ChatAction {

@@ -26,6 +26,7 @@ import { StepSectionHeader } from '@/components/project/StepSectionHeader'
 import { STEP_2_AGENT_CUSTOMIZATION_DATA } from '@/components/project/step2AgentCustomizationData'
 import {
   getExpertDefinition,
+  isExpertKey,
   type ExpertKey,
 } from '@/lib/chat/experts'
 import type { GeneratedImagePurpose, UnsplashImageMeta } from '@/lib/chat/image-blocks'
@@ -183,6 +184,22 @@ function getCertificationVisualizationKey(messages: ChatMessageRecord[]) {
     } catch {}
   }
   return null
+}
+
+function getExpertResponseKey(content: string): ExpertKey | null {
+  const match = content.match(
+    /<<AIDEE_EXPERT_RESPONSE>>\s*([\s\S]*?)\s*<<\/?AIDEE_EXPERT_RESPONSE>>/i
+  )
+  if (!match) return null
+
+  try {
+    const parsed = JSON.parse(match[1]) as { expert?: unknown }
+    return isExpertKey(parsed.expert) && parsed.expert !== 'aidee'
+      ? parsed.expert
+      : null
+  } catch {
+    return null
+  }
 }
 
 function hasMoodboardConfirmation(messages: ChatMessageRecord[]) {
@@ -497,6 +514,21 @@ const EXPERT_MENU_ITEMS: Array<{
   },
 ]
 
+function getExpertBubbleColorClasses(expert: ExpertKey) {
+  switch (expert) {
+    case 'planner':
+      return { border: 'border-indigo-700', text: 'text-indigo-700' }
+    case 'style_designer':
+      return { border: 'border-fuchsia-700', text: 'text-fuchsia-700' }
+    case 'engineer':
+      return { border: 'border-emerald-700', text: 'text-emerald-700' }
+    case 'marketer':
+      return { border: 'border-[#FFBA24]', text: 'text-[#FFBA24]' }
+    default:
+      return { border: 'border-zinc-200', text: 'text-zinc-700' }
+  }
+}
+
 const LIBRARY_ARTIFACTS: LibraryArtifact[] = [
   { kind: 'project_direction', title: 'Project Direction' },
   { kind: 'problem_statements', title: 'Problem Statements' },
@@ -633,6 +665,8 @@ function stripInternalBlocksForDisplay(text: string) {
     .replace(/\n?<<AIDEE_CMF_DESIGN_DATA>>[\s\S]*?<<\/?AIDEE_CMF_DESIGN_DATA>>/g, '')
     .replace(/\n?<<AIDEE_CERTIFICATION_DATA>>[\s\S]*?<<\/?AIDEE_CERTIFICATION_DATA>>/g, '')
     .replace(/\n?<<AIDEE_STEP6_SUMMARY>>[\s\S]*?<<\/?AIDEE_STEP6_SUMMARY>>/g, '')
+    .replace(/\n?<<AIDEE_EXPERT_RESPONSE>>[\s\S]*?<<\/?AIDEE_EXPERT_RESPONSE>>/g, '')
+    .replace(/\n?<<AIDEE_EXPERT_USER_MESSAGE>>[\s\S]*?<<\/?AIDEE_EXPERT_USER_MESSAGE>>/g, '')
     .replace(/\n?<<AIDEE_MARKETING_BUDGET>>[\s\S]*?(?:\n?<<\/AIDEE_MARKETING_BUDGET>>|$)/gi, '')
     .replace(/\n?<<AIDEE_DEVELOPMENT_TIMELINE>>[\s\S]*?(?:\n?<<\/AIDEE_DEVELOPMENT_TIMELINE>>|$)/gi, '')
     .replace(
@@ -1499,7 +1533,14 @@ export function ProjectChatContainer({
   const [visualizedDevelopmentTimelineId, setVisualizedDevelopmentTimelineId] = useState<string | null>(() => getDevelopmentTimelineEventId(initialMessages, 'visualized'))
   const [developmentTimelineModalData, setDevelopmentTimelineModalData] = useState<DevelopmentTimelineData | null>(null)
   const [stageKey, setStageKey] = useState(initialStageKey)
+  const [expertSessionActive, setExpertSessionActive] = useState(false)
+  const [expertSessionKey, setExpertSessionKey] = useState<ExpertKey | null>(null)
+  const [expertSessionFirstMessageId, setExpertSessionFirstMessageId] = useState<string | null>(null)
+  const [showAideeReturnChip, setShowAideeReturnChip] = useState(false)
+  const [aideeReturnMessageId, setAideeReturnMessageId] = useState<string | null>(null)
   const activeExpert = sidebarState.activeExpert
+  const conversationExpert =
+    expertSessionActive && expertSessionKey ? expertSessionKey : activeExpert
   const setActiveExpert = useCallback(
     (nextExpert: ExpertKey) =>
       setSidebarState((current) => ({
@@ -1580,7 +1621,7 @@ export function ProjectChatContainer({
   const isStep2CustomizationComplete =
     step2CompletedAgentCount === STEP_2_AGENT_NAMES.length
 
-  const activeExpertDefinition = getExpertDefinition(activeExpert)
+  const activeExpertDefinition = getExpertDefinition(conversationExpert)
   const visibleMessages = useMemo(
     () => messages.filter((message) => message.role !== 'system'),
     [messages]
@@ -2584,6 +2625,7 @@ export function ProjectChatContainer({
     message,
     silent,
     styleKeywordSelections,
+    activeExpertOverride,
     onSuccess,
   }: {
     action?: ChatAction
@@ -2594,9 +2636,11 @@ export function ProjectChatContainer({
     message: string
     silent?: boolean
     styleKeywordSelections?: Partial<StyleKeywordPickerData>
+    activeExpertOverride?: ExpertKey
     onSuccess?: () => void
   }) => {
     const trimmed = message.trim()
+    const requestActiveExpert = activeExpertOverride ?? conversationExpert
 
     if (isPending) {
       return null
@@ -2617,6 +2661,8 @@ export function ProjectChatContainer({
           ? effectiveStageKey
           : resolvedTextStageKey ?? effectiveStageKey
     const isExplicitStageTransition = optimisticStageKey !== effectiveStageKey
+    const isStartingExpertSession = requestActiveExpert !== 'aidee' && !expertSessionActive
+    const optimisticUserMessageId = trimmed ? `optimistic-${crypto.randomUUID()}` : null
     const optimisticUserMessage: ChatMessageRecord | null = trimmed
       ? {
           content: trimmed,
@@ -2624,7 +2670,7 @@ export function ProjectChatContainer({
           availableActions: [],
           created_at: new Date().toISOString(),
           generatedImageBlock: null,
-          id: `optimistic-${crypto.randomUUID()}`,
+          id: optimisticUserMessageId as string,
           personaCardBlock: null,
           role: 'user',
           seq_order:
@@ -2651,11 +2697,18 @@ export function ProjectChatContainer({
       setMessages((current) => [...current, optimisticUserMessage])
       setInput('')
     }
+    if (isStartingExpertSession && optimisticUserMessageId) {
+      setExpertSessionActive(true)
+      setExpertSessionKey(requestActiveExpert)
+      setExpertSessionFirstMessageId(optimisticUserMessageId)
+      setShowAideeReturnChip(false)
+      setAideeReturnMessageId(null)
+    }
 
     try {
       const requestBody = {
         action,
-        activeExpert,
+        activeExpert: requestActiveExpert,
         artifactMessageId,
         artifactSelectedIndex,
         artifactType,
@@ -2689,6 +2742,14 @@ export function ProjectChatContainer({
       const savedUserMessage = result.userMessage ?? null
       const assistantMessage = result.message ?? null
       const assistantMessages = result.messages ?? (assistantMessage ? [assistantMessage] : [])
+
+      if (isStartingExpertSession && savedUserMessage) {
+        setExpertSessionFirstMessageId(savedUserMessage.id)
+      }
+
+      if (action === 'return_to_aidee' && assistantMessage) {
+        setAideeReturnMessageId(assistantMessage.id)
+      }
 
       setMessages((current) => {
         let nextMessages = current
@@ -2763,16 +2824,28 @@ export function ProjectChatContainer({
       if (!silent) {
         setIsPending(false)
       }
-    setActiveExpert('aidee')
     }
   }, [
-    activeExpert,
+    conversationExpert,
     effectiveStageKey,
     isNewProject,
     isPending,
     messages,
     projectId,
-    setActiveExpert,
+    expertSessionActive,
+    setAideeReturnMessageId,
+    setErrorMessage,
+    setExpertSessionActive,
+    setExpertSessionFirstMessageId,
+    setExpertSessionKey,
+    setInput,
+    setIsPending,
+    setMessages,
+    setRenderingModalImage,
+    setRenderingModalMessageId,
+    setRenderingModalTitle,
+    setShowAideeReturnChip,
+    setStageKey,
   ])
 
   async function submitMessage(
@@ -2788,6 +2861,19 @@ export function ProjectChatContainer({
       action,
       forceImageGeneration,
       message,
+    })
+  }
+
+  function returnToAidee() {
+    if (conversationExpert === 'aidee' || isPending) return
+
+    setExpertSessionActive(false)
+    setShowAideeReturnChip(true)
+    setActiveExpert('aidee')
+    void requestAssistantResponse({
+      action: 'return_to_aidee',
+      activeExpertOverride: 'aidee',
+      message: '',
     })
   }
 
@@ -3182,7 +3268,7 @@ export function ProjectChatContainer({
       effectiveStageKey !== 'step_1_idea'
 
     setSidebarState({
-      activeExpert,
+      activeExpert: conversationExpert,
       activeExperts: [],
       activeStageKey: effectiveStageKey,
       areAgentsEnabled: showAgents && areStep2AgentsEnabled,
@@ -3193,9 +3279,11 @@ export function ProjectChatContainer({
           effectiveStageKey !== 'step_1_idea'),
     })
   }, [
-    activeExpert,
     areStep2AgentsEnabled,
+    conversationExpert,
     effectiveStageKey,
+    expertSessionActive,
+    expertSessionKey,
     setSidebarState,
     visibleMessages,
   ])
@@ -3282,6 +3370,20 @@ export function ProjectChatContainer({
 
                 return (
                 <div key={message.id} className="chat-flow-item contents">
+                  {message.id === expertSessionFirstMessageId ? (
+                    <div className="my-2 flex w-full justify-center">
+                      <span className="rounded-full bg-zinc-100 px-4 py-1.5 text-xs font-semibold text-zinc-600">
+                        {getExpertDefinition(expertSessionKey ?? conversationExpert).label}와 대화 중
+                      </span>
+                    </div>
+                  ) : null}
+                  {message.id === aideeReturnMessageId && showAideeReturnChip ? (
+                    <div className="my-2 flex w-full justify-center">
+                      <span className="rounded-full bg-zinc-100 px-4 py-1.5 text-xs font-semibold text-zinc-600">
+                        통합 Aidee로 돌아왔습니다
+                      </span>
+                    </div>
+                  ) : null}
                   {isStep2Entry ? (
                     <StepSectionHeader
                       title="STEP 2. AI 에이전트 생성"
@@ -3483,15 +3585,22 @@ export function ProjectChatContainer({
                 </div>
                 <div className="flex flex-col">
                   {EXPERT_MENU_ITEMS.map((expert) => {
-                    const isActive = activeExpert === expert.key
+                    const isActive = conversationExpert === expert.key
+                    const isLockedToAnotherExpert =
+                      expertSessionActive && expertSessionKey !== expert.key
 
                     return (
                       <button
                         key={expert.key}
                         type="button"
-                        disabled={isPending}
+                        disabled={isPending || isLockedToAnotherExpert}
                         onClick={() => {
+                          if (isLockedToAnotherExpert) return
                           setActiveExpert(expert.key)
+                          setExpertSessionActive(false)
+                          setExpertSessionKey(null)
+                          setExpertSessionFirstMessageId(null)
+                          setShowAideeReturnChip(false)
                           setIsExpertMenuOpen(false)
                         }}
                         className={`group flex h-12 w-full items-center gap-5 rounded-lg px-5 py-3 text-left transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 ${
@@ -3517,6 +3626,22 @@ export function ProjectChatContainer({
                     )
                   })}
                 </div>
+              </div>
+            ) : null}
+
+            {conversationExpert !== 'aidee' ? (
+              <div className="mb-3 flex items-center justify-between gap-4 px-1 text-xs">
+                <p className="min-w-0 truncate font-['Pretendard'] font-medium text-zinc-500">
+                  {activeExpertDefinition.label}와 대화 중 · 답변이 끝나면 버튼을 눌러 통합 Aidee로 돌아갈 수 있습니다.
+                </p>
+                <button
+                  type="button"
+                  disabled={isPending}
+                  onClick={returnToAidee}
+                  className="shrink-0 rounded-full border border-zinc-200 bg-white px-3 py-1.5 font-['Pretendard'] font-semibold text-zinc-700 shadow-sm transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  통합 Aidee로 돌아가기
+                </button>
               </div>
             ) : null}
 
@@ -6561,6 +6686,13 @@ function ChatBubble({
     )
   }
   const isUser = message.role === 'user'
+  const expertResponseKey = !isUser ? getExpertResponseKey(message.content) : null
+  const expertResponseDefinition = expertResponseKey
+    ? getExpertDefinition(expertResponseKey)
+    : null
+  const expertBubbleColors = expertResponseKey
+    ? getExpertBubbleColorClasses(expertResponseKey)
+    : null
   const isStep5FormSummary = !isUser && /<<AIDEE_STEP5_FORM_SUMMARY>>/i.test(message.content)
   const cmfDesignData = !isUser ? extractCmfDesignData(message.content) : null
   const certificationData = !isUser ? extractCertificationData(message.content) : null
@@ -6736,7 +6868,33 @@ function ChatBubble({
 
       {projectDirection ? <ProjectDirectionCard data={projectDirection} /> : null}
       {displayContent || shouldRenderGeneratedImages ? (
-        <div className="w-full rounded-[20px] bg-slate-200 px-[clamp(24px,3.33svh,36px)] py-[clamp(20px,2.59svh,28px)]">
+        <div
+          className={`w-full rounded-[20px] px-[clamp(24px,3.33svh,36px)] py-[clamp(20px,2.59svh,28px)] ${
+            expertResponseDefinition && expertBubbleColors
+              ? `border-2 bg-white ${expertBubbleColors.border}`
+              : 'bg-slate-200'
+          }`}
+        >
+          {expertResponseDefinition && expertBubbleColors ? (
+            <div className="mb-3 flex items-center gap-2">
+              <Image
+                src={
+                  EXPERT_MENU_ITEMS.find(
+                    (expert) => expert.key === expertResponseKey
+                  )?.icon ?? '/assets/icons/chat/strategist.svg'
+                }
+                alt=""
+                width={20}
+                height={20}
+                className="h-5 w-5"
+              />
+              <span
+                className={`font-['Pretendard'] text-sm font-semibold ${expertBubbleColors.text}`}
+              >
+                {expertResponseDefinition.label}
+              </span>
+            </div>
+          ) : null}
           {displayContent ? (
             <MarkdownContent content={displayContent} />
           ) : null}

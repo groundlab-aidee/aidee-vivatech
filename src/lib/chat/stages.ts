@@ -30,6 +30,7 @@ export type ChatAction =
   | 'select_step5_shape'
   | 'select_step5_form'
   | 'confirm_step5_combination'
+  | 'return_to_aidee'
 
 export type StageMeta = {
   currentStageKey: StageKey
