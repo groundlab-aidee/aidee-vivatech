@@ -1298,6 +1298,12 @@ type Step3Judgement = {
   questionKind: 'core' | 'deep'
 }
 
+function isExplicitStep3UndecidedResponse(text: string) {
+  return /(?:잘\s*모르겠|모르겠어요|정하지\s*않았|정하지\s*못했|넘어가(?:도|요)|다음으로\s*넘어|해당\s*없|상관\s*없)/i.test(
+    text.trim()
+  )
+}
+
 function parseStep3Judgement(raw: string): Step3Judgement | null {
   try {
     const parsed = JSON.parse(stripCodeFence(raw).trim()) as Record<string, unknown>
@@ -1511,6 +1517,23 @@ function getStep3GateInstruction(
 ) {
   const phase = getStep3Phase(messages)
 
+  // Persisted STEP 3 progress is authoritative once a topic has entered the
+  // deep-question phase. Artifact-derived phase detection can lag behind the
+  // state transition by one message, which previously allowed a core-question
+  // instruction to replace the required deep-question instruction.
+  if (
+    progress &&
+    progress.topics[progress.currentTopic].status === 'awaiting_deep'
+  ) {
+    const current = progress.topics[progress.currentTopic]
+    const topicLabel = STEP3_TOPIC_LABELS[progress.currentTopic]
+    const guidance = getStep3PromptTopicGuidance(progress.currentTopic)
+    const reaskInstruction = current.reaskCount > 0
+      ? `같은 질문을 그대로 반복하지 말고, 같은 의미를 더 쉽고 다른 문장으로 다시 물으세요. 직전 질문은 다음과 같습니다: ${getStep3PreviousAssistantQuestion(messages)} 이번 재질문이 마지막 허용 횟수입니다.`
+      : ''
+    return `이번 응답의 하위 주제는 ${topicLabel}이고 질문 종류는 심화입니다. 핵심질문에 대한 사용자의 답변을 바탕으로 같은 하위 주제의 심화질문을 한 번에 하나만 물으세요. prompt.ts의 심화 질문 방향은 질문을 만들 때 기준으로만 사용하고, 예시 문장을 그대로 복사하지 마세요. 심화 질문 방향: ${guidance.deepDirections || '(없음)'}. 현재 심화 질문 횟수는 ${current.deepQuestionCount}회입니다. 심화질문을 최소 1회 진행하기 전에는 다음 하위 주제로 넘어가거나 결과 블록을 작성하지 마세요. ${reaskInstruction} ${STEP3_NO_PROGRESS_LANGUAGE_RULE} 결과 마커도 출력하지 마세요.`
+  }
+
   if (phase === 'problem_dialogue') {
     return '현재는 Problem Statements 대화 구간입니다. Problem Statements에 필요한 질문만 한 번에 하나씩 하고, 결과를 충분히 확인하기 전에는 Problem Statements 결과나 Keywords, Persona Summary를 출력하지 마세요.'
   }
@@ -1532,7 +1555,8 @@ function getStep3GateInstruction(
       return `이번 응답의 하위 주제는 ${topicLabel}이고 질문 종류는 ${questionKindLabel}입니다. ${topicLabel}에 대한 핵심 질문을 한 번에 하나만 하세요. 다른 하위 주제로 넘어가거나 결과 블록을 작성하지 마세요. ${reaskInstruction} ${STEP3_NO_PROGRESS_LANGUAGE_RULE} 결과 마커도 출력하지 마세요.`
     }
     if (current.status === 'awaiting_deep') {
-      return `이번 응답의 하위 주제는 ${topicLabel}이고 질문 종류는 ${questionKindLabel}입니다. 같은 하위 주제에서 확인할 내용을 한 번에 하나씩 더 물으세요. 현재 심화 질문 횟수는 ${current.deepQuestionCount}회입니다. 다른 하위 주제로 넘어가거나 결과 블록을 작성하지 마세요. ${reaskInstruction} ${STEP3_NO_PROGRESS_LANGUAGE_RULE} 결과 마커도 출력하지 마세요.`
+      const guidance = getStep3PromptTopicGuidance(progress.currentTopic)
+      return `이번 응답의 하위 주제는 ${topicLabel}이고 질문 종류는 ${questionKindLabel}입니다. 핵심질문에 대한 사용자의 답변을 바탕으로 같은 하위 주제의 심화질문을 한 번에 하나만 더 물으세요. prompt.ts의 심화 질문 방향은 질문을 만들 때 기준으로만 사용하고, 예시 문장을 그대로 복사하지 마세요. 심화 질문 방향: ${guidance.deepDirections || '(없음)'}. 현재 심화 질문 횟수는 ${current.deepQuestionCount}회입니다. 다른 하위 주제로 넘어가거나 결과 블록을 작성하지 마세요. ${reaskInstruction} ${STEP3_NO_PROGRESS_LANGUAGE_RULE} 결과 마커도 출력하지 마세요.`
     }
     return `이번 응답의 하위 주제는 ${topicLabel}이고 질문 종류는 ${questionKindLabel}입니다. 핵심 질문을 한 번에 하나만 하세요. 핵심 질문 뒤에는 사용자의 답변을 받고 반드시 심화 질문을 최소 1회 진행하세요. 다른 하위 주제로 넘어가거나 결과 블록을 작성하지 마세요. ${STEP3_NO_PROGRESS_LANGUAGE_RULE} 결과 마커도 출력하지 마세요.`
   }
@@ -1772,10 +1796,6 @@ function hasBalancedStep3Quotes(text: string) {
   return !isInsideStep3Quote(text, text.length)
 }
 
-function startsWithStep3Clarification(text: string) {
-  return /^(?:예를 들어|즉|말하자면)(?=\s|,|:|$)/i.test(text.trimStart())
-}
-
 function normalizeStep3DialogueResponse(text: string) {
   const withoutState = removeStep3InternalLabels(
     removeStep3ProgressLanguage(
@@ -1786,33 +1806,18 @@ function normalizeStep3DialogueResponse(text: string) {
   if (questionEnds.length <= 1) return withoutState
 
   const firstQuestionEnd = questionEnds[0]
-  const afterFirstQuestion = withoutState.slice(firstQuestionEnd).trimStart()
-  if (startsWithStep3Clarification(afterFirstQuestion)) {
-    const followingQuestionEnds = getStep3QuestionEndIndexes(afterFirstQuestion)
-    if (followingQuestionEnds.length > 0) {
-      return `${withoutState.slice(0, firstQuestionEnd)} ${afterFirstQuestion.slice(0, followingQuestionEnds[0]).trim()}`.trim()
-    }
-  }
-
-  // 두 번째 질문 뒤에 있는 힌트는 첫 번째 질문에 대한 것인지 확인할 수 없으므로 함께 제거합니다.
-  const firstQuestionOnly = withoutState.slice(0, questionEnds[0]).trim()
-  return hasBalancedStep3Quotes(firstQuestionOnly) && firstQuestionOnly.endsWith('?')
-    ? firstQuestionOnly
-    : withoutState
-}
-
-function isStep3ClarifyingQuestionChain(text: string) {
-  const questionEnds = getStep3QuestionEndIndexes(text)
-  if (questionEnds.length !== 2) return false
-  return startsWithStep3Clarification(text.slice(questionEnds[0]))
+  // STEP 3는 설명형 연결 문장을 포함하더라도 한 턴에 질문 하나만 남깁니다.
+  // 두 번째 질문과 그 뒤의 선택지·설명은 다음 턴으로 넘기지 않고 제거합니다.
+  const firstQuestionOnly = withoutState.slice(0, firstQuestionEnd).trim()
+  return hasBalancedStep3Quotes(firstQuestionOnly) ? firstQuestionOnly : withoutState
 }
 
 function isValidStep3DialogueResponse(text: string) {
   const trimmed = text.trim()
   if (!trimmed || !hasStep3Question(trimmed)) return false
   if (hasStep3ForbiddenDialogueContent(trimmed)) return false
-  const questionMarks = (trimmed.match(/[?？]/g) ?? []).length
-  return questionMarks <= 1 || isStep3ClarifyingQuestionChain(trimmed)
+  // 물음표가 없어도 "까요", "나요" 등으로 끝나는 한국어 질문을 포함합니다.
+  return getStep3QuestionEndIndexes(trimmed).length === 1
 }
 
 function normalizeStep3ResultLine(line: string) {
@@ -4576,7 +4581,7 @@ export async function POST(request: Request) {
 
     if (
       requestedAction === 'visualize_artifact' &&
-      artifactType === 'design' &&
+      (artifactType === 'design' || artifactType === 'modeling') &&
       (requestedStageKey === 'step_5_cmf' ||
         requestedStageKey === 'step_5_design' ||
         requestedStageKey === 'step_5_3d') &&
@@ -5134,11 +5139,22 @@ export async function POST(request: Request) {
             const topicMatches = step3Judgement.currentTopic === expectedTopic
             const questionKindMatches =
               step3Judgement.questionKind === expectedQuestionKind
+            const explicitUndecided = isExplicitStep3UndecidedResponse(
+              savedUserMessage.content
+            )
             const validatedJudgement = {
               ...step3Judgement,
-              // 질문 종류 오판은 재질문 사유로 사용하지 않습니다. 현재 하위 주제가
-              // 맞으면 사용자의 답변을 현재 상태의 질문 종류에 맞춰 그대로 반영합니다.
-              questionMatches: topicMatches,
+              // 주제와 질문 종류가 모두 직전 서버 상태와 일치할 때만
+              // 사용자의 답변을 현재 질문에 대한 답변으로 반영합니다.
+              // 질문 종류 불일치를 무시하면 core/deep 순서가 깨집니다.
+              questionMatches:
+                topicMatches &&
+                questionKindMatches &&
+                step3Judgement.questionMatches,
+              // 사용자가 명시적으로 건너뛰겠다고 말한 경우에만 현재 주제를
+              // undecided로 닫습니다. 일반적인 짧거나 모호한 답변은 핵심질문
+              // 뒤의 심화질문으로 이어져야 합니다.
+              undecided: explicitUndecided,
             }
             const judgementResult = applyStep3Judgement(step3Progress, validatedJudgement)
             step3Progress = judgementResult.progress
@@ -5161,8 +5177,9 @@ export async function POST(request: Request) {
                 modelQuestionMatches: step3Judgement.questionMatches,
                 topicMatches,
                 questionKindMatches,
-                questionKindMismatchIgnored: topicMatches && !questionKindMatches,
+                questionKindMismatchIgnored: false,
                 topicMismatchReasked: !topicMatches,
+                explicitUndecided,
                 reaskCount: step3Progress.topics[expectedTopic].reaskCount,
                 reasked: judgementResult.reasked,
                 forcedAnswerAfterLimit: judgementResult.forcedAnswerAfterLimit,

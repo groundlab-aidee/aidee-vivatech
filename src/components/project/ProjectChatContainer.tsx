@@ -2948,7 +2948,7 @@ export function ProjectChatContainer({
     })
 
     if (
-      artifactType === 'design' &&
+      artifactType === 'modeling' &&
       response?.generatedImageBlock?.purpose === 'modeling'
     ) {
       await requestAssistantResponse({
@@ -6680,7 +6680,7 @@ function ChatBubble({
         ? 'modeling'
         : message.generatedImageBlock.purpose === 'rendering'
           ? 'rendering'
-        : 'design',
+        : 'modeling',
       message.id,
       selectedDesignIndex
     )
